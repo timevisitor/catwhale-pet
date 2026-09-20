@@ -5,13 +5,20 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.0-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.1-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
-运行环境：Windows 10/11 x64。聊天面板另外需要本机有 Node.js 20+ 与一份 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 仓库；
-文件搜索需要本机装有 [Everything](https://www.voidtools.com)。**安装包不含任何 API key**，key 由用户自己在设置面板里填，
-只存在本机 `%APPDATA%\桌宠\settings.json`（Windows 凭据加密）。
+运行环境：Windows 10/11 x64。**安装包不含任何 API key** —— key 由用户自己在设置面板里填，只存在本机
+`%APPDATA%\桌宠\settings.json`（Windows 凭据加密）。
+
+桌宠本体（宠物动画、菜单、拖动、托盘、硬件看板）**开箱即用**；另外两个功能各自需要一点本地准备，
+桌宠会自己去找，找不到会在设置面板里给出明确提示：
+
+| 功能 | 需要你准备 | 桌宠怎么找 |
+|---|---|---|
+| 文件搜索 | 装 [Everything](https://www.voidtools.com) 并**保持运行**（Everything 本身不用做任何设置） | `es.exe`（Everything 官方命令行工具）**已随包附带**，不需要你另外下载；实例名 1.4 / 1.5 / 1.5a 自动识别 |
+| DeepSeek 聊天 | 一份 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 仓库，**克隆后必须先装依赖**（官方 `pnpm install`，只 clone 不装依赖会报 `Cannot find package 'tsx'`）；Node.js 20+ 可选（没装会退回用 Electron 自带的运行时） | 设置面板「浏览…」直接选仓库根目录最省事；或点「重新探测」按常见布局自动找（含 `git clone` 的默认布局 `<家目录>\deepseek-harness`、`Documents\GitHub\…`、各盘根目录，并会向下探一层）；也认环境变量 `DSH_HARNESS_REPO` |
 
 ## 功能
 
@@ -49,7 +56,7 @@
 | `encode_webm.py` | 编码 yuva420p / libvpx-vp9 透明 WebM，并生成状态机配置 `states.json` |
 | `make_preview.py` | 出交付预览件（棋盘格背景的多状态预览 MP4 / 对比图） |
 | `pack_portable.py` / `pack_release.py` | 打便携版 / 发布版（发布版带个人信息与密钥门禁扫描） |
-| `tools/` | 开发期自检脚本（渲染器通道检查、菜单几何检查等） |
+| `tools/` | 开发期自检脚本（渲染器通道检查、菜单几何检查等）；`tools/record/record.js` 是按分镜自动录演示素材的录制器（离屏渲染 + ffmpeg，不录屏、不暴露真实桌面，用法见文件头注释） |
 
 > 说明：本仓库只含**独立 Electron 桌宠**这一条线。同一套素材还做过 Hermes 自带桌宠系统的图集包（8 列×9 行精灵表），
 > 那部分脚本依赖开发机本地路径与中间产物，未纳入本仓库。
@@ -76,6 +83,15 @@ python key_clips.py 素材 build/alpha            # 抠像
 python build_sprites.py build/alpha build/sprite # 对齐
 python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + states.json
 ```
+
+## 版本记录
+
+- **v0.1.1**
+  - 设置面板新增 **「浏览…」目录选择**（直接选 harness 仓库根目录；选深了/选浅了都会自动归一到仓库根）与 **Provider** 字段；
+  - harness 仓库**自动探测大扩展**：补上 `git clone` 的标准布局 `<家目录>\deepseek-harness`、`Documents\GitHub\…`、`source\repos`、`code\projects\dev\Desktop`，以及各盘根目录与其下一层；探测顺序改为「环境变量 → 家目录布局 → 家目录下探 → 盘符布局 → 盘符下探」；
+  - 设置面板显示版本号；《使用说明》补上「harness 克隆后必须先装依赖（`pnpm install`）」「`es.exe` 已随包附带，只需装并运行 Everything」；
+  - 新增两个验收自检入口：`--detecttest`（环境探测）与 `--repotest=<目录>`（选目录归一化）。
+- **v0.1.0**：首个公开版本（透明桌宠 + SAO 菜单 + DeepSeek 聊天 + Everything 搜索）。
 
 ---
 
@@ -419,6 +435,8 @@ electron . --bench                      # 五阶段：初始/7路全解/只留�
 ```bash
 # 后端自检（不起界面）
 桌宠.exe --searchtest="ext:pdf"                       # Everything 查询 → 打印 JSON
+桌宠.exe --detecttest --exit-after-test               # 环境探测：harness 仓库 / es.exe / node 来源 / 版本
+桌宠.exe --repotest="D:\\deepseek-harness\\src\\apps\\cli\\src" --exit-after-test   # 验"浏览…"选目录后的归一化
 桌宠.exe --chattest="只回答两个字：成功"                # harness 聊天 → 打印 JSON
 # 界面自检（真渲染器里跑完整链路，结果打到 stdout，可加 --exit-after-test）
 桌宠.exe --searchui="桌宠"                             # 开搜索面板 → 灌查询 → 读回渲染结果+几何

@@ -1,11 +1,11 @@
 // 桌宠桌面版主进程：全屏透明窗口 + 逐像素点击穿透 + 托盘 + Everything 文件搜索
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, shell, clipboard, globalShortcut, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, shell, clipboard, globalShortcut, safeStorage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const urlmod = require('url');
 const { execFile } = require('child_process');
-const { HarnessClient, detectRepo } = require('./harness-client.js');
+const { HarnessClient, detectRepo, isRepoDir } = require('./harness-client.js');
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
@@ -21,6 +21,14 @@ const WINSIZE = (process.argv.find((a) => a.startsWith('--winsize=')) || '').spl
 const AUTOSTART = (process.argv.find((a) => a.startsWith('--autostart=')) || '').split('=')[1] || '';
 // --searchtest=<query>：跑一次 Everything 搜索并打印 JSON（后端自检）
 const SEARCHTEST = (process.argv.find((a) => a.startsWith('--searchtest=')) || '').split('=')[1];
+// --detecttest：打印"环境探测"结果（版本 / harness 仓库 / es.exe / node 来源）后退出，供发布验收用
+const DETECTTEST = process.argv.includes('--detecttest');
+// --repotest=<目录>：检验"浏览…选完目录后的归一化"逻辑（同上，验收用）
+const REPOTEST = (() => {
+  const a = process.argv.find((x) => x.startsWith('--repotest='));
+  return a === undefined ? undefined : a.slice('--repotest='.length);
+})();
+const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
 let searchHotkey = '';
@@ -487,6 +495,7 @@ ipcMain.handle('config:get', () => {
   const key = apiKeyPlain();
   return {
     ok: true,
+    version: APP_VERSION,
     deepseek: {
       baseUrl: c.deepseek.baseUrl || CFG_DEFAULTS.deepseek.baseUrl,
       model: c.deepseek.model || '', provider: c.deepseek.provider || '',
@@ -497,6 +506,38 @@ ipcMain.handle('config:get', () => {
                cwd: c.harness.cwd || '', maxTokens: c.harness.maxTokens || 8192 },
     everything: { esExe: fs.existsSync(esPath()), instance: (loadState().esInstance || '') },
   };
+});
+
+/** 用户点"浏览…"选了一个目录 → 归一到真正的仓库根（容错：多一层/少一层/选得太深） */
+function resolvePickedRepo(p) {
+  if (!p) return '';
+  const j = (...a) => path.join(...a.filter(Boolean));
+  const up1 = path.dirname(p), up2 = path.dirname(up1), up3 = path.dirname(up2);
+  const tries = [p, j(p, 'src'), j(p, 'deepseek-harness'), j(p, 'deepseek-harness', 'src'),
+                 up1, j(up1, 'src'), up2, j(up2, 'src'), up3];
+  for (const t of tries) if (isRepoDir(t)) return t;
+  return '';
+}
+ipcMain.handle('config:browseRepo', async () => {
+  const cur = loadCfg().harness.repo || detectRepo() || app.getPath('home');
+  const opts = {
+    title: '选择 DeepSeek Harness 仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层）',
+    defaultPath: cur,
+    properties: ['openDirectory'],
+    buttonLabel: '用这个目录',
+  };
+  let r = null;
+  try {
+    r = (win && !win.isDestroyed()) ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  if (!r || r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+  const picked = r.filePaths[0];
+  const root = resolvePickedRepo(picked);
+  return { ok: true, picked, path: root || picked, valid: !!root };
+});
+ipcMain.handle('config:detect', () => {
+  const p = detectRepo(true);                      // force：重新扫一遍（不吃缓存）
+  return { ok: true, path: p, valid: isRepoDir(p) };
 });
 ipcMain.handle('config:set', (_e, patch) => {
   const r = saveCfg(patch || {});
@@ -876,6 +917,31 @@ if (!app.requestSingleInstanceLock()) {
         console.log('SEARCHTEST ' + JSON.stringify(r));
         if (process.argv.includes('--exit-after-test')) { quitting = true; app.quit(); }
       }, 800);
+    }
+    // --detecttest：打印环境探测结果（发布验收用：harness 仓库 / es.exe / node 来源）
+    if (DETECTTEST) {
+      setTimeout(async () => {
+        const repo = detectRepo(true);
+        const es = esPath();
+        const inst = await detectEsInstance(true);
+        const nx = resolveNode();
+        console.log('DETECTTEST ' + JSON.stringify({
+          version: APP_VERSION,
+          repo, repoOk: isRepoDir(repo),
+          repoFromEnv: !!(process.env.DSH_HARNESS_REPO || process.env.DSH_HARNESS_SRC),
+          esExe: es, esExeOk: !!es && fs.existsSync(es), esInstance: inst,
+          node: nx, nodeIsElectron: nx === process.execPath,
+          nodeVersion: process.versions.node, electron: process.versions.electron,
+          userData: app.getPath('userData'),
+        }));
+        if (process.argv.includes('--exit-after-test')) { quitting = true; app.quit(); }
+      }, 800);
+    }
+    // --repotest=<目录>：检验"浏览…"选目录后的归一化（发布验收用）
+    if (REPOTEST !== undefined) {
+      const root = resolvePickedRepo(REPOTEST);
+      console.log('REPOTEST ' + JSON.stringify({ picked: REPOTEST, path: root || REPOTEST, valid: !!root }));
+      if (process.argv.includes('--exit-after-test')) { quitting = true; app.quit(); }
     }
     // --chattest=<消息>：命令行跑一次 harness 聊天（后端自检）
     const chatTest = (process.argv.find((a) => a.startsWith('--chattest=')) || '').split('=')[1];
