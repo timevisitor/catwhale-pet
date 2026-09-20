@@ -1,0 +1,97 @@
+{
+  "idle": {
+    "id": "idle",
+    "name": "待机",
+    "mode": "loop",
+    "role": "idle",
+    "scale": 1.0,
+    "file": "idle.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1514191
+  },
+  "grabbed": {
+    "id": "grabbed",
+    "name": "抓着",
+    "mode": "loop",
+    "role": "drag",
+    "scale": 1.0,
+    "file": "grabbed.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1879423
+  },
+  "working": {
+    "id": "working",
+    "name": "操作中",
+    "mode": "loop",
+    "role": "task",
+    "scale": 1.0,
+    "weight": 25,
+    "file": "working.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1049580
+  },
+  "drop": {
+    "id": "drop",
+    "name": "松手落下",
+    "mode": "once",
+    "role": "release",
+    "scale": 1.0,
+    "rate": 2.0,
+    "file": "drop.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1971295
+  },
+  "tail_open": {
+    "id": "tail_open",
+    "name": "睁眼摇尾",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 35,
+    "react": 40,
+    "file": "tail_open.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1570563
+  },
+  "stand_arms": {
+    "id": "stand_arms",
+    "name": "站立抬胳膊",
+    "mode": "loop",
+    "role": "menu",
+    "scale": 1.0,
+    "file": "stand_arms.webm",
+    "duration": 4.042,
+    "frames": 97,
+    "bytes": 1353764
+  },
+  "tail_closed": {
+    "id": "tail_closed",
+    "name": "闭眼摇尾",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 40,
+    "react": 60,
+    "file": "tail_closed.webm",
+    "duration": 3.75,
+    "frames": 90,
+    "bytes": 1640118
+  },
+  "eat": {
+    "id": "eat",
+    "name": "吃米饭",
+    "mode": "once",
+    "role": "idle_act",
+    "scale": 1.0,
+    "rate": 2.0,
+    "file": "eat.webm",
+    "duration": 3.75,
+    "frames": 90,
+    "bytes": 1075397
+  }
+}

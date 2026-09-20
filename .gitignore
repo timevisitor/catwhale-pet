@@ -1,0 +1,40 @@
+# ============ 私有（本机专用，绝不入库）============
+# pack_release.py 出包门禁读的私有敏感词表（城市/客户/人名等）
+release-private-patterns.txt
+
+# ============ 依赖 ============
+node_modules/
+app/node_modules/
+__pycache__/
+*.pyc
+
+# ============ 生成物 ============
+# app/renderer 是 web/ 的拷贝，由 `npm run sync` 或打包脚本重新生成
+app/renderer/
+
+# 打包输出（桌宠_发布版 / 桌宠_便携版 / 各次构建）
+dist/
+build/
+work/
+
+# 原始绿幕素材与参考件（体积大；自行放入后运行 key_clips.py）
+素材/
+参考/
+交付预览/
+
+# Hermes 原生宠物（图集）那条线的脚本不入库：与独立 exe 是两条线，
+# 且脚本依赖本机路径与 build/ 中间产物
+hermes_pet/
+
+# 第三方二进制（Everything 的 es.exe 随 Release 包分发，不入库；
+# 自行从 https://www.voidtools.com 下载 es.exe 放到 app/assets/ 与 tools/ 即可）
+tools/es.exe
+app/assets/es.exe
+tools/ES.zip
+app/assets/ES.zip
+tools/tmp_es/
+
+# ============ 随手产物 ============
+*.zip
+*.log
+*.npy

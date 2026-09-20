@@ -1,0 +1,16 @@
+# 桌宠 × DeepSeek Harness 集成层
+# 叠加在官方 headless 组合之上（不改用户的 profile 配置）：
+#   1) 关掉 headless 的"一次性任务"app 与它的 startup provider
+#      —— 留着的话它要么强制要任务参数、要么把答案打到 stdout 撕碎 JSON-RPC 帧；
+#   2) 挂上 SDK JSON-RPC 服务插件 → 外部客户端（桌宠）可流式驱动 + 多轮会话。
+# 其余（system-prompt persona / tools / code-runtime / provider 路由）全部保留。
+
+- id: headless-startup
+  disabled: true
+
+- id: headless-runner
+  disabled: true
+
+- insert:
+    - id: sdk-jsonrpc-server
+      name: '@deepseek-ai/dsh-sdk-jsonrpc-server'

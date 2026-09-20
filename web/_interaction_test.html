@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>状态机自检</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:13px/1.6 monospace}
+iframe{width:900px;height:640px;border:1px solid #444;vertical-align:top}
+#out{white-space:pre-wrap;padding:10px}</style></head>
+<body>
+<pre id="out">running...</pre>
+<iframe id="f" src="index.html?auto=1&size=340"></iframe>
+<script>
+const lines = [];
+const log = s => { lines.push(s); document.getElementById('out').textContent = lines.join('\n'); };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const f = document.getElementById('f');
+let D, W;                                    // iframe document / window
+
+const st = () => W.eval('cur');
+const petRect = () => D.getElementById('pet').getBoundingClientRect();
+const frameXY = () => { const r = petRect(); return { r, cx: r.left + r.width/2, cy: r.top + r.height*0.55 }; };
+
+function pe(type, x, y, target){
+  target.dispatchEvent(new PointerEvent(type, {clientX:x, clientY:y, button:0, buttons:1,
+    bubbles:true, cancelable:true, pointerId:1, pointerType:'mouse', isPrimary:true}));
+}
+const expect = (cond, msg, got) => log((cond ? '  ✔ ' : '  ✘ ') + msg + (cond ? '' : '   实际: ' + got));
+
+f.onload = async ()=>{
+  await wait(2500);
+  D = f.contentDocument; W = f.contentWindow;
+  log('init=' + W.__petInitOK + '  错误=' + (W.__petError || '无'));
+  const vids = [...D.querySelectorAll('#pet video')];
+  log('视频元素 ' + vids.length + ' 个  readyState=' + vids.map(v=>v.readyState).join(','));
+  log('  已加载: ' + vids.map(v=>v.currentSrc.split('/').pop()).join(' '));
+
+  log('\n【1】初始状态');
+  expect(st() === 'idle', '初始为待机', st());
+
+  log('\n【2】拖动 → 抓着 → 松手 → 落下 → 待机');
+  let {cx, cy} = frameXY();
+  pe('pointerdown', cx, cy, D.getElementById('pet'));
+  await wait(120);
+  expect(st() === 'grabbed', '按下时 = 抓着', st());
+  pe('pointermove', cx - 120, cy - 40, D.getElementById('pet'));
+  pe('pointerup',   cx - 120, cy - 40, D.getElementById('pet'));
+  await wait(200);
+  expect(st() === 'drop', '松手瞬间 = 松手落下', st());
+  await wait(4300);
+  expect(st() === 'idle', '落下播完(约4s) → 接待机', st());
+
+  log('\n【3】单击角色 → 互动一下 → 自动回待机');
+  ({cx, cy} = frameXY());
+  pe('pointerdown', cx, cy, D.getElementById('pet'));
+  pe('pointerup',   cx, cy, D.getElementById('pet'));
+  await wait(250);
+  const react = st();
+  expect(['tail_open','tail_closed'].includes(react), '单击后进入互动动作(摇尾)', react);
+  await wait(4400);
+  expect(st() === 'idle', '互动播完 → 接待机', st());
+
+  log('\n【4】点透明处不响应');
+  const r0 = petRect();
+  pe('pointerdown', r0.left + r0.width*0.06, r0.top + r0.height*0.04, D.getElementById('pet'));
+  pe('pointerup',   r0.left + r0.width*0.06, r0.top + r0.height*0.04, D.getElementById('pet'));
+  await wait(250);
+  expect(st() === 'idle', '点左上角透明区域不触发动作', st());
+
+  log('\n【5】右键 → SAO 菜单打开 = 站立抬胳膊（三段式：详情卡 / 圆形分类轴 / 矩形菜单）');
+  D.getElementById('pet').dispatchEvent(new MouseEvent('contextmenu',
+      {clientX: r0.left + r0.width/2, clientY: r0.top + r0.height/2, bubbles:true, cancelable:true}));
+  await wait(300);
+  expect(st() === 'stand_arms', '菜单打开时 = 站立抬胳膊', st());
+  expect(D.getElementById('sao').classList.contains('show'), 'SAO 菜单已显示', '-');
+  {
+    const pr = D.getElementById('pet').getBoundingClientRect();
+    const box = (id)=> D.getElementById(id).getBoundingClientRect();
+    const sr = box('sao'), cr = box('saoCard'), kr = box('saoCats'), lr = box('saoList');
+    const overlap = !(sr.right <= pr.left || sr.left >= pr.right || sr.bottom <= pr.top || sr.top >= pr.bottom);
+    expect(!overlap, '菜单整组不遮挡角色', JSON.stringify({sao:[sr.left|0,sr.top|0,sr.right|0,sr.bottom|0],pet:[pr.left|0,pr.top|0,pr.right|0,pr.bottom|0]}));
+    const narrow = D.getElementById('sao').classList.contains('narrow');   // 空间不足时按规范折叠详情卡
+    expect(narrow || (cr.width >= 200 && cr.width <= 280 && cr.height >= 300),
+      '详情卡尺寸符合规范(220~260 × 320~390)' + (narrow ? '[本视口空间不足→已按规范折叠]' : ''),
+      Math.round(cr.width)+'x'+Math.round(cr.height) + ' narrow=' + narrow);
+    expect(kr.width >= 40 && kr.width <= 60, '圆形分类轴直径符合规范(44~50)', Math.round(kr.width));
+    expect(lr.width >= 150 && lr.width <= 200, '一级菜单宽度符合规范(160~190)', Math.round(lr.width));
+    const srMid = sr.top + sr.height/2, prMid = pr.top + pr.height/2;
+    expect(narrow || Math.abs(srMid - prMid) < 30, '菜单组与角色垂直居中',
+      'sao中=' + Math.round(srMid) + ' pet中=' + Math.round(prMid) + ' narrow=' + narrow);
+    const okView = sr.left >= 0 && sr.top >= 0 && sr.right <= W.innerWidth && sr.bottom <= W.innerHeight;
+    expect(okView, '菜单整组都在视口内', JSON.stringify({l:Math.round(sr.left),t:Math.round(sr.top),r:Math.round(sr.right),b:Math.round(sr.bottom)}));
+    const cats = [...D.querySelectorAll('#saoCats .cat')].map((b)=> b.dataset.cat);
+    expect(cats.length >= 4, '分类圆钮数量 4~5 个', cats.join(','));
+    expect(D.querySelectorAll('#saoCats .cat.on').length === 1, '同时只有一个分类高亮', D.querySelectorAll('#saoCats .cat.on').length);
+    const rows = [...D.querySelectorAll('#saoList .row')];
+    expect(rows.length === cats.length, '一级菜单行与分类一一对应', rows.length + ' vs ' + cats.length);
+    expect(D.querySelectorAll('#saoList .row.on').length === 1, '一级菜单当前分类行金黄高亮', D.querySelectorAll('#saoList .row.on').length);
+    expect(D.querySelectorAll('#saoSub .row').length >= 1, '二级菜单已有内容', D.querySelectorAll('#saoSub .row').length);
+    expect([...D.querySelectorAll('#saoSub .row')].some((b)=> b.textContent.includes('吃点米饭')), '互动菜单里有"吃点米饭"入口',
+      [...D.querySelectorAll('#saoSub .row')].map((b)=>b.textContent.trim()).join(','));
+    expect(!/\p{Emoji_Presentation}/u.test(D.getElementById('sao').textContent), '菜单文字里没有彩色 emoji', '-');
+    const eatSt = W.eval('states.eat');
+    expect(!!eatSt && eatSt.mode === 'once' && eatSt.role === 'idle_act', '空闲动作"吃米饭"已进状态表(once/idle_act)', JSON.stringify(eatSt||null).slice(0,80));
+    expect(Math.abs((eatSt && eatSt.rate ? eatSt.rate : 0) - 2.0) < 1e-6, '吃米饭 2 倍速(rate=2.0)', eatSt && eatSt.rate);
+    const marks = [...D.querySelectorAll('#cdMarks .txt')].map((e)=> e.textContent);
+    expect(marks.length === 4, '详情卡有 4 个身体部位标注(额头/眼睛/胸部/肚子)', marks.join(' | '));
+    // 切换分类 → 二级菜单跟着换，旧高亮不残留
+    W.eval("petAPI.saoSelectCat('tools')");
+    await wait(250);
+    const rows2 = [...D.querySelectorAll('#saoList .row.on')].map((b)=> b.textContent.trim());
+    const sub2 = [...D.querySelectorAll('#saoSub .row')].map((b)=> b.textContent.trim());
+    expect(rows2.length === 1 && rows2[0].indexOf('工具') >= 0, '切分类后高亮跟着走', rows2.join(','));
+    expect(sub2.length >= 3 && sub2.join(',').indexOf('文件搜索') >= 0, '切分类后二级菜单正确更新', sub2.join(','));
+    expect(D.querySelectorAll('#saoList .row.on').length === 1, '旧高亮没有残留', D.querySelectorAll('#saoList .row.on').length);
+    W.eval("petAPI.saoSelectCat('interact')");
+    await wait(150);
+  }
+  W.eval('petAPI.closeMenu()');
+  await wait(250);
+  expect(!D.getElementById('sao').classList.contains('show'), '关掉菜单后隐藏', '-');
+  expect(st() === 'idle', '关掉菜单 → 待机', st());
+
+  log('\n【6】长任务 = 操作中');
+  W.eval('petAPI.startTask()');
+  await wait(200);
+  expect(st() === 'working', '长任务进行中 = 操作中', st());
+  W.eval('petAPI.startTask()');
+  W.eval('petAPI.endTask()');
+  await wait(200);
+  expect(st() === 'working', '并发任务未全部结束前保持操作中', st());
+  W.eval('petAPI.endTask()');
+  await wait(200);
+  expect(st() === 'idle', '任务全部结束 → 待机', st());
+
+  log('\n【7】空闲阶梯：操作后先待机，静置久了才随机摇尾/忙起来');
+  W.eval('petAPI.setState("idle"); M.lastInteract = performance.now(); M.loungeUntil = 0;');
+  await wait(400);
+  expect(st() === 'idle', '刚操作完 → 待机', st());
+  W.eval('M.lastInteract = performance.now() - 20000; M.loungeUntil = 0;');
+  await wait(500);
+  const lounged = st();
+  expect(['tail_open','tail_closed','working'].includes(lounged), '静置超过 12 秒 → 切到空闲随机状态', lounged);
+  const seen = new Set([lounged]);
+  for (let i = 0; i < 40; i++){
+    await wait(1000);
+    W.eval('M.lastInteract = performance.now() - 20000; M.loungeUntil = 0;');
+    const s = st();
+    if (['tail_open','tail_closed','working'].includes(s)) seen.add(s);
+  }
+  log('  空闲期间出现过的状态: ' + [...seen].join(', '));
+  expect(seen.size >= 2, '空闲期间会在多个空闲状态之间随机切换', seen.size);
+
+  log('\n【8】优先级：拖动 > 长任务');
+  W.eval('petAPI.startTask();');
+  await wait(150);
+  ({cx, cy} = frameXY());
+  pe('pointerdown', cx, cy, D.getElementById('pet'));
+  await wait(150);
+  expect(st() === 'grabbed', '长任务进行中拖动 → 仍是抓着(优先级更高)', st());
+  pe('pointerup', cx, cy, D.getElementById('pet'));
+  await wait(200);
+  expect(st() === 'working', '松手后回到操作中(长任务未结束)', st());
+  W.eval('petAPI.endTask()');
+  await wait(200);
+
+  log('\n【9】UI 控件');
+  const si = D.getElementById('size');
+  si.value = 420; si.dispatchEvent(new W.Event('input', {bubbles:true}));
+  await wait(150);
+  expect(Math.abs(petRect().height - 420) < 2, '大小滑块生效', petRect().height);
+  const sp = D.getElementById('speed');
+  sp.value = 150; sp.dispatchEvent(new W.Event('input', {bubbles:true}));
+  await wait(150);
+  const gr = [...D.querySelectorAll('#pet video')].find(v=>v.classList.contains('active'));
+  expect(gr.playbackRate === 1.5, '速度滑块生效', gr.playbackRate);
+  D.getElementById('btnBg').click(); await wait(100);
+  expect(D.getElementById('checker').classList.contains('show'), '切换背景生效', '-');
+  D.getElementById('btnGhost').click(); await wait(100);
+  expect(D.getElementById('desktop').classList.contains('hidden'), '透明模式生效', '-');
+
+  log('\n【10】文件搜索面板（Everything，注入 mock 宿主）');
+  W.__petPtr = [];                                   // 诊断：记录角色上的指针事件（isTrusted 可区分真实/合成）
+  ['pointerdown','pointerup','click'].forEach(t => D.getElementById('pet').addEventListener(t,
+    (e)=> W.__petPtr.push({t, at:Math.round(W.performance.now()), trusted:e.isTrusted, tgt:(e.target.id||e.target.tagName)}), true));
+  W.petHost = {
+    setInteractive: ()=>{}, saveState: ()=>{}, focusWindow: ()=> {},
+    search: async (q)=> ({ ok:true, results: [
+      { path:'C:\\测试\\报表2026.xlsx', name:'报表2026.xlsx', ext:'xlsx', size:1234567, mtime:'2026-09-19T10:00:00' },
+      { path:'C:\\测试\\图纸\\叶片.png',  name:'叶片.png',      ext:'png',  size:20480,   mtime:'2026-09-18T09:00:00' },
+      { path:'C:\\测试\\说明.txt',       name:'说明.txt',      ext:'txt',  size:512,     mtime:'2026-09-17T08:00:00' }
+    ]}),
+    openPath:   async (p)=>{ W.__opened = p;  return { ok:true }; },
+    revealPath: async (p)=>{ W.__revealed = p; return { ok:true }; },
+    copyText:   (t)=>{ W.__copied = t; }
+  };
+  W.eval('petAPI.openSearch()');
+  await wait(200);
+  expect(D.getElementById('search').classList.contains('show'), '面板已打开', '-');
+  expect(st() === 'stand_arms', '面板打开时 = 站立抬胳膊', st());
+  W.eval('petAPI.placeSearch()');     // 双保险：量之前强制按最终高度重摆
+  await wait(120);
+  const sr = D.getElementById('search').getBoundingClientRect(), pr2 = petRect();
+  const overlap = !(sr.right <= pr2.left || sr.left >= pr2.right || sr.bottom <= pr2.top || sr.top >= pr2.bottom);
+  expect(!overlap, '面板不遮挡角色', JSON.stringify({panel:[sr.left|0,sr.top|0,sr.right|0,sr.bottom|0], pet:[pr2.left|0,pr2.top|0,pr2.right|0,pr2.bottom|0]}));
+  expect(sr.right <= pr2.left + 1, '面板在角色左侧', 'panelRight=' + (sr.right|0) + ' petLeft=' + (pr2.left|0));
+  const dy = Math.abs((sr.top + sr.bottom)/2 - (pr2.top + pr2.bottom)/2);
+  const clamped = sr.top <= 8.5 || sr.bottom >= W.innerHeight - 8.5;   // 视口放不下时允许贴边
+  expect(dy < 24 || clamped, '面板垂直居中对齐(视口放不下时贴边)',
+    dy.toFixed(0) + 'px clamped=' + clamped + ' 面板y=' + (sr.top|0) + '~' + (sr.bottom|0)
+    + '(h=' + (sr.height|0) + ') 角色y=' + (pr2.top|0) + '~' + (pr2.bottom|0) + ' 视口高=' + W.innerHeight);
+  expect(sr.top >= 0 && sr.bottom <= W.innerHeight, '面板完整在视口内', (sr.top|0) + '~' + (sr.bottom|0));
+
+  const sin = D.getElementById('sinput');
+  sin.value = '报表'; sin.dispatchEvent(new W.Event('input', {bubbles:true}));
+  await wait(400);                                   // 防抖 140ms + mock 立即返回
+  const rows = [...D.querySelectorAll('#slist .srow')];
+  expect(rows.length === 3, '输入后渲染出结果行', rows.length);
+  expect(D.getElementById('scount').textContent.includes('3'), '结果计数显示', D.getElementById('scount').textContent);
+  let sel = D.querySelector('#slist .srow.sel');
+  expect(!!sel && sel.querySelector('.sname').textContent === '报表2026.xlsx', '首项默认高亮', sel && sel.querySelector('.sname').textContent);
+
+  sin.dispatchEvent(new W.KeyboardEvent('keydown', {key:'ArrowDown', bubbles:true, cancelable:true}));
+  await wait(80);
+  sel = D.querySelector('#slist .srow.sel');
+  expect(sel && sel.querySelector('.sname').textContent === '叶片.png', '↓ 切换高亮项', sel && sel.querySelector('.sname').textContent);
+  sin.dispatchEvent(new W.KeyboardEvent('keydown', {key:'ArrowUp', bubbles:true, cancelable:true}));
+  await wait(80);
+  sel = D.querySelector('#slist .srow.sel');
+  expect(sel && sel.querySelector('.sname').textContent === '报表2026.xlsx', '↑ 切回上一项', sel && sel.querySelector('.sname').textContent);
+
+  sin.dispatchEvent(new W.KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+  await wait(250);
+  expect(W.__opened === 'C:\\测试\\报表2026.xlsx', 'Enter 打开高亮项', String(W.__opened));
+  expect(!D.getElementById('search').classList.contains('show'), '打开后面板自动关闭', '-');
+
+  W.eval('petAPI.openSearch()');
+  await wait(200);
+  const sin2 = D.getElementById('sinput');
+  sin2.value = '叶片'; sin2.dispatchEvent(new W.Event('input', {bubbles:true}));
+  await wait(400);
+  sin2.dispatchEvent(new W.KeyboardEvent('keydown', {key:'Enter', ctrlKey:true, bubbles:true, cancelable:true}));
+  await wait(250);
+  expect(W.__revealed === 'C:\\测试\\报表2026.xlsx', 'Ctrl+Enter 定位到所在文件夹', String(W.__revealed));
+
+  W.eval('petAPI.openSearch()');
+  await wait(200);
+  D.getElementById('sinput').dispatchEvent(new W.KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}));
+  await wait(250);
+  expect(!D.getElementById('search').classList.contains('show'), 'Esc 关闭面板', '-');
+  expect(W.eval('petAPI.getMode().searchOpen') === false, '面板关闭后 searchOpen 已清除', JSON.stringify(W.eval('petAPI.getMode()')));
+  expect(st() !== 'stand_arms', '关闭后不再演"站立抬胳膊"', st());
+  await wait(4500);          // 第8组那次合成点击留下的一次性动作(约4s)播完再判待机
+  expect(st() === 'idle', '静置后回到待机', st() + ' | 角色指针事件=' + JSON.stringify(W.__petPtr));
+
+  log('\n【11】DeepSeek 聊天面板（mock harness）');
+  W.__chatStore = [];
+  Object.assign(W.petHost, {
+    chat: async (prompt)=> {
+      await new Promise(r=> setTimeout(r, 600));                       // 模拟 harness 的延迟
+      W.__chatStore = W.__chatStore.concat([
+        { role:'user', text:prompt, at:Date.now() },
+        { role:'assistant', text:'模拟回复：' + prompt, at:Date.now() }]);
+      return { ok:true, text:'模拟回复：' + prompt, ms:600 };
+    },
+    cancelChat: async ()=> ({ ok:true }),
+    chatHistory: async ()=> W.__chatStore,
+    clearChat: async ()=> { W.__chatStore = []; return { ok:true }; }
+  });
+  W.eval('petAPI.openChat()');
+  await wait(250);
+  expect(D.getElementById('chat').classList.contains('show'), '聊天面板已打开', '-');
+  expect(st() === 'stand_arms', '聊天面板打开时 = 站立抬胳膊', st());
+  const cc = D.getElementById('chat').getBoundingClientRect(), pc = petRect();
+  const overC = !(cc.right <= pc.left || cc.left >= pc.right || cc.bottom <= pc.top || cc.top >= pc.bottom);
+  expect(!overC, '聊天面板不遮挡角色', '-');
+  expect(cc.right <= pc.left + 1, '聊天面板在角色左侧', 'panelRight=' + (cc.right|0) + ' petLeft=' + (pc.left|0));
+
+  const ci = D.getElementById('cinput');
+  ci.value = '你好，介绍一下你自己';
+  ci.dispatchEvent(new W.KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+  await wait(150);
+  expect(st() === 'working', 'harness 处理中 → 操作中（优先级高于菜单）', st());
+  expect(!!D.querySelector('#cmsg .thinking'), '显示处理中指示(带计时)', '-');
+  await wait(1100);
+  expect(st() !== 'working', '回复到达后不再演"操作中"', st());
+  const clines = [...D.querySelectorAll('#cmsg .cline')];
+  expect(clines.length >= 2, '用户消息与回复都已渲染', clines.length);
+  expect(clines.some(el=> el.className.includes('assistant') && el.textContent.includes('模拟回复')), '回复内容正确', clines.map(e=>e.textContent.slice(0,24)).join(' / '));
+  expect(W.eval('petAPI.chatState().msgs') >= 2, '对话已写入历史(宿主侧)', W.eval('petAPI.chatState().msgs'));
+
+  ci.dispatchEvent(new W.KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}));
+  await wait(250);
+  expect(!D.getElementById('chat').classList.contains('show'), 'Esc 关闭聊天面板', '-');
+  expect(st() !== 'stand_arms', '关闭后不再演"站立抬胳膊"', st());
+
+  log('\n【12】harness 事件流（流式文本 / 工具卡片 / 状态 / 错误可见）');
+  const EV = (o)=> W.eval('petAPI.__harnessEvent(' + JSON.stringify(o) + ')');   // 注入 harness 事件
+  const ST = (o)=> W.eval('petAPI.__harnessStatus(' + JSON.stringify(o) + ')');
+  Object.assign(W.petHost, {
+    harnessStatus: async ()=> ({ alive:true, ready:true, provider:'deepseek-official', model:'deepseek-v4-flash-vision-exp' }),
+    chat: async ()=> ({ ok:true, streaming:true, ms:120, sessionId:'pet-test' })
+  });
+  W.eval('petAPI.openChat()');
+  await wait(250);
+  expect(D.getElementById('chat').classList.contains('show'), '聊天面板打开', '-');
+
+  ST({ state:'running' });
+  await wait(80);
+  expect(st() === 'working', 'harness running → 桌宠演"操作中"', st());
+  expect(!!D.querySelector('#cmsg .thinking'), '面板显示处理中 + 计时', '-');
+
+  const sent = D.getElementById('cinput');
+  sent.value = '帮我查天气'; 
+  sent.dispatchEvent(new W.KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+  await wait(150);
+  EV({ kind:'delta', text:'正在' }); EV({ kind:'delta', text:'查询…' });
+  await wait(60);
+  expect(!!D.querySelector('#cmsg .cline.stream'), '收到 delta → 出现流式气泡', '-');
+  expect(D.querySelector('#cmsg .cline.stream').textContent.indexOf('正在查询') >= 0, '流式文本按增量追加', D.querySelector('#cmsg .cline.stream').textContent.slice(0,20));
+  expect(!!D.querySelector('#cmsg .caret'), '流式气泡带光标', '-');
+
+  EV({ kind:'toolCall', name:'web_fetch', args:'{"url":"https://wttr.in/Xingtai"}' });
+  await wait(60);
+  const cards = D.querySelectorAll('#cmsg .ctool');
+  expect(cards.length === 1, 'tool/call → 渲染工具卡片', cards.length);
+  expect(cards[0].textContent.indexOf('web_fetch') >= 0, '卡片显示工具名与参数', cards[0].textContent.slice(0,40));
+  EV({ kind:'toolResult', text:'北京 27℃ 晴', callId:'c1' });
+  await wait(60);
+  expect(D.querySelector('#cmsg .ctool').textContent.indexOf('✓') >= 0, 'tool/result → 卡片标记完成', '-');
+
+  EV({ kind:'title', title:'查询北京天气' });
+  await wait(60);
+  expect(D.getElementById('cstatus').textContent.indexOf('查询北京天气') >= 0, '会话标题显示在状态条', D.getElementById('cstatus').textContent.slice(0,40));
+
+  EV({ kind:'turnEnd', reason:{ kind:'error', error:{ message:'测试用的失败原因' } } });
+  await wait(400);
+  expect(D.body.textContent.indexOf('测试用的失败原因') >= 0 || D.getElementById('cmsg').textContent.indexOf('测试用的失败原因') >= 0, 'harness 报错可见（不再静默等待）', '-');
+  expect(st() !== 'working', '出错后桌宠恢复', st());
+
+  ST({ state:'dead', info:{ reason:'harness 已退出（code=1）' } });
+  await wait(80);
+  expect(D.getElementById('cstatus').textContent.indexOf('已停止') >= 0, 'harness 挂了会在状态条显示', D.getElementById('cstatus').textContent.slice(0,30));
+
+  W.eval('petAPI.closeChat()');
+  await wait(150);
+  expect(!D.getElementById('chat').classList.contains('show'), '关闭聊天面板', '-');
+
+  log('\n【13】打开面板时不吞鼠标（回归：曾把整块屏幕变成鼠标黑洞，同屏窗口全点不动）');
+  Object.assign(W.petHost, { setInteractive: (v)=> { W.__inter = v; } });
+  W.eval('petAPI.__rebindHost()');      // 页面在 init 时就抓了 petHost 引用 → 重绑后才能收到我们的 mock
+  await wait(120);
+  W.eval('petAPI.openChat()');
+  await wait(300);
+  const pc13 = petRect(), ch13 = D.getElementById('chat').getBoundingClientRect();
+  const move13 = (x, y)=> W.dispatchEvent(new W.MouseEvent('mousemove', { clientX:x, clientY:y, bubbles:true }));
+  move13(4, 4); await wait(300);
+  expect(W.__inter === false, '面板开着 + 光标在空白 → 窗口穿透（同屏其它窗口可点）', W.__inter);
+  move13(ch13.left + ch13.width/2, ch13.top + 20); await wait(300);
+  expect(W.__inter === true, '光标在面板上 → 可交互（面板点得到）', W.__inter);
+  move13(pc13.left + pc13.width/2, pc13.top + pc13.height*0.55); await wait(300);
+  expect(W.__inter === true, '光标在角色上 → 可交互（角色拖得动）', W.__inter);
+  W.eval('petAPI.closeChat()');
+  await wait(300);
+  move13(4, 4); await wait(300);
+  expect(W.__inter === false, '关闭面板后仍保持穿透', W.__inter);
+  move13(pc13.left + pc13.width/2, pc13.top + pc13.height*0.55); await wait(300);
+  expect(W.__inter === true, '关闭面板后角色照样能拖', W.__inter);
+  move13(4, 4); await wait(200);
+
+  const bad = lines.filter(l => l.includes('✘')).length;
+  log('\n===> ' + (bad === 0 ? '全部通过' : '有 ' + bad + ' 项失败'));
+  document.title = bad === 0 ? 'STATEMACHINE-PASS' : 'STATEMACHINE-FAIL';
+};
+</script>
+</body></html>
