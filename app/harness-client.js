@@ -31,21 +31,76 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-/** 运行时仓库位置：配置 > 环境变量 > 常见位置自动探测（发布版不含任何个人信息） */
-function detectRepo() {
+/** 运行时仓库位置：配置 > 环境变量 > 自动探测（发布版不含任何个人信息）
+ *
+ * 探测分两步，**都不做全盘扫描**（否则会拖慢启动）：
+ *   ① 精确候选：常见布局逐个试（含 `git clone` 的标准布局 `<家目录>\\deepseek-harness`）
+ *   ② 一级下探：在若干"正常会放代码的目录"里列一层子目录，子目录本身或它的 `src/` 下
+ *      有 `apps/cli/src/bin.ts` 就算命中 —— 覆盖克隆到 Documents\\GitHub\\… 这类情况
+ * 结果缓存在模块级（同一个进程只扫一次）；要重新扫传 force=true（设置面板的"自动探测"）。
+ */
+const REPO_MARK = ['apps', 'cli', 'src', 'bin.ts'];
+
+/** 这个目录是不是 harness 仓库根（含 apps/cli/src/bin.ts） */
+function isRepoDir(p) {
+  try { return !!p && fs.existsSync(path.join(p, ...REPO_MARK)); } catch (e) { return false; }
+}
+
+let _repoCache;                                   // undefined=没扫过；''=扫过但没找到
+
+function scanForRepo() {
   const env = process.env;
-  const cands = [
-    env.DSH_HARNESS_REPO, env.DSH_HARNESS_SRC,
-    path.join(env.USERPROFILE || env.HOME || '', 'deepseek-harness', 'src'),
-    path.join(env.USERPROFILE || env.HOME || '', '.dsh', 'harness'),
-    'C:\\deepseek-harness\\src', 'D:\\deepseek-harness\\src', 'F:\\deepseek-harness\\src',
-  ].filter(Boolean);
-  for (const c of cands) {
-    try {
-      if (c && fs.existsSync(path.join(c, 'apps', 'cli', 'src', 'bin.ts'))) return c;
-    } catch (e) {}
-  }
-  return cands[0] || '';
+  const home = env.USERPROFILE || env.HOME || '';
+  const j = (...a) => path.join(...a.filter(Boolean));
+  const DRIVES = ['C', 'D', 'E', 'F', 'G'];
+  const scan = (roots) => {                       // 在每个根下探一层：子目录本身 或 子目录\src 是仓库根
+    const seen = new Set();
+    for (const root of roots) {
+      if (!root || seen.has(root)) continue;
+      seen.add(root);
+      let ents = [];
+      try { ents = fs.readdirSync(root, { withFileTypes: true }); } catch (e) { continue; }
+      for (const e of ents.slice(0, 400)) {
+        if (!e.isDirectory()) continue;
+        const sub = path.join(root, e.name);
+        if (isRepoDir(sub)) return sub;
+        const s2 = path.join(sub, 'src');
+        if (isRepoDir(s2)) return s2;
+      }
+    }
+    return '';
+  };
+  const driveRoots = () => DRIVES.map((d) => d + ':\\').filter((d) => { try { return fs.existsSync(d); } catch (e) { return false; } });
+
+  // 阶段 1：环境变量 + 家目录精确布局（用户自己那份最该优先）
+  const homeCands = [env.DSH_HARNESS_REPO, env.DSH_HARNESS_SRC,
+                     j(home, 'deepseek-harness', 'src'),
+                     j(home, 'deepseek-harness'),                  // 标准 git clone 布局
+                     j(home, '.dsh', 'harness')].filter(Boolean);
+  for (const c of homeCands) if (isRepoDir(c)) return c;
+
+  // 阶段 2：家目录下探一层（Documents\\GitHub\\… 这类）
+  const r = scan([j(home, 'Documents', 'GitHub'), j(home, 'Documents'), j(home, 'source', 'repos'),
+                  j(home, 'code'), j(home, 'projects'), j(home, 'dev'), j(home, 'Desktop'), home]);
+  if (r) return r;
+
+  // 阶段 3：常见盘符精确布局
+  const driveCands = [
+    ...DRIVES.map((d) => d + ':\\deepseek-harness\\src'),
+    ...DRIVES.map((d) => d + ':\\deepseek-harness'),
+    ...DRIVES.map((d) => d + ':\\code\\deepseek-harness'),
+    ...DRIVES.map((d) => d + ':\\src\\deepseek-harness'),
+    ...DRIVES.map((d) => d + ':\\deepseek-harness\\deepseek-harness'),
+  ];
+  for (const c of driveCands) if (isRepoDir(c)) return c;
+
+  // 阶段 4：盘符根下探一层
+  return scan(driveRoots());
+}
+
+function detectRepo(force) {
+  if (force || _repoCache === undefined) _repoCache = scanForRepo();
+  return _repoCache;
 }
 
 const DEFAULTS = {
@@ -309,4 +364,4 @@ class HarnessClient {
   }
 }
 
-module.exports = { HarnessClient, readHarnessDefaults, detectRepo, DEFAULTS };
+module.exports = { HarnessClient, readHarnessDefaults, detectRepo, isRepoDir, DEFAULTS };

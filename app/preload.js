@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('petHost', {
   getConfig:  () => ipcRenderer.invoke('config:get'),
   setConfig:  (patch) => ipcRenderer.invoke('config:set', patch),
   testConfig: () => ipcRenderer.invoke('config:test'),
+  browseRepo: () => ipcRenderer.invoke('config:browseRepo'),   // 打开"选择文件夹"对话框选 harness 仓库
+  detectRepo: () => ipcRenderer.invoke('config:detect'),       // 重新自动探测（不吃缓存）
 
   /* ---- 面板打开状态 → 主进程据此临时注册全局 Esc ---- */
   setPanelOpen: (on) => ipcRenderer.send('pet:panel', !!on),

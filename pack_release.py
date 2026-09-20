@@ -109,16 +109,23 @@ def write_readme(path):
   不会上传、也不会写进任何随包分发的文件。
 
   聊天背后用的是 DeepSeek Harness（开源 agent 运行时），所以要它在本机可用：
-    · 需要本机已安装 Node.js（20 或更高）
     · 需要一份 DeepSeek Harness 仓库：https://github.com/deepseek-ai/deepseek-harness
-      设置面板里的“DeepSeek Harness 仓库路径”填仓库根目录（就是含 apps\\cli\\src\\bin.ts 的那一层）；
-      填对了会自动探测，不用每次填。
+      克隆下来之后 **必须先装依赖**（在仓库根目录跑官方启动步骤里的 pnpm install）；
+      只 clone 不装依赖的话，运行时起不来，会报 "Cannot find package 'tsx'"。
+    · Node.js 建议装 20 或更高（装了更稳）；没装也能跑——会自动退回用桌宠自带的运行时。
+    · 仓库路径怎么给：
+        · 点设置面板里的“浏览…”，直接选仓库根目录（就是含 apps\\cli\\src\\bin.ts 的那一层）最省事；
+        · 或者点“重新探测”，它会在常见位置（含 git clone 的默认布局、各盘根目录）找一遍，找到就自动填；
+        · 也可以设环境变量 DSH_HARNESS_REPO 指向仓库根。
+    · 模型 / Provider：留空就用 harness 自己的配置（~/.dsh/settings.yaml）；要指定就在设置里填。
     · 桌宠首次聊天要启动这个运行时，约 5~10 秒，之后就快了。
   （如果暂时没有 harness，桌宠其它功能照常可用，聊天面板会提示“未找到运行时”。）
 
-【二、文件搜索（需要自己准备）】
-  需要本机装有 Everything（voidtools 的免费搜索工具，https://www.voidtools.com）。
-  桌宠用 Everything 官方的命令行工具 es.exe 查询（已随包附带），不改动你 Everything 的任何设置。
+【二、文件搜索（只差 Everything 本身）】
+  你只需要：装好 Everything（voidtools 的免费搜索工具，https://www.voidtools.com）并 **让它保持运行**
+  （托盘里能看到它的图标就行），Everything 本身不用做任何设置。
+  es.exe（Everything 的官方命令行工具）**已随包附带**，不用你另外下载；桌宠用它走 IPC 查询，
+  不会改动你 Everything 的任何配置。Everything 1.4 / 1.5（含便携版）会自动识别实例。
   打开方式：Ctrl+Shift+F，或托盘/右键菜单里的“文件搜索”。
   用法：输入关键字（支持 Everything 语法，如 ext:pdf 报告），↑↓ 选择，Enter 打开，
         Ctrl+Enter 打开所在文件夹，Ctrl+C 复制路径，Esc 关闭。
@@ -132,8 +139,10 @@ def write_readme(path):
 【常见问题】
   聊天一直显示“harness 启动中…”
       → 首次启动要 5~10 秒；若一直不出结果，到设置里点“测试连接”看具体报错。
+  聊天报 "Cannot find package 'tsx'"（或 harness 一直起不来）
+      → harness 仓库还没装依赖：到仓库根目录按官方文档跑一次 pnpm install，再点“测试连接”。
   “未找到 DeepSeek Harness 运行时”
-      → 设置里把仓库路径填对（含 apps\\cli\\src\\bin.ts 的那一层），或设置环境变量 DSH_HARNESS_REPO。
+      → 设置里点“浏览…”选中仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层），或设环境变量 DSH_HARNESS_REPO。
   聊天报“API request to … failed”
       → key 或网址不对：到设置里点“测试连接”，按提示修正。
   文件搜索没结果
