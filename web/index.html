@@ -1,0 +1,2216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DeepSeek-猫鲸</title>
+<style>
+  :root{
+    --ui-bg: rgba(18,20,28,.84);
+    --ui-border: rgba(255,255,255,.14);
+    --ui-fg: #e8ecf5;
+    --ui-dim: #98a1b3;
+    --accent: #5b9dff;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    overflow:hidden; background:transparent; color:#fff;
+    user-select:none; -webkit-user-select:none;
+  }
+  /* ---------- 背景 ---------- */
+  #desktop{
+    position:fixed; inset:0; z-index:0;
+    background:
+      radial-gradient(1200px 700px at 78% 12%, #3b5ea8 0%, transparent 60%),
+      radial-gradient(900px 600px at 10% 90%, #6d4a8f 0%, transparent 55%),
+      linear-gradient(160deg,#111726 0%, #1b2233 45%, #0d1119 100%);
+  }
+  #desktop.hidden{display:none;}
+  #checker{
+    position:fixed; inset:0; z-index:0; display:none;
+    background-color:#2a2e38;
+    background-image:
+      linear-gradient(45deg,#3a3f4b 25%,transparent 25%,transparent 75%,#3a3f4b 75%),
+      linear-gradient(45deg,#3a3f4b 25%,transparent 25%,transparent 75%,#3a3f4b 75%);
+    background-size:32px 32px; background-position:0 0,16px 16px;
+  }
+  #checker.show{display:block;}
+
+  /* ---------- 桌宠 ---------- */
+  #pet{
+    position:fixed; left:0; top:0; z-index:10;
+    width:var(--pet-w); height:var(--pet-h);
+    cursor:grab; touch-action:none; will-change:left,top;
+    filter: drop-shadow(0 16px 16px rgba(0,0,0,.30));
+  }
+  #pet.dragging{cursor:grabbing;}
+  #pet.moving{transition:left .5s cubic-bezier(.3,.8,.3,1), top .5s cubic-bezier(.3,.8,.3,1);}
+  #pet video{
+    position:absolute; inset:0; width:100%; height:100%;
+    opacity:0; transition:opacity .12s linear;
+    pointer-events:none;
+    transform-origin:50% 96.67%;      /* 缩放基准＝脚底基线(1450/1500)，放大不会离地 */
+    transform:scale(1);
+  }
+  #pet video.active{opacity:1;}
+  #shadow{
+    position:fixed; z-index:9; pointer-events:none;
+    background:radial-gradient(closest-side, rgba(0,0,0,.40), rgba(0,0,0,0) 100%);
+    border-radius:50%;
+  }
+  #shadow.hidden{display:none;}
+
+  /* ---------- 占位菜单（以后换成正式菜单） ---------- */
+  #menu{
+    position:fixed; z-index:50; display:none;
+    min-width:152px; padding:6px;
+    background:var(--ui-bg); border:1px solid var(--ui-border);
+    border-radius:12px; backdrop-filter:blur(10px);
+    box-shadow:0 14px 34px rgba(0,0,0,.45);
+  }
+  #menu.show{display:block;}
+  #menu::after{content:'';position:absolute;top:50%;margin-top:-7px;width:0;height:0;
+    border-top:7px solid transparent;border-bottom:7px solid transparent;}
+  #menu.side-left::after{right:-9px;border-left:9px solid rgba(30,34,44,.95);}
+  #menu.side-right::after{left:-9px;border-right:9px solid rgba(30,34,44,.95);}
+  #menu button{display:block;width:100%;text-align:left;margin:2px 0;background:transparent;border-color:transparent;}
+  #menu button:hover{background:rgba(91,157,255,.24);}
+  #menu .mtitle{color:var(--ui-dim);font-size:11px;padding:4px 8px 6px;}
+
+  /* ---------- 文件搜索面板（Everything） ---------- */
+  #search{
+    position:fixed; z-index:60; display:none; width:470px;
+    background:var(--ui-bg); border:1px solid var(--ui-border);
+    border-radius:12px; backdrop-filter:blur(10px);
+    box-shadow:0 18px 46px rgba(0,0,0,.5); overflow:hidden;
+  }
+  #search.show{display:block;}
+  #search .sbox{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--ui-border);}
+  #search .sbox input{
+    flex:1;min-width:0;background:transparent;border:none;outline:none;
+    color:var(--ui-fg);font:inherit;font-size:14px;padding:2px 0;
+  }
+  #search .scount{color:var(--ui-dim);font-size:11px;white-space:nowrap;}
+  #slist{max-height:336px;overflow-y:auto;}
+  #slist .srow{display:flex;gap:9px;align-items:center;padding:6px 11px;cursor:pointer;
+    border-left:3px solid transparent;}
+  #slist .srow:hover{background:rgba(91,157,255,.16);}
+  #slist .srow.sel{background:rgba(91,157,255,.26);border-left-color:var(--accent);}
+  #slist .sname{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;}
+  #slist .spath{flex:1 1 auto;min-width:40px;color:var(--ui-dim);font-size:11px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;}
+  #slist .smeta{flex:0 0 auto;color:var(--ui-dim);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  #slist .srow button{padding:1px 6px;font-size:11px;border-radius:6px;flex:0 0 auto;}
+  #search .sfoot{display:flex;gap:12px;padding:6px 11px;border-top:1px solid var(--ui-border);
+    color:var(--ui-dim);font-size:11px;flex-wrap:wrap;}
+  #search .smsg{padding:16px 13px;color:var(--ui-dim);font-size:12.5px;line-height:1.7;}
+  #search .smsg b{color:var(--ui-fg);font-weight:600;}
+
+  /* ---------- DeepSeek 聊天面板 ---------- */
+  #chat{
+    position:fixed; z-index:62; display:none; width:470px;
+    background:var(--ui-bg); border:1px solid var(--ui-border);
+    border-radius:12px; backdrop-filter:blur(10px);
+    box-shadow:0 18px 46px rgba(0,0,0,.5); overflow:hidden;
+  }
+  #chat.show{display:block;}
+  #chat .sbox{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--ui-border);}
+  #chat .sbox input{flex:1;min-width:0;background:transparent;border:none;outline:none;
+    color:var(--ui-fg);font:inherit;font-size:14px;padding:2px 0;}
+  #chat .scount{color:var(--ui-dim);font-size:11px;white-space:nowrap;}
+  #cmsg{max-height:352px;overflow-y:auto;padding:10px 11px;display:flex;flex-direction:column;gap:9px;}
+  #cmsg .cline{max-width:86%;padding:7px 10px;border-radius:10px;font-size:13px;line-height:1.65;
+    white-space:pre-wrap;word-break:break-word;}
+  #cmsg .user{align-self:flex-end;background:rgba(91,157,255,.28);border:1px solid rgba(91,157,255,.4);}
+  #cmsg .assistant{align-self:flex-start;background:rgba(255,255,255,.07);border:1px solid var(--ui-border);}
+  #cmsg .err{align-self:stretch;background:rgba(255,96,96,.14);border:1px solid rgba(255,96,96,.4);color:#ffd7d7;}
+  #cmsg .meta{align-self:flex-start;color:var(--ui-dim);font-size:10.5px;margin:-4px 0 0 4px;}
+  #cmsg pre{margin:6px 0 0;padding:7px 8px;background:rgba(0,0,0,.35);border-radius:7px;
+    overflow-x:auto;font-size:12px;line-height:1.5;}
+  #cmsg code{background:rgba(0,0,0,.32);padding:1px 4px;border-radius:4px;font-size:12px;}
+  #cmsg .thinking{align-self:flex-start;color:var(--ui-dim);font-size:12.5px;display:flex;align-items:center;gap:7px;}
+  #cmsg .spinner{width:11px;height:11px;border:2px solid rgba(255,255,255,.25);
+    border-top-color:var(--accent);border-radius:50%;animation:cspin .8s linear infinite;}
+  @keyframes cspin{to{transform:rotate(360deg);}}
+  #chat .sfoot .clink{cursor:pointer;color:var(--accent);}
+  #chat .sfoot .clink:hover{text-decoration:underline;}
+  #chat .scount{display:flex;align-items:center;gap:5px;flex-wrap:wrap;max-width:62%;justify-content:flex-end;}
+  #chat .cdot{width:7px;height:7px;border-radius:50%;background:var(--ui-dim);display:inline-block;}
+  #chat .cdot.idle{background:#48d597;} #chat .cdot.running{background:#ffcc55;animation:pulse 1s infinite;}
+  #chat .cdot.starting{background:#5b9dff;animation:pulse 1s infinite;} #chat .cdot.dead{background:#ff6060;}
+  #chat .csep{color:var(--ui-dim);opacity:.6;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  #cmsg .caret{display:inline-block;width:7px;height:13px;margin-left:2px;background:var(--accent);
+               vertical-align:-2px;animation:blink .9s steps(1) infinite;}
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  #cmsg .ctool{align-self:flex-start;max-width:88%;font-size:11.5px;color:var(--ui-dim);
+               background:rgba(120,160,255,.10);border:1px solid rgba(120,160,255,.28);
+               border-radius:8px;padding:5px 8px;line-height:1.5;}
+  #cmsg .ctool.bad{background:rgba(255,96,96,.12);border-color:rgba(255,96,96,.4);}
+  #cmsg .ctool .ctname{color:#9fc4ff;margin-right:6px;}
+  #cmsg .ctool .ctarg{opacity:.75;font-family:var(--font);word-break:break-all;}
+  #cmsg .ctool details{margin-top:3px;} #cmsg .ctool summary{cursor:pointer;opacity:.8;}
+  #cmsg .ctool pre{max-height:150px;overflow:auto;margin:4px 0 0;}
+  #cmsg .creason{align-self:flex-start;max-width:88%;font-size:11.5px;color:var(--ui-dim);opacity:.85;}
+  #cmsg .creason summary{cursor:pointer;}
+  #cmsg .creason > details > div{max-height:160px;overflow:auto;margin-top:4px;padding:6px 8px;
+               background:rgba(0,0,0,.25);border-radius:7px;line-height:1.55;}
+
+  /* ---------- 设置面板 ---------- */
+  #settings{position:absolute;display:none;width:430px;background:var(--ui-bg);border:1px solid var(--ui-border);
+            border-radius:13px;box-shadow:0 12px 34px rgba(0,0,0,.5);backdrop-filter:blur(11px);overflow:hidden;}
+  #settings.show{display:block;}
+  #settings .sform{padding:9px 12px 11px;display:flex;flex-direction:column;gap:6px;max-height:430px;overflow-y:auto;}
+  #settings .sform > label{font-size:11.5px;color:var(--ui-dim);margin-top:2px;}
+  #settings .sform input[type=text],#settings .sform input[type=password]{
+            width:100%;box-sizing:border-box;background:rgba(0,0,0,.3);border:1px solid var(--ui-border);
+            border-radius:7px;color:inherit;font:inherit;font-size:12.5px;padding:6px 8px;outline:none;}
+  #settings .sform input:focus{border-color:var(--accent);}
+  #settings .sform .row{display:flex;align-items:center;gap:8px;}
+  #settings .sform .row input{flex:1;min-width:0;}
+  #settings .sform .clink{cursor:pointer;color:var(--accent);font-size:11.5px;white-space:nowrap;}
+  #settings .sform .hint{font-size:11px;color:var(--ui-dim);line-height:1.5;}
+  #settings .sform .hint b{color:#9fc4ff;font-weight:600;}
+  #settings .sform button{background:rgba(91,157,255,.22);border:1px solid rgba(91,157,255,.45);color:inherit;
+            font:inherit;font-size:12.5px;padding:6px 13px;border-radius:8px;cursor:pointer;}
+  #settings .sform button:hover{background:rgba(91,157,255,.34);}
+  #settings .sform button:disabled{opacity:.5;cursor:default;}
+  #settings .sform .ok{color:#8fe3b0;} #settings .sform .bad{color:#ff9d9d;}
+
+  /* ---------- 控制面板 ---------- */
+  #panel{
+    position:fixed; left:16px; top:16px; z-index:100;
+    width:262px; padding:14px;
+    background:var(--ui-bg); border:1px solid var(--ui-border);
+    border-radius:14px; backdrop-filter:blur(10px);
+    box-shadow:0 12px 30px rgba(0,0,0,.4); font-size:13px;
+  }
+  #panel.hidden{display:none;}
+  #panel h1{font-size:14px;margin:0 0 4px;font-weight:600;}
+  #panel h1 span{color:var(--ui-dim);font-weight:400;font-size:12px;}
+  #stateLine{color:var(--accent);font-size:12px;margin:0 0 10px;min-height:16px;}
+  .row{display:flex;align-items:center;gap:8px;margin:9px 0;}
+  .row label{flex:0 0 52px;color:var(--ui-dim);font-size:12px;}
+  .row input[type=range]{flex:1;accent-color:var(--accent);height:18px;}
+  .row .val{flex:0 0 44px;text-align:right;color:var(--ui-dim);font-size:12px;font-variant-numeric:tabular-nums;}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+  button{
+    font:inherit;color:var(--ui-fg);background:rgba(255,255,255,.07);
+    border:1px solid var(--ui-border);border-radius:9px;padding:7px 8px;cursor:pointer;
+    transition:background .15s,border-color .15s;
+  }
+  button:hover{background:rgba(91,157,255,.22);border-color:rgba(91,157,255,.5);}
+  button.on{background:rgba(91,157,255,.3);border-color:var(--accent);color:#fff;}
+  .hint{margin-top:10px;color:var(--ui-dim);font-size:11px;line-height:1.65;}
+  .sep{height:1px;background:var(--ui-border);margin:10px 0;}
+  #toast{
+    position:fixed;left:50%;bottom:38px;transform:translateX(-50%);z-index:120;
+    background:rgba(0,0,0,.68);border:1px solid var(--ui-border);
+    padding:7px 14px;border-radius:20px;font-size:12.5px;color:#dfe6f3;
+    opacity:0;transition:opacity .25s;pointer-events:none;
+  }
+  #toast.show{opacity:1;}
+
+
+  /* ================= SAO 菜单主题令牌（照《还原说明》第 4 节，集中定义便于换肤）================= */
+  :root{
+    --sao-panel:        rgba(248,249,245,.90);
+    --sao-panel-muted:  rgba(221,225,220,.76);
+    --sao-border:       rgba(255,255,247,.78);
+    --sao-edge:         rgba(90,100,92,.34);      /* 极细深色轮廓，让浅色板在亮背景上仍有边 */
+    --sao-divider:      rgba(103,112,106,.36);
+    --sao-text:         #566059;
+    --sao-text2:        #747D76;
+    --sao-accent:       #F6C62E;
+    --sao-accent-deep:  #AC7D0C;
+    --sao-accent-text:  #66521A;
+    --sao-icon-on:      #FFFBE9;
+    --sao-icon-off:     rgba(109,121,112,.60);
+    --sao-shadow:       0 0 0 1px rgba(90,100,92,.18), 0 10px 28px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
+    --sao-ease:         cubic-bezier(0.2,0.8,0.2,1);
+    --sao-t-fast:       130ms;
+    --sao-t-open:       220ms;
+    --sao-r:            2px;
+    /* 几何（《还原说明》第 3 节建议值） */
+    --sao-card-w:       240px;  --sao-card-h:   352px;
+    --sao-cat-d:        46px;   --sao-cat-gap:  62px;
+    --sao-list-w:       176px;  --sao-row-h:    42px;  --sao-row-gap: 20px;  /* 42+20=62=圆钮中心距：行与圆一一对齐 */
+    --sao-sub-w:        166px;
+    --sao-gap-card:     22px;   --sao-gap-list: 22px;  --sao-gap-sub: 6px;
+  }
+  /* ==========================================================================
+     面板皮肤：浅色金黄（与 SAO 菜单同一套令牌，避免"蓝金混搭"）
+     只覆盖外观变量与组件样式；**不动 id/class/DOM 与摆位几何**。
+     ========================================================================== */
+  :root{
+    --ui-bg:      rgba(248,249,245,.86);
+    --ui-border:  rgba(90,100,92,.30);
+    --ui-fg:      #566059;
+    --ui-dim:     #747D76;
+    --accent:     #AC7D0C;          /* 面板里的"强调文字/链接"用暗金，保证浅底上可读 */
+    --accent-hi:  #F6C62E;
+    --sao-green:  #3f8f5f;
+    --sao-red:    #b4453f;
+    --sao-font:   "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    --sao-mono:   "Cascadia Mono","Consolas","Microsoft YaHei UI",monospace;
+  }
+  html,body{ font-family:var(--sao-font); }
+
+  /* 面板本体：浅灰白半透明 + 极细描边 + 轻阴影 + 2px 圆角（照说明第 4 节材质细则） */
+  #panel,#menu,#search,#chat,#settings{
+    background:rgba(248,249,245,.88);
+    backdrop-filter:blur(2px);
+    border:1px solid rgba(255,255,247,.85);
+    border-radius:2px;
+    box-shadow:0 0 0 1px rgba(90,100,92,.22), 0 10px 28px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
+    color:var(--ui-fg);
+  }
+  #panel::before,#search::before,#chat::before,#settings::before{ content:none; }   /* 去掉上一版的切角内描边 */
+  #panel::after,#search::after,#chat::after,#settings::after{ content:none; }      /* 去掉斜向光带 */
+
+  /* 表头：浅底 + 细横线 + 深色标题（参考图里的卡片标题区就是这个做法） */
+  #panel h1,#search .sbox,#chat .sbox,#settings .sbox{
+    background:linear-gradient(180deg, rgba(255,255,255,.55), rgba(244,246,242,.35));
+    color:var(--ui-fg);
+    border-bottom:1px solid rgba(103,112,106,.36);
+    border-left:3px solid var(--accent-hi);
+    padding:9px 12px;
+    font-weight:500; letter-spacing:.5px;
+    box-shadow:none; clip-path:none;
+  }
+  #panel h1{ font-size:15px; }
+  #panel h1 #fpsInfo{ color:var(--ui-dim); letter-spacing:0; }
+  #menu .mtitle{ background:transparent; border-bottom:1px solid rgba(103,112,106,.30);
+                 color:var(--ui-dim); text-transform:uppercase; letter-spacing:1.1px; }
+  #search .scount,#chat .scount,#settings .scount{ color:var(--ui-dim); }
+
+  /* 控件 */
+  input,select,textarea{ font-family:var(--sao-font); color:var(--ui-fg); }
+  #search .sbox input,#chat .sbox input,#settings .sform input{
+    background:rgba(255,255,255,.72)!important; border:1px solid rgba(90,100,92,.28)!important;
+    border-radius:2px; color:var(--ui-fg);
+  }
+  #search .sbox input::placeholder,#chat .sbox input::placeholder{ color:rgba(103,112,106,.55); }
+  #search .sbox input:focus,#chat .sbox input:focus,#settings .sform input:focus{
+    border-color:var(--accent-hi)!important; box-shadow:0 0 0 2px rgba(246,198,46,.35)!important;
+    background:#fff!important;
+  }
+  input::placeholder{ color:rgba(103,112,106,.55); }
+
+  /* 按钮：浅底细描边；悬停微暖；开/选中 = 金黄底 + 深色字（与菜单选中行一致） */
+  #panel button,#menu button,#search button,#chat button,#settings button{
+    background:rgba(255,255,255,.62); border:1px solid rgba(90,100,92,.26); border-radius:2px;
+    color:var(--ui-fg); font-family:var(--sao-font); font-size:12.5px; letter-spacing:.2px;
+    transition:background 130ms cubic-bezier(.2,.8,.2,1), border-color 130ms, box-shadow 130ms;
+  }
+  #panel button:hover,#menu button:hover,#search button:hover,#chat button:hover,#settings button:hover{
+    background:#fffdf3; border-color:rgba(246,198,46,.65); box-shadow:0 0 0 2px rgba(246,198,46,.16);
+  }
+  #menu button{ background:transparent; border-color:transparent; border-left:3px solid transparent; }
+  #menu button:hover{ background:var(--accent-hi); border-left-color:var(--accent-deep,#AC7D0C); color:#66521A; }
+  #menu::after{ border-left-color:rgba(248,249,245,.95)!important; border-right-color:rgba(248,249,245,.95)!important; filter:none; }
+  #panel button.on,#btnAuto.on,#btnShadow.on{ background:var(--accent-hi); border-color:#AC7D0C; color:#3a2f0d; font-weight:500; }
+
+  /* 滑杆：细条 + 金黄填充 + 小方钮 */
+  input[type=range]{ -webkit-appearance:none; appearance:none; height:14px; background:transparent; }
+  input[type=range]::-webkit-slider-runnable-track{
+    height:6px; border:1px solid rgba(90,100,92,.30); border-radius:1px;
+    background:linear-gradient(90deg, var(--accent-hi) 0 var(--fill,0%), rgba(255,255,255,.7) var(--fill,0%) 100%); }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:7px; height:15px; margin-top:-6px;
+    background:#fff; border:1px solid #AC7D0C; border-radius:1px; box-shadow:0 1px 3px rgba(0,0,0,.18); cursor:pointer; }
+
+  /* 控制面板文字层级 */
+  #panel .row label{ color:var(--ui-dim); font-size:12.5px; line-height:1.7; }
+  #panel .hint{ color:var(--ui-dim); font-size:12.5px; line-height:2.0; margin-top:6px; }
+  #panel .val{ color:#66521A; font-weight:500; }
+  #panel .sep{ background:rgba(103,112,106,.30); height:1px; }
+  #stateLine{ font-family:var(--sao-mono); font-size:12px; color:var(--ui-fg);
+    background:rgba(246,198,46,.14); border:1px solid rgba(172,125,12,.35); border-radius:2px;
+    padding:4px 8px; border-left:3px solid var(--accent-hi); }
+
+  /* 搜索结果行：细分隔线 + 选中整行金黄 */
+  #slist .srow{ border-bottom:1px solid rgba(103,112,106,.18); border-left:3px solid transparent; }
+  #slist .srow:hover{ background:rgba(246,198,46,.16); }
+  #slist .srow.sel{ background:var(--accent-hi)!important; border-left-color:#AC7D0C!important; box-shadow:none; }
+  #slist .srow.sel .sname{ color:#4a3c10; }
+  #slist .srow.sel .spath,#slist .srow.sel .smeta{ color:rgba(74,60,16,.8); }
+  #slist .sname{ color:var(--ui-fg); }
+  #slist .spath,#slist .smeta{ color:var(--ui-dim); font-size:11.5px; }
+
+  /* 聊天：助手=白底+左侧金条；用户=金黄底+深字（与菜单选中行同一语言） */
+  #cmsg .cline{ border-radius:2px; font-size:13.5px; line-height:1.72; color:var(--ui-fg); }
+  #cmsg .assistant{ background:rgba(255,255,255,.72); border:1px solid rgba(103,112,106,.22);
+                    border-left:3px solid var(--accent-hi); }
+  #cmsg .user{ background:var(--accent-hi); border:1px solid #AC7D0C; color:#4a3c10; }
+  #cmsg .err{ background:rgba(180,69,63,.10); border:1px solid rgba(180,69,63,.45);
+              border-left:3px solid var(--sao-red); color:#8a3330; }
+  #cmsg .ctool{ background:rgba(255,255,255,.66); border:1px solid rgba(103,112,106,.24);
+                border-radius:2px; font-family:var(--sao-mono); font-size:11px; color:#5d6a62; }
+  #cmsg .ctool .ctname{ color:#8a6a10; }
+  #cmsg .ctool::before{ content:'TOOL ▸ '; color:rgba(103,112,106,.6); font-size:10px; letter-spacing:.6px; }
+  #cmsg .creason{ color:var(--ui-dim); font-family:var(--sao-mono); font-size:11px; }
+  #cmsg .thinking{ color:#8a6a10; font-family:var(--sao-mono); font-size:11.5px; }
+  #cmsg .spinner{ border-color:rgba(172,125,12,.25); border-top-color:#AC7D0C; }
+  #cmsg .caret{ background:#AC7D0C; box-shadow:none; }
+  #cmsg pre{ background:rgba(255,255,255,.8); border:1px solid rgba(103,112,106,.22); color:#4c5751; }
+  #cmsg code{ background:rgba(246,198,46,.22); color:#6b5610; font-family:var(--sao-mono); }
+  #chat .cdot{ box-shadow:none; }
+  #chat .cdot.idle{ background:#3f8f5f; } #chat .cdot.running{ background:#AC7D0C; }
+  #chat .cdot.starting{ background:#AC7D0C; } #chat .cdot.dead{ background:#b4453f; }
+  #chat .scount,#chat .csep,#chat .sfoot .clink{ font-family:var(--sao-font); font-size:11.5px; }
+  #chat .sfoot .clink{ color:#8a6a10; }
+  #search .sfoot,#chat .sfoot{ color:var(--ui-dim); border-top:1px solid rgba(103,112,106,.22); font-size:11.5px; }
+  #search .smsg,#search .smsg b,#panel .hint{ color:var(--ui-dim); }
+  #search .smsg b{ color:var(--ui-fg); }
+
+  /* 设置面板 */
+  #settings .sform > label{ color:var(--ui-dim); text-transform:uppercase; letter-spacing:1px; font-size:11px; }
+  #settings .sform .hint{ color:var(--ui-dim); font-size:11.5px; }
+  #settings .sform .hint b{ color:#66521A; }
+  #settings .sform .ok{ color:#3f8f5f; } #settings .sform .bad{ color:#b4453f; }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-track{ background:rgba(255,255,255,.5); }
+  ::-webkit-scrollbar-thumb{ background:rgba(103,112,106,.35); border:1px solid rgba(255,255,255,.6); border-radius:0; }
+  ::-webkit-scrollbar-thumb:hover{ background:rgba(103,112,106,.55); }
+
+  /* 显隐动画：轻快、只动透明度与位移（照说明第 7 节） */
+  #search.show,#chat.show,#settings.show,#menu.show,#panel.show{ animation:sao-open .18s cubic-bezier(.2,.8,.2,1); }
+  @keyframes sao-open{ 0%{opacity:0;transform:translateX(-6px);} 100%{opacity:1;transform:translateX(0);} }
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+<link rel="stylesheet" href="sao.css">
+<link rel="stylesheet" href="chat.css">
+</head>
+<body>
+<div id="desktop"></div>
+<div id="checker"></div>
+<div id="shadow"></div>
+<div id="pet"></div>
+
+<div id="menu">
+  <div class="mtitle">桌宠菜单</div>
+  <button data-act="chat">💬 和 DeepSeek 聊天…</button>
+  <button data-act="search">🔍 文件搜索…</button>
+  <button data-act="panel">显示/隐藏控制面板</button>
+  <button data-act="idle">回到待机</button>
+  <button data-act="settings">⚙ 设置…</button>
+<button data-act="close">关闭菜单</button>
+</div>
+
+<div id="search">
+  <div class="sbox">
+    <span style="color:var(--ui-dim)">🔍</span>
+    <input id="sinput" type="text" spellcheck="false" autocomplete="off"
+           placeholder="搜索文件（支持 ext:pdf、path: 等语法）">
+    <span class="scount" id="scount"></span>
+  </div>
+  <div id="slist"></div>
+  <div class="sfoot">
+    <span>↑↓ 选择</span><span>Enter 打开</span><span>Ctrl+Enter 打开所在文件夹</span><span>Ctrl+C 复制路径</span><span>Esc 关闭</span>
+  </div>
+</div>
+
+
+<div id="sao" role="region" aria-label="桌宠系统菜单">
+  <div id="saoCard" class="sao-mod">
+    <div class="cd-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="1"/><path d="M12 4v16M8 9.5h1.5M14.5 9.5H16M8 14h1.5M14.5 14H16"/></svg><span id="saoName">DeepSeek-猫鲸</span></div>
+    <div class="cd-rule"></div>
+    <div class="cd-preview">
+      <img class="cd-char" src="assets/card-preview.png" alt="">
+      <div class="cd-char-veil"></div>
+      <div id="cdMarks"></div>
+    </div>
+    <div class="cd-rule2"></div>
+    <div class="cd-status" id="saoCardInfo" hidden></div>
+    <div class="cd-tri" id="saoCardTri" style="top:120px"></div>
+  </div>
+  <div id="saoCats" class="sao-mod">
+    <div class="axis"></div>
+    <button class="cat" data-cat="interact" title="互动"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M12 11V5.5a1.5 1.5 0 0 1 3 0V11"/><path d="M15 11.5V8a1.5 1.5 0 0 1 3 0v6.5c0 3-2 5.5-5.5 5.5S7 17.5 7 14.5V12l-1.6.8a1.4 1.4 0 0 0 .9 2.6"/></svg></button>
+    <button class="cat" data-cat="look"     title="外观"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="1"/><path d="M12 4v16M8 9.5h1.5M14.5 9.5H16M8 14h1.5M14.5 14H16"/></svg></button>
+    <button class="cat" data-cat="action"   title="动作"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M10.2 9l4.6 3-4.6 3z"/></svg></button>
+    <button class="cat" data-cat="tools"    title="工具"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 4.8a3.5 3.5 0 0 0 4.4 4.6l5 5a1.6 1.6 0 0 1-2.3 2.3l-5-5A3.5 3.5 0 0 0 6 7.2l2-2z"/><path d="M5.5 14.5l4 4"/></svg></button>
+    <button class="cat" data-cat="system"   title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2M12 18.5v2M4.9 7.8l1.7 1M17.4 15.2l1.7 1M4.9 16.2l1.7-1M17.4 8.8l1.7-1"/></svg></button>
+    <div class="cat-tri" id="saoCatTri" style="top:14px"></div>
+  </div>
+  <div id="saoList" role="menu" aria-label="功能分类"></div>
+  <div id="saoSub" role="menu" aria-label="分类功能"></div>
+  <div class="bridge" id="saoBridge"></div>
+</div>
+
+<div id="settings">
+  <div class="sbox"><span>⚙</span><b style="font-size:13px">设置</b>
+    <span class="scount" id="setStatus"></span></div>
+  <div class="sform">
+    <label>DeepSeek API Key</label>
+    <div class="row">
+      <input id="setKey" type="password" placeholder="sk-…（留空＝不修改已保存的）" spellcheck="false" autocomplete="off">
+      <span class="clink" id="setKeyEye">显示</span><span class="clink" id="setKeyClear">清除</span>
+    </div>
+    <div class="hint" id="setKeyHint">未设置</div>
+    <label>API 网址（base URL）</label>
+    <input id="setBase" type="text" placeholder="https://api.deepseek.com" spellcheck="false">
+    <label>模型（留空＝用 harness 默认）</label>
+    <input id="setModel" type="text" placeholder="deepseek-v4-flash-vision-exp" spellcheck="false">
+    <label>DeepSeek Harness 仓库路径</label>
+    <div class="row">
+      <input id="setRepo" type="text" placeholder="例如 D:\\deepseek-harness\\src" spellcheck="false">
+      <span class="clink" id="setDetect">自动探测</span>
+    </div>
+    <div class="hint" id="setRepoHint"></div>
+    <div class="hint" id="setEverything"></div>
+    <div class="row" style="margin-top:4px">
+      <button id="setSave">保存</button><button id="setTest">测试连接</button>
+    </div>
+    <div class="hint" id="setResult"></div>
+  </div>
+</div>
+
+<div id="chat" role="region" aria-label="DeepSeek 聊天">
+  <div class="chat-head">
+    <div class="chat-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v11H10l-5 4v-4H4z"/></svg><span>DeepSeek 聊天</span></div>
+    <button id="cClose" type="button" aria-label="关闭聊天" title="关闭聊天（Esc）">×</button>
+  </div>
+  <div id="cstatus" class="scount"></div>
+  <div id="cmsg" role="log" aria-label="聊天记录" aria-live="off" tabindex="0"></div>
+  <div class="chat-composer">
+    <textarea id="cinput" rows="3" spellcheck="false" autocomplete="off" aria-label="消息内容" placeholder="说点什么…"></textarea>
+    <div class="composer-actions"><span class="composer-hint">Enter 发送 · Shift+Enter 换行</span><button id="cSend" type="button">发送 ↗</button></div>
+  </div>
+  <div class="sfoot"><span>Esc 关闭窗口</span><div class="sfoot-actions">
+    <button type="button" class="clink" id="cCancel" disabled>停止生成</button><button type="button" class="clink" id="cClear">清空对话</button>
+  </div></div>
+</div>
+
+<div id="panel">
+  <h1>DeepSeek-猫鲸 <span id="fpsInfo"></span></h1>
+  <div id="stateLine">—</div>
+  <div class="row"><label>大小</label><input id="size" type="range" min="120" max="620" value="340"><div class="val" id="sizeVal">340</div></div>
+  <div class="row"><label>速度</label><input id="speed" type="range" min="50" max="200" value="100"><div class="val" id="speedVal">1.0x</div></div>
+  <div class="sep"></div>
+  <div class="btns">
+    <button id="btnMenu">打开菜单</button>
+    <button id="btnSettings">⚙ 设置</button>
+  </div>
+  <div class="btns">
+    <button id="btnTask">模拟长任务</button>
+  </div>
+  <div class="btns">
+    <button id="btnAuto" class="on">自动行为</button>
+    <button id="btnShadow" class="on">脚下阴影</button>
+    <button id="btnBg">切换背景</button>
+    <button id="btnGhost">透明模式</button>
+  </div>
+  <div class="hint">
+    拖动 = 抓着状态，松手 = 落下接待机<br>
+    单击角色 = 互动一下 · 右键 = 打开菜单<br>
+    Ctrl+Shift+D 聊天 · Ctrl+Shift+F 文件搜索<br>
+    按 H 隐藏面板 · 闲置 12 秒后自己摇尾/忙起来
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* =====================================================================
+   状态配置。role 决定它在状态机里的优先级角色：
+     idle    待机（默认态）
+     lounge  长时间无操作的空闲时段，随机切换的状态
+     task    长任务处理中
+     menu    菜单打开时
+     drag    拖动中
+     release 松手后播一次 → 接待机
+   scale  = 该状态额外缩放（运行时微调；素材间的大小差已在生成 sprite 时归一化，这里保持 1.00）
+   rate   = 该状态自己的播放速率（会和速度滑块相乘）
+   weight = 空闲时段被选中的权重；react = 被点击互动时选中的权重
+   ===================================================================== */
+const DEFAULT_STATES = {
+  idle:        { name:'待机',       file:'idle.webm',        mode:'loop', role:'idle',    scale:1.0  },
+  tail_open:   { name:'睁眼摇尾',   file:'tail_open.webm',   mode:'loop', role:'lounge',  weight:35, react:40, scale:1.0 },
+  tail_closed: { name:'闭眼摇尾',   file:'tail_closed.webm', mode:'loop', role:'lounge',  weight:40, react:60, scale:1.0 },
+  working:     { name:'操作中',     file:'working.webm',     mode:'loop', role:'task',    weight:25, scale:1.0 },
+  stand_arms:  { name:'站立抬胳膊', file:'stand_arms.webm',  mode:'loop', role:'menu',    scale:1.0  },
+  grabbed:     { name:'抓着',       file:'grabbed.webm',     mode:'loop', role:'drag',    scale:1.00 },
+  drop:        { name:'松手落下',   file:'drop.webm',        mode:'once', role:'release', scale:1.00, rate:2.0 }
+};
+const VIDEO_DIR = 'assets/video/';
+const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
+const FOOT_RATIO = 1450 / 1500;       // 脚底在画布中的纵向位置
+const HAND_TIP = { x: 61 / 900, y: 514 / 1500, dir: -1 };
+/*  ↑ 「站立抬胳膊」里那只抬起的手的指尖在画布中的相对位置，dir=-1 表示指向画布左侧。
+     菜单就开在指尖所指的方向（量法见 README：肤色检测取左侧手部的最左点，97 帧中位 (61,514)）。 */
+const IDLE_HOLD_MS = 12000;           // 操作结束后保持"待机"的时长，超过才进空闲随机
+const LOUNGE_MIN_MS = 7000;           // 空闲状态最短停留
+const LOUNGE_MAX_MS = 14000;          // 空闲状态最长停留
+
+/* ===================== URL 参数 ===================== */
+const qs = new URLSearchParams(location.search);
+const opt = {
+  bg:       qs.get('bg')       ?? 'desktop',    // desktop | checker | none
+  size:     parseInt(qs.get('size') ?? '340'),
+  auto:     qs.get('auto')     !== '0',         // 空闲自动行为
+  controls: qs.get('controls') !== '0',
+  shadow:   qs.get('shadow')   !== '0',
+  debug:    qs.get('debug')    === '1',
+  menu:     qs.get('menu')     === '1'    // ?menu=1 打开页面就直接弹菜单(调试/截图用)
+};
+
+let states = DEFAULT_STATES;
+let baseRate = 1;                     // 速度滑块给的全局倍率
+let pet, videos = {}, els = {}, alphaSampler = null, alphaOK = null;
+let alphaCache = { state:null, t:0, img:null, w:0, h:0, any:false };
+
+/* ===================== 状态机 ===================== */
+const M = {                       // 各种锁，共同决定该演哪个状态
+  dragging: false,
+  menuOpen: false,
+  searchOpen: false,      // 文件搜索面板打开（与菜单同级：演"站立抬胳膊"）
+  settingsOpen: false,    // 设置面板打开
+  chatOpen: false,        // 聊天面板打开（同上）
+  chatBusy: false,        // harness 正在处理 → 演"操作中"，优先级高于菜单
+  taskCount: 0,
+  react: null,                    // 一次性动作(状态 id)
+  reactUntil: 0,
+  lounge: 'idle',                 // 空闲时段当前选中的状态
+  loungeUntil: 0,
+  lastInteract: 0
+};
+let cur = null;
+
+function now(){ return performance.now(); }
+
+/* 每个状态可以有自己的播放速率(states.json 的 rate)，最终速率 = 速度滑块 × rate。
+   例如"松手落下"默认 2 倍速，落得利落一点。 */
+function stateRate(id){ return (states[id] && states[id].rate) ? states[id].rate : 1; }
+function applyRates(){
+  for (const id in videos) videos[id].playbackRate = baseRate * stateRate(id);
+}
+
+function pickWeighted(list){
+  let total = 0;
+  for (const it of list) total += it.w;
+  if (total <= 0) return null;
+  let r = Math.random() * total;
+  for (const it of list){ r -= it.w; if (r <= 0) return it.id; }
+  return list[list.length - 1].id;
+}
+
+function resolveState(){
+  if (M.dragging) return 'grabbed';                        // 1 拖动中
+  if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
+  if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置面板打开
+  if (M.taskCount > 0) return 'working';                   // 3 长任务处理中
+  if (M.react && now() < M.reactUntil) return M.react;     // 4 一次性动作(互动 / 松手落下)
+  if (!opt.auto) return 'idle';
+  if (now() - M.lastInteract < IDLE_HOLD_MS) return 'idle'; // 5 刚换完位置或刚操作完 → 待机一段
+  return M.lounge;                                          // 6 长时间空闲 → 摇尾/操作中随机
+}
+
+/* 空闲时段的小动作概率：按 states.json 里 role='idle_act' 的条目随机触发一次
+   （一次性播完就回待机，不进循环池——否则会定格在末帧）。 */
+const IDLE_ACT_CHANCE = 0.35;
+
+function rollLounge(){
+  // 先看要不要做"小动作"（吃米饭）：一次性动作由 playOnce 接管，靠 M.react 优先级播完自动结束
+  const acts = Object.keys(states).filter((id)=> states[id] && states[id].role === 'idle_act');
+  if (acts.length && Math.random() < IDLE_ACT_CHANCE){
+    const pick = acts[Math.floor(Math.random() * acts.length)];
+    M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
+    playOnce(pick);
+    return;
+  }
+  const pool = [];
+  for (const id in states){
+    const st = states[id];
+    if (st.role === 'lounge') pool.push({ id, w: st.weight ?? 20 });
+    if (st.role === 'task')   pool.push({ id, w: (st.weight ?? 20) * 0.6 });   // 空闲也可能切到"操作中"
+  }
+  M.lounge = pool.length ? (pickWeighted(pool) || 'idle') : 'idle';
+  M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
+}
+
+function tick(){
+  if (M.react && now() >= M.reactUntil) M.react = null;
+  if (opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
+      now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
+    rollLounge();
+  }
+  applyState();
+}
+
+function applyState(){
+  const want = resolveState();
+  if (want && want !== cur && states[want]) play(want);
+  updateStateLine(want);
+}
+
+/* ===================== 播放 ===================== */
+function pauseOthers(keep){
+  // 关键优化：不用的视频必须 pause。只摘 active class 的话解码器会一直跑，
+  // 每激活一个状态就永久多一路 900x1500 VP9-alpha 软解（实测 6 路 ≈ 2 个 CPU 核）。
+  let n = 0;
+  for (const id in videos){
+    const v = videos[id];
+    if (v === keep) continue;
+    if (!v.paused){ v.pause(); n++; }
+  }
+  return n;
+}
+function play(id){
+  const next = videos[id];
+  if (!next) return;
+  const prev = cur ? videos[cur] : null;
+  if (prev && prev !== next) prev.classList.remove('active');
+  pauseOthers(next);
+  next.classList.add('active');
+  next.style.transform = 'scale(' + (states[id].scale ?? 1) + ')';
+  next.loop = (states[id].mode === 'loop');
+  next.playbackRate = baseRate * stateRate(id);
+  cur = id;
+  try{
+    next.currentTime = 0;
+    const p = next.play();
+    if (p && p.catch) p.catch(()=>{});
+  }catch(e){}
+  updateShadow();
+}
+
+function playOnce(id, ms){
+  if (window.__petDebug){ window.__petDebug.lastPlayOnce = { id, at: now(),
+    stack: String((new Error()).stack || '').split('\n').slice(1, 5).join(' <- ') }; }
+  if (!states[id]) return;
+  M.react = id;
+  M.reactUntil = now() + (ms ?? Math.round((states[id].duration || 4.04) * 1000 / stateRate(id)));
+  applyState();
+}
+
+/* ===================== 桌面宿主桥（Electron） =====================
+   桌面版把"鼠标此刻是否压在角色不透明像素/菜单/面板上"上报给主进程，
+   主进程据此开关窗口点击穿透：角色以外的区域点得穿到桌面。
+   浏览器里没有 window.petHost，这段自动不生效。 ===================== */
+let hostBridge = null;
+function uiHitAt(x, y){
+  const el = document.elementFromPoint(x, y);
+  if (!el || !el.closest) return false;
+  if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#sao')) return true;   // 面板/菜单/搜索/聊天/设置/SAO菜单可交互
+  if (el.closest('#pet')){
+    const r = pet.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    return hitTest((x - r.left) / r.width, (y - r.top) / r.height);  // 逐像素
+  }
+  return false;
+}
+function initHostBridge(){
+  if(hostBridge?.dispose)hostBridge.dispose();
+  const host=window.petHost;
+  if(!host)return;
+  let lastPos=null,lastInter=null,disposed=false,pollBusy=false;
+  const evaluate=()=>{
+    if(disposed)return;
+    const inter=M.dragging?true:lastPos?uiHitAt(lastPos.x,lastPos.y):false;
+    if(inter!==lastInter){
+      try{host.setInteractive(inter);lastInter=inter;}catch(e){}
+    }
+  };
+  const onMove=e=>{lastPos={x:e.clientX,y:e.clientY};evaluate();};
+  const onLeave=()=>{lastPos=null;evaluate();};
+  addEventListener('mousemove',onMove,true);
+  addEventListener('pointermove',onMove,true);
+  addEventListener('mouseleave',onLeave);
+  const poll=async()=>{
+    if(disposed||pollBusy)return;
+    if(!host.cursorPosition){evaluate();return;}
+    pollBusy=true;
+    try{
+      const p=await host.cursorPosition();
+      if(disposed)return;
+      lastPos=p&&p.inside!==false&&Number.isFinite(p.x)&&Number.isFinite(p.y)?{x:p.x,y:p.y}:null;
+      evaluate();
+    }catch(e){evaluate();}finally{pollBusy=false;}
+  };
+  const persist=()=>{try{host.saveState({x:parseFloat(pet.style.left)||0,y:parseFloat(pet.style.top)||0,size:opt.size});}catch(e){}};
+  const mouseTimer=setInterval(poll,50),saveTimer=setInterval(persist,5000);
+  const dispose=()=>{
+    disposed=true;clearInterval(mouseTimer);clearInterval(saveTimer);
+    removeEventListener('mousemove',onMove,true);removeEventListener('pointermove',onMove,true);
+    removeEventListener('mouseleave',onLeave);removeEventListener('beforeunload',onUnload);
+  };
+  const onUnload=()=>{persist();try{host.setInteractive(false);}catch(e){}dispose();};
+  addEventListener('beforeunload',onUnload);
+  hostBridge={evaluate,dispose,lastInter:()=>lastInter,lastPos:()=>lastPos};
+  evaluate();poll();
+}
+
+/* ===================== 交互入口 ===================== */
+function touch(){                 // 任何用户操作都重置空闲计时
+  M.lastInteract = now();
+  if (now() >= M.loungeUntil) M.loungeUntil = M.lastInteract + IDLE_HOLD_MS;
+  applyState();
+}
+function doReact(){               // 单击角色 → 互动一下
+  const pool = [];
+  for (const id in states){ const st = states[id]; if (st.react) pool.push({ id, w: st.react }); }
+  const id = pickWeighted(pool);
+  if (id) playOnce(id);
+}
+function startTask(){ M.taskCount++; touch(); applyState(); }
+function endTask(){ M.taskCount = Math.max(0, M.taskCount - 1); touch(); applyState(); }
+
+function fingertipScreen(){                       // 指尖当前在屏幕上的位置
+  const r = pet.getBoundingClientRect();
+  return { x: r.left + HAND_TIP.x * r.width,
+           y: r.top  + HAND_TIP.y * r.height,
+           dir: HAND_TIP.dir };
+}
+function placeMenu(){                              // 菜单永远开在"抬手指向"的那一侧
+  const m = els.menu;
+  m.classList.add('show');
+  const w = m.offsetWidth || 168, h = m.offsetHeight || 220;
+  const tip = fingertipScreen();
+  const GAP = 14;
+  let side = tip.dir;                              // -1 = 菜单在指尖左侧
+  let left = side < 0 ? tip.x - w - GAP : tip.x + GAP;
+  if (left < 8){ side = 1; left = tip.x + GAP; }                   // 左侧放不下 → 翻到右侧
+  if (left + w > innerWidth - 8){ side = -1; left = tip.x - w - GAP; }
+  left = Math.min(Math.max(8, left), innerWidth  - w - 8);
+  const top = Math.min(Math.max(8, tip.y - h / 2), innerHeight - h - 8);   // 竖向对着指尖居中
+  m.style.left = left + 'px';
+  m.style.top  = top + 'px';
+  m.classList.toggle('side-left',  side < 0);      // 三角朝向指尖
+  m.classList.toggle('side-right', side > 0);
+}
+
+/* ===================== 文件搜索（Everything） =====================
+   后端在 Electron 主进程（app/main.js）里跑 es.exe，这里只管 UI：
+   输入防抖 140ms、竞态用序号丢弃过期响应、键盘 ↑↓/Enter/Ctrl+Enter/Esc。 */
+const S = { open:false, q:'', rows:[], sel:-1, seq:0, timer:0, busy:false, err:'', };
+
+function sHostOk(){ return !!(window.petHost && window.petHost.search); }
+
+function openSearch(prefill){
+  if (SET.open) closeSettings();          // 面板互斥：同时只留一个，避免互相压盖
+  if (C.open) closeChat();
+  closeMenu();
+  S.open = true; M.searchOpen = true;
+  syncPanelGuard();
+  els.search.classList.add('show');
+  if (typeof prefill === 'string'){ els.sinput.value = prefill; }
+  schedulePlaceSearch();
+  if (sHostOk()){
+    try{ window.petHost.focusWindow(true); }catch(e){}
+    els.sinput.focus();
+    els.sinput.setSelectionRange(els.sinput.value.length, els.sinput.value.length);
+    if (els.sinput.value.trim()) scheduleSearch();
+    else { S.rows = []; S.sel = -1; S.err = ''; renderSearch(); }
+  } else {
+    S.err = '文件搜索要在桌面版里用（浏览器 Demo 没有 Everything 通道）';
+    renderSearch();
+  }
+  touch(); applyState();
+}
+function closeSearch(){
+  if (hostBridge) hostBridge.evaluate();
+  if (!S.open) return;
+  S.open = false; M.searchOpen = false;
+  syncPanelGuard();
+  clearTimeout(S.timer);
+  S.seq++;                                   // 让在途响应作废
+  els.search.classList.remove('show');
+  try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  touch(); applyState();
+}
+function toggleSearch(){ S.open ? closeSearch() : openSearch(); }
+
+function placePanel(el){                      // 通用：面板贴角色**左侧**，不遮挡角色，竖向中心对齐
+  const w = el.offsetWidth || 470, h = el.offsetHeight || 300;
+  const r = pet.getBoundingClientRect();
+  const GAP = 12, MG = 8;
+  let left = r.left - w - GAP;
+  if (left < MG) left = Math.min(r.right + GAP, innerWidth - w - MG);   // 左边放不下 → 翻右侧
+  left = Math.max(MG, Math.min(left, innerWidth - w - MG));
+  let top = r.top + r.height / 2 - h / 2;                                // 竖向中心对齐（面板更高时上下各出一半）
+  top = Math.max(MG, Math.min(top, innerHeight - h - MG));
+  const hit = !(left + w <= r.left || left >= r.right || top + h <= r.top || top >= r.bottom);
+  if (hit) top = Math.max(MG, Math.min(r.top - h - GAP, innerHeight - h - MG));   // 兜底：搬到角色上方
+  el.style.left = Math.round(left) + 'px';
+  el.style.top  = Math.round(top) + 'px';
+}
+function placeSearch(){ placePanel(els.search); }
+function placeChat(){ placePanel(els.chat); }
+
+function scheduleSearch(){
+  clearTimeout(S.timer);
+  S.timer = setTimeout(runSearch, 140);      // 防抖：每敲一下都起 es.exe 会打满进程
+}
+async function runSearch(){
+  const q = els.sinput.value;
+  if (!sHostOk()){ S.err = '文件搜索要在桌面版里用'; renderSearch(); return; }
+  if (!q.trim()){ S.rows = []; S.sel = -1; S.err = ''; S.busy = false; renderSearch(); return; }
+  const my = ++S.seq;                        // 竞态保护：过期响应不许覆盖新输入
+  S.busy = true; renderSearch();
+  let res = null;
+  try{ res = await window.petHost.search(q, 30); }
+  catch(e){ res = { ok:false, error:'搜索失败：' + ((e && e.message) || e) }; }
+  if (my !== S.seq || !S.open) return;
+  S.busy = false;
+  if (res && res.ok){
+    S.rows = res.results || [];
+    S.sel = S.rows.length ? 0 : -1;
+    S.err = '';
+  } else {
+    S.rows = []; S.sel = -1;
+    S.err = (res && res.error) || '搜索失败';
+  }
+  renderSearch();
+}
+
+function fmtSize(n){
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, (c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderSearch(){
+  const list = els.slist;
+  if (S.err){
+    els.scount.textContent = '';
+    list.innerHTML = '<div class="smsg">' + esc(S.err) + '</div>';
+    return;
+  }
+  if (!els.sinput.value.trim()){
+    els.scount.textContent = '';
+    list.innerHTML = '<div class="smsg">搜索本机文件（走 Everything 索引，毫秒级）。<br>'
+      + '例：<b>报表 ext:xlsx</b>　<b>path:桌面 图纸</b>　<b>dm:today ext:pdf</b></div>';
+    return;
+  }
+  if (S.busy && !S.rows.length){ els.scount.textContent = ''; list.innerHTML = '<div class="smsg">搜索中…</div>'; return; }
+  if (!S.rows.length){ els.scount.textContent = '0 项'; list.innerHTML = '<div class="smsg">没有匹配的文件</div>'; return; }
+  els.scount.textContent = S.rows.length + ' 项';
+  list.innerHTML = S.rows.map((r, i)=>{
+    const dir = r.path.length > r.name.length ? r.path.slice(0, r.path.length - r.name.length - 1) : '';
+    return '<div class="srow' + (i === S.sel ? ' sel' : '') + '" data-i="' + i + '" title="' + esc(r.path) + '">'
+         + '<span class="sname">' + esc(r.name) + '</span>'
+         + '<span class="spath">' + esc(dir) + '</span>'
+         + '<span class="smeta">' + fmtSize(r.size) + (r.mtime ? '　' + r.mtime.slice(0,10) : '') + '</span>'
+         + '<button data-reveal="' + i + '" title="打开所在文件夹">📁</button>'
+         + '</div>';
+  }).join('');
+  const sel = list.querySelector('.srow.sel');
+  if (sel && sel.scrollIntoView) sel.scrollIntoView({ block:'nearest' });
+  schedulePlaceSearch();          // 结果渲染后面板高度变了 → 重摆；走 rAF 保证用的是"布局完成后的高度"
+}
+function schedulePlaceSearch(){   // 面板高度受内容影响，必须在布局完成后再量，否则中心会偏
+  if (!S.open) return;
+  requestAnimationFrame(()=>{ if (S.open) placeSearch(); });
+}
+function schedulePlaceChat(){ if (!C.open) return; requestAnimationFrame(()=>{ if (C.open) placeChat(); }); }
+
+function moveSel(d){
+  if (!S.rows.length) return;
+  S.sel = (S.sel + d + S.rows.length) % S.rows.length;
+  renderSearch();
+}
+async function activate(i, reveal){
+  const r = S.rows[i];
+  if (!r || !sHostOk()) return;
+  try{
+    if (reveal) await window.petHost.revealPath(r.path);
+    else {
+      const res = await window.petHost.openPath(r.path);
+      if (res && res.ok === false) toast('打开失败：' + (res.error || ''));
+    }
+  }catch(e){ toast('操作失败'); }
+  closeSearch();
+}
+
+
+/* ===================== SAO 三段式菜单 =====================
+   照《给Hermes的SAO桌宠菜单还原说明》实现：
+   左侧竖长详情卡 → 中间圆形分类轴 → 右侧窄矩形菜单 → 向右展开二级菜单。
+   全部映射到项目**已有功能**（不捏造入口）。状态：SAO.open / SAO.cat / SAO.subRow。 */
+const SAO = { open:false, cat:'interact', subRow:-1, subOf:-1, mirror:false, hoverT:0, leaveT:0,
+              kbd:-1, kbdIn:'list', ready:false };
+
+/* 行图标（同一套单色线性 SVG，避免彩色 emoji） */
+function saoIcon(name){
+  const P = {
+    wave:  '<path d="M9 11V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M12 11V5.5a1.5 1.5 0 0 1 3 0V11"/><path d="M15 11.5V8a1.5 1.5 0 0 1 3 0v6.5c0 3-2 5.5-5.5 5.5S7 17.5 7 14.5V12l-1.6.8a1.4 1.4 0 0 0 .9 2.6"/>',
+    hand:  '<path d="M8 13V7.5a1.4 1.4 0 0 1 2.8 0V12"/><path d="M10.8 12V6.8a1.4 1.4 0 0 1 2.8 0V12"/><path d="M13.6 12.4V8.6a1.4 1.4 0 0 1 2.8 0v5.6c0 3.3-2.2 5.8-5.4 5.8-2.6 0-4-1.2-4.9-3.2L5.6 14a1.3 1.3 0 0 1 2.1-1.5L8 13"/>',
+    chat:  '<path d="M4.5 6.5h15v9h-7l-4 3v-3h-4z"/>',
+    rice:  '<path d="M4.5 11h15a7.5 7.5 0 0 1-15 0z"/><path d="M9 8c0-1.5.6-2.5 1.5-3M12 8c0-1.8.5-2.8 1.2-3.5M15 8c0-1.5.5-2.4 1.3-3"/>',
+    spark: '<path d="M12 4l1.8 4.6L18.5 10l-4.7 1.4L12 16l-1.8-4.6L5.5 10l4.7-1.4z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>',
+    ruler: '<path d="M4 15.5L15.5 4l4.5 4.5L8.5 20z"/><path d="M8 11.5l1.5 1.5M10.5 9l1.5 1.5M13 6.5l1.5 1.5"/>',
+    moon:  '<path d="M14.5 4.5a6.5 6.5 0 1 0 5 10.5 7.5 7.5 0 0 1-5-10.5z"/>',
+    pic:   '<rect x="4" y="5.5" width="16" height="13" rx="1"/><path d="M4 14l4.5-4 3.5 3 3-2.5 5 4.5"/>',
+    eye:   '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/>',
+    home:  '<path d="M4.5 11L12 4.5 19.5 11"/><path d="M6.5 10.5V19h11v-8.5"/>',
+    play:  '<circle cx="12" cy="12" r="8"/><path d="M10.2 9l4.6 3-4.6 3z"/>',
+    tail:  '<path d="M5 16c0-6 4-10 10-10"/><path d="M15 6l3.5 2-1.5 3.5"/>',
+    task:  '<path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M6.5 17.5l2-2M15.5 8.5l2-2"/><circle cx="12" cy="12" r="3"/>',
+    search:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/>',
+    panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9h17M9 9v10.5"/>',
+    gear:  '<circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2M12 18.5v2M4.9 7.8l1.7 1M17.4 15.2l1.7 1M4.9 16.2l1.7-1M17.4 8.8l1.7-1"/>',
+    power: '<path d="M12 4.5v7"/><path d="M7.5 7a6.5 6.5 0 1 0 9 0"/>',
+    reload:'<path d="M19 12a7 7 0 1 1-2-4.9"/><path d="M19 4.5V9h-4.5"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    screen:'<rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 21h8M12 17v4"/>',
+  };
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || P.play) + '</svg>';
+}
+
+/* ---- 菜单数据：一级 = 分类（与圆钮一一对应），二级 = 该分类下的真实功能 ---- */
+const SAO_MENU = {
+  interact: { label:'互动', icon:'hand', items: [
+    { icon:'wave',  label:'打个招呼',        run: ()=> playOnce('tail_open') },
+    { icon:'tail',  label:'摇摇尾巴',        run: ()=> playOnce('tail_closed') },
+    { icon:'chat',  label:'和它说话',        run: ()=> openChat() },
+    { icon:'spark', label:'随机动作',        run: ()=> doReact() },
+    { icon:'rice',  label:'吃点米饭',        run: ()=> playOnce('eat') },
+  ]},
+  look: { label:'外观', icon:'pic', items: [
+    { icon:'ruler', label:'显示大小', state: ()=> String(opt.size) + 'px', sub: [
+        { selected:()=>opt.size===240, icon:'ruler', label:'小  240',  run: ()=> applySize(240) },
+        { selected:()=>opt.size===340, icon:'ruler', label:'中  340',  run: ()=> applySize(340) },
+        { selected:()=>opt.size===460, icon:'ruler', label:'大  460',  run: ()=> applySize(460) },
+        { selected:()=>opt.size===620, icon:'ruler', label:'超大 620', run: ()=> applySize(620) } ] },
+    { keepOpen:true, icon:'moon',  label:'脚下阴影', state: ()=> opt.shadow ? '开' : '关', run: ()=> setShadow(!opt.shadow) },
+    { keepOpen:true, icon:'pic',   label:'演示背景', state: ()=> (opt.bg === 'desktop' ? '开' : '关'),
+      run: ()=> setBg(opt.bg === 'desktop' ? 'none' : 'desktop') },
+  ]},
+  action: { label:'动作', icon:'play', items: [
+    { icon:'home', label:'回待机',     run: ()=> petAPI.setState('idle') },
+    { icon:'play', label:'再摇一次尾', run: ()=> playOnce('tail_open') },
+    { keepOpen:true, icon:'task', label:'陪它忙起来', state:()=>SAO.demoTask?'进行中':'10秒', disabled:()=>!!SAO.demoTask, run: ()=>{ SAO.demoTask=true; startTask(); setTimeout(()=>{ SAO.demoTask=false; endTask(); if(SAO.open){renderSao();positionSao();} },10000); } },
+  ]},
+  tools: { label:'工具', icon:'search', items: [
+    { icon:'search', label:'文件搜索',  run: ()=> openSearch() },
+    { icon:'chat',   label:'DeepSeek 聊天', run: ()=> openChat() },
+    { icon:'panel',  label:'控制面板',  run: ()=> petAPI.togglePanel() },
+    { icon:'gear',   label:'设置',      run: ()=> openSettings() },
+  ]},
+  system: { label:'设置', icon:'gear', items: [
+    { keepOpen:true, disabled:()=>!window.petHost?.autoStart || SAO_AUTOSTART_BLOCKED, icon:'power',  label:'开机自启',     state: ()=> SAO_AUTOSTART ? '开' : '关',
+      run: async ()=>{ const r = await window.petHost.autoStart(!SAO_AUTOSTART); SAO_AUTOSTART = !!(r && r.on); if(r?.applied===false) toast('当前路径不能设置开机自启'); } },
+    { keepOpen:true, icon:'screen', label:'所在屏幕',
+      /* 只有完全没有宿主接口时才禁用；列表为空时先读一次，不要把菜单锁死 */
+      disabled:()=>!window.petHost?.listDisplays,
+      state: ()=>{
+        if (!window.petHost?.listDisplays) return '不可用';
+        return SAO_DISPLAY.current || (SAO_DISPLAY.pending ? '读取中…' : '—');
+      },
+      sub: ()=>{
+        if (!window.petHost?.listDisplays){
+          return [{ icon:'screen', label:'需要桌面版宿主', disabled:()=>true, run:()=>{} }];
+        }
+        if (!SAO_DISPLAY.list.length){
+          if (!SAO_DISPLAY.pending){
+            SAO_DISPLAY.pending = true;
+            refreshSaoDisplays().finally(()=>{
+              SAO_DISPLAY.pending = false;
+              if (SAO.open){ renderSao(); positionSao(); }
+            });
+          }
+          return [{ icon:'screen', label: SAO_DISPLAY.pending ? '正在读取屏幕…' : '未检测到显示器', disabled:()=>true, run:()=>{} }];
+        }
+        return SAO_DISPLAY.list.map((d)=> ({
+          selected: ()=> d.id === SAO_DISPLAY.currentId,
+          icon:'screen', label: d.label,
+          run: async ()=>{
+            try{
+              const r = await window.petHost.setDisplay(d.id);
+              await refreshSaoDisplays();
+              if (SAO.open){ renderSao(); positionSao(); }
+              if (r && r.ok) toast('已切换到 ' + (r.label || d.label));
+              else toast('切换屏幕失败' + (r && r.error ? ('：' + r.error) : ''));
+            }catch(e){ toast('切换屏幕失败'); }
+          }
+        }));
+      } },
+    { icon:'reload', label:'重新加载界面', run: ()=> location.reload() },
+    { disabled:()=>!window.petHost?.quit, icon:'power',  label:'退出桌宠',     run: ()=> { try{ window.petHost.quit(); }catch(e){} } },
+  ]},
+};
+let SAO_AUTOSTART = false, SAO_AUTOSTART_BLOCKED = false;
+let SAO_DISPLAY = { list: [], currentId: null, current: '', pending: false };
+async function refreshSaoDisplays(){
+  if (!window.petHost || !window.petHost.listDisplays){
+    SAO_DISPLAY = { list: [], currentId: null, current: '', pending: SAO_DISPLAY.pending };
+    return;
+  }
+  try{
+    const d = await window.petHost.listDisplays();
+    SAO_DISPLAY.list = Array.isArray(d && d.displays) ? d.displays : [];
+    SAO_DISPLAY.currentId = d ? d.currentId : null;
+    const cur = SAO_DISPLAY.list.find((x)=> x.id === SAO_DISPLAY.currentId);
+    SAO_DISPLAY.current = cur ? cur.label : (SAO_DISPLAY.list[0] ? SAO_DISPLAY.list[0].label : '');
+  }catch(e){
+    SAO_DISPLAY.list = [];
+    SAO_DISPLAY.currentId = null;
+    SAO_DISPLAY.current = '';
+  }
+}
+const SAO_CATS = ['interact','look','action','tools','system'];
+let SAO_METRICS = null;      // 主进程推来的实时硬件数据（详情卡四角标注用）
+
+/* ---- 状态文案（详情卡用，全是真的项目状态）---- */
+function stateCn(){
+  const map = { idle:'待机', grabbed:'抓着', stand_arms:'站立抬胳膊', working:'操作中',
+                drop:'落下', tail_open:'摇尾巴', tail_closed:'闭眼摇尾' };
+  return map[cur] || cur;
+}
+function cardInfoFor(cat){
+  const rows = [];
+  if (cat === 'interact') rows.push(['当前动作', stateCn()], ['提示', '点角色也能互动']);
+  if (cat === 'look')     rows.push(['显示大小', String(opt.size)], ['脚下阴影', opt.shadow?'开':'关'],
+                                    ['演示背景', opt.bg === 'desktop' ? '开' : '关']);
+  if (cat === 'action')   rows.push(['当前动作', stateCn()], ['长任务', M.taskCount ? '进行中' : '无']);
+  if (cat === 'tools')    rows.push(['文件搜索', SAO_EV.ready ? ('就绪 · ' + (SAO_EV.instance||'')) : '未检测'],
+                                    ['DeepSeek', SAO_HARNESS.keySet ? '已配 key' : '未配 key']);
+  if (cat === 'system')   rows.push(['开机自启', SAO_AUTOSTART?'开':'关'],
+                                    ['所在屏幕', SAO_DISPLAY.current || '—'],
+                                    ['界面', 'SAO · 浅金']);
+  return rows.map((r)=> '<div>' + r[0] + '：<b>' + r[1] + '</b></div>').join('');
+}
+let SAO_EV = { ready:false, instance:'' }, SAO_HARNESS = { keySet:false };
+
+/* ---- 渲染 ---- */
+function saoResolvedSub(item){
+  if (!item) return null;
+  const raw = item.sub;
+  if (typeof raw === 'function'){
+    try{
+      const v = raw();
+      return (Array.isArray(v) && v.length) ? v : null;
+    }catch(e){ return null; }
+  }
+  return (Array.isArray(raw) && raw.length) ? raw : null;
+}
+function saoCatRowsHtml(){
+  return SAO_CATS.map((k, i)=>{
+    const c=SAO_MENU[k], selected=k===SAO.cat;
+    return '<button role="menuitem" aria-haspopup="menu" aria-expanded="'+selected+'" class="row'+(selected?' on':'')+'" data-cat="'+k+'" data-i="'+i+'">'+saoIcon(c.icon)+'<span class="lbl">'+c.label+'</span><span class="sub-arw">▸</span></button>';
+  }).join('');
+}
+function saoItemRowsHtml(items){
+  return items.map((it,i)=>{
+    const selected=!!it.selected?.(), disabled=!!it.disabled?.();
+    const right=saoResolvedSub(it)?'<span class="sub-arw">▸</span>':selected?'<span class="state">✓</span>':it.state?'<span class="state">'+it.state()+'</span>':'';
+    return '<button role="'+(it.selected?'menuitemradio':'menuitem')+'"'+(it.selected?' aria-checked="'+selected+'"':'')+(saoResolvedSub(it)?' aria-haspopup="menu"':'')+' class="row'+(selected?' on':'')+'" data-i="'+i+'"'+(disabled?' disabled':'')+'>'+saoIcon(it.icon)+'<span class="lbl">'+it.label+'</span>'+right+'</button>';
+  }).join('');
+}
+function renderSao(){
+  const active=document.activeElement;
+  const focusArea=active?.closest('#saoList')?'list':active?.closest('#saoSub')?'sub':null;
+  const focusIndex=active?.dataset.i;
+  els.saoList.innerHTML=saoCatRowsHtml();
+  const cat=SAO_MENU[SAO.cat], branch=saoResolvedSub(cat.items[SAO.subRow]);
+  SAO.subOf=branch?SAO.subRow:-1;
+  const header=branch?'<button class="sub-head" data-back="branch">‹ '+cat.label+' / '+cat.items[SAO.subRow].label+'</button>':els.sao.classList.contains('stack')?'<button class="sub-head" data-back="categories">‹ '+cat.label+' · 切换分类</button>':'';
+  els.saoSub.innerHTML=header+saoItemRowsHtml(branch||cat.items);
+  els.saoSub.classList.add('show');
+  els.saoSub.setAttribute('aria-label',cat.label+(branch?' / '+cat.items[SAO.subRow].label:''));
+  els.saoCardInfo.innerHTML=cardInfoFor(SAO.cat);
+  renderCardMetrics();
+  els.saoCats.querySelectorAll('.cat').forEach(b=>{
+    const c=SAO_MENU[b.dataset.cat];
+    b.classList.toggle('on',b.dataset.cat===SAO.cat);
+    b.setAttribute('aria-label',c.label); b.setAttribute('aria-pressed',String(b.dataset.cat===SAO.cat));
+    b.innerHTML=saoIcon(c.icon);
+  });
+  if(focusArea && focusIndex!==undefined){
+    const box=focusArea==='sub'?els.saoSub:els.saoList;
+    box.querySelector('[data-i="'+focusIndex+'"]')?.focus({preventScroll:true});
+  }
+}
+
+/* 详情卡硬件状态：猫鲸形象作背景，CPU/GPU/内存/硬盘 2×2 分栏浮卡（实时，主进程推来） */
+function saoBarLevel(pct){
+  if (pct === null || pct === undefined || isNaN(pct)) return 'lv-empty';
+  if (pct >= 85) return 'lv-high';
+  if (pct >= 65) return 'lv-mid';
+  return 'lv-ok';
+}
+function saoPctText(pct){
+  return (pct === null || pct === undefined || isNaN(pct)) ? '—' : (Math.round(pct) + '%');
+}
+function saoBarHtml(pct, title, showPct){
+  const p = (pct === null || pct === undefined || isNaN(pct)) ? null : Math.max(0, Math.min(100, Number(pct)));
+  const w = p === null ? 0 : Math.round(p * 10) / 10;
+  const tip = title || (p === null ? '占用 —' : ('占用 ' + Math.round(p) + '%'));
+  const pctEl = showPct === false ? '' : '<span class="mk-bar-pct">' + esc(saoPctText(p)) + '</span>';
+  return '<div class="mk-bar-row">'
+    + '<div class="mk-bar ' + saoBarLevel(p) + '" title="' + esc(tip) + '" aria-label="' + esc(tip) + '">'
+    + '<div class="mk-bar-fill" style="width:' + w + '%"></div></div>'
+    + pctEl
+    + '</div>';
+}
+function renderCardMetrics(){
+  const box = document.getElementById('cdMarks');
+  if (!box) return;
+  const m = SAO_METRICS;
+  const num = (v, digits)=>{
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    return Number(v).toFixed(digits).replace(/\.0+$/, (s)=> (digits ? s : ''));
+  };
+  const cards = [
+    { key:'cpu',  label:'CPU',  val:'—', unit:'', sub:'等待数据', empty:true, bars:'' },
+    { key:'gpu',  label:'GPU',  val:'—', unit:'', sub:'等待数据', empty:true, bars:'' },
+    { key:'mem',  label:'内存', val:'—', unit:'', sub:'', empty:true, bars:'' },
+    { key:'disk', label:'硬盘', val:'—', unit:'', sub:'', empty:true, bars:'' },
+  ];
+  if (m){
+    const cpuFreq = m.cpuFreqMHz ? num(m.cpuFreqMHz / 1000, 2) : '—';
+    const cpuUse  = (m.cpuUsage !== null && m.cpuUsage !== undefined && !isNaN(m.cpuUsage)) ? Math.round(m.cpuUsage) + '%' : '—';
+    cards[0] = { key:'cpu', label:'CPU', val:cpuFreq, unit:m.cpuFreqMHz ? 'GHz' : '', sub:'占用 ' + cpuUse,
+                 empty: cpuFreq === '—' && cpuUse === '—', bars:'' };
+
+    const gClock = m.gpu && m.gpu.clockMHz ? Math.round(m.gpu.clockMHz) : null;
+    const gUse   = m.gpu && m.gpu.util !== null && m.gpu.util !== undefined ? Math.round(m.gpu.util) : null;
+    cards[1] = { key:'gpu', label:'GPU', val:gClock ? String(gClock) : '—', unit:gClock ? 'MHz' : '',
+                 sub: gUse !== null ? ('占用 ' + gUse + '%') : '占用 —', empty: !gClock && gUse === null, bars:'' };
+
+    const memOk = Number.isFinite(m.memUsedGB) && Number.isFinite(m.memTotalGB);
+    const memPct = memOk && m.memTotalGB > 0 ? (m.memUsedGB / m.memTotalGB) * 100 : null;
+    const memVal = memOk ? num(m.memUsedGB, 1) : '—';
+    const memUnit = memOk ? (' / ' + Math.round(m.memTotalGB) + ' GB') : '';
+    // 百分比已在状态条右侧，下方不再重复显示占用率
+    const memSub = (memOk && m.memSpeedMHz) ? (m.memSpeedMHz + ' MHz') : '';
+    cards[2] = { key:'mem', label:'内存', val:memVal, unit:memUnit, sub:memSub, empty:!memOk,
+                 bars: saoBarHtml(memPct, memOk ? ('内存占用 ' + Math.round(memPct) + '%') : '内存占用 —') };
+
+    const disks = (m.disks && m.disks.length) ? m.disks : [];
+    const diskPct = disks.length ? Number(disks[0].usedPct) : null;
+    let diskBars = '';
+    if (!disks.length){
+      diskBars = saoBarHtml(null, '硬盘占用 —');
+    } else if (disks.length === 1){
+      diskBars = saoBarHtml(diskPct, disks[0].drive + ' ' + saoPctText(diskPct));
+    } else {
+      diskBars = '<div class="mk-bars">' + disks.map((d)=>{
+        const p = Number(d.usedPct);
+        return '<div class="mk-bar-tagrow"><span class="mk-bar-tag">'+esc(d.drive)+'</span>'
+          + '<div class="mk-bar-cell">'
+          + saoBarHtml(p, d.drive + ' ' + saoPctText(p))
+          + '</div></div>';
+      }).join('') + '</div>';
+    }
+    cards[3] = {
+      key:'disk', label:'硬盘',
+      val: disks.length ? saoPctText(diskPct) : '—',
+      unit: (disks.length > 1) ? '主盘' : (disks.length ? disks[0].drive : ''),
+      sub: '',   // 各盘百分比已在状态条右侧，不再在下方重复
+      empty: !disks.length,
+      bars: diskBars
+    };
+  }
+  box.innerHTML = cards.map((c)=>{
+    const tip = c.label + ' ' + c.val + (c.unit || '') + (c.sub ? (' · ' + c.sub) : '');
+    return '<div class="mk mk-'+c.key+(c.empty ? ' empty' : '')+'">'
+      + '<span class="mk-label">'+esc(c.label)+'</span>'
+      + '<div class="mk-line"><span class="mk-val">'+esc(c.val)+'</span>'
+      + (c.unit ? '<span class="mk-unit">'+esc(c.unit)+'</span>' : '')
+      + '</div>'
+      + (c.bars || '')
+      + (c.sub ? '<span class="txt mk-sub" title="'+esc(tip)+'">'+esc(c.sub)+'</span>' : '<span class="txt mk-sub" hidden></span>')
+      + '</div>';
+  }).join('');
+}
+
+/* ---- 摆位：贴近桌宠、优先空间多的一侧、绝不遮脸、贴合工作区 ---- */
+async function positionSao(){
+  if(!SAO.open) return;
+  const ticket=SAO.layoutTicket=(SAO.layoutTicket||0)+1;
+  let wa=null;
+  try{ wa=await window.petHost?.workArea?.(); }catch(e){}
+  if(!SAO.open || ticket!==SAO.layoutTicket) return;
+  const box=els.sao, pad=12, gap=18;
+  // Host coordinates are local to the content window, not global monitor coordinates.
+  const left=Math.max(0,wa?.x||0)+pad, top=Math.max(0,wa?.y||0)+pad;
+  const right=Math.min(innerWidth,wa?wa.x+wa.width:innerWidth)-pad;
+  const bottom=Math.min(innerHeight,wa?wa.y+wa.height:innerHeight)-pad;
+  const pr=pet.getBoundingClientRect(), spaceLeft=pr.left-left-gap, spaceRight=right-pr.right-gap;
+  SAO.mirror=spaceLeft>=spaceRight;
+  box.classList.toggle('mirror',SAO.mirror);
+  box.classList.remove('compact','narrow','mini','stack');
+  box.style.setProperty('--sao-card-h',Math.min(374,Math.max(200,bottom-top))+'px');
+  for(const el of [els.saoList,els.saoSub]){el.style.maxHeight=Math.max(80,bottom-top)+'px';el.style.overflowY='auto';}
+  const available=Math.max(spaceLeft,spaceRight);
+  if(box.offsetWidth>available) box.classList.add('compact');
+  if(box.offsetWidth>available) box.classList.add('narrow');
+  if(box.offsetWidth>right-left) box.classList.add('mini');
+  if(box.offsetWidth>right-left) box.classList.add('stack');
+  const hadHeader=!!els.saoSub.querySelector('[data-back="categories"]');
+  if(hadHeader!==(!saoResolvedSub(SAO_MENU[SAO.cat].items[SAO.subRow]) && box.classList.contains('stack'))) renderSao();
+  const bw=box.offsetWidth,bh=box.offsetHeight;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(v,Math.max(a,b)));
+  let x=SAO.mirror?pr.left-gap-bw:pr.right+gap;
+  let y=pr.top+pr.height/2-bh/2;
+  x=clamp(x,left,right-bw); y=clamp(y,top,bottom-bh);
+  const overlap=!(x+bw<=pr.left||x>=pr.right||y+bh<=pr.top||y>=pr.bottom);
+  if(overlap){if(pr.top-gap-bh>=top)y=pr.top-gap-bh;else if(pr.bottom+gap+bh<=bottom)y=pr.bottom+gap;}
+  box.style.left=Math.round(x)+'px'; box.style.top=Math.round(y)+'px';
+  placeSaoTriangles(); placeSaoSub();
+  if(hostBridge)hostBridge.evaluate();
+}
+function placeSaoTriangles(){
+  const c=els.saoCats.querySelector('[data-cat="'+SAO.cat+'"]');
+  if(!c)return;
+  const center=c.offsetTop+c.offsetHeight/2;
+  els.saoCatTri.style.top=Math.round(center-6)+'px';
+  els.saoCardTri.style.top=Math.max(10,Math.min(center-9+els.saoCats.offsetTop-els.saoCard.offsetTop,els.saoCard.offsetHeight-28))+'px';
+}
+function placeSaoSub(){
+  const row=els.saoList.querySelector('[data-cat="'+SAO.cat+'"]');
+  if(!row)return;
+  const box=els.sao, sub=els.saoSub;
+  const rowTop=els.saoList.offsetTop+row.offsetTop-els.saoList.scrollTop;
+  const y=Math.max(0,Math.min(rowTop,box.offsetHeight-sub.offsetHeight));
+  sub.style.top=Math.round(y)+'px';
+  const br=els.saoBridge;
+  br.style.top=Math.min(rowTop,y)+'px';
+  br.style.height=Math.max(rowTop+row.offsetHeight,y+sub.offsetHeight)-Math.min(rowTop,y)+'px';
+  const a=SAO.mirror?sub.offsetLeft+sub.offsetWidth:els.saoList.offsetLeft+els.saoList.offsetWidth;
+  const b=SAO.mirror?els.saoList.offsetLeft:sub.offsetLeft;
+  br.style.left=(a-1)+'px';br.style.width=Math.max(0,b-a+2)+'px';
+}
+function openMenu(){
+  if(SAO.open)return;
+  if(S.open)closeSearch();if(C.open)closeChat();if(SET.open)closeSettings();
+  SAO.previousFocus=document.activeElement; SAO.open=true;M.menuOpen=true;
+  SAO.subRow=-1;SAO.subOf=-1;SAO.kbd=-1;SAO.kbdIn='list';
+  els.sao.classList.add('show');renderSao();
+  touch();applyState();
+  positionSao().then(()=>{if(SAO.open)els.saoList.querySelector('[data-cat="'+SAO.cat+'"]')?.focus({preventScroll:true});});
+  refreshSaoStatus();
+  try{window.petHost?.sysInfoStart?.()?.catch?.(()=>{});}catch(e){}
+  try{window.petHost?.sysInfoGet?.().then(d=>{if(d){SAO_METRICS=d;renderCardMetrics();}}).catch(()=>{});}catch(e){}
+  try{window.petHost?.focusWindow?.(true);}catch(e){}
+  syncPanelGuard();
+  if(hostBridge)hostBridge.evaluate();
+}
+function closeMenu(){
+  if(!SAO.open)return;
+  SAO.open=false;M.menuOpen=false;SAO.subRow=-1;SAO.subOf=-1;SAO.layoutTicket=(SAO.layoutTicket||0)+1;
+  clearTimeout(SAO.hoverT);clearTimeout(SAO.leaveT);
+  els.sao.classList.remove('show');els.saoSub.classList.remove('show');
+  try{window.petHost?.sysInfoStop?.()?.catch?.(()=>{});window.petHost?.focusWindow?.(false);}catch(e){}
+  syncPanelGuard();
+  SAO.previousFocus?.focus?.({preventScroll:true});
+  touch();applyState();if(hostBridge)hostBridge.evaluate();
+}
+function toggleMenu(){SAO.open?closeMenu():openMenu();}
+async function refreshSaoStatus(){
+  try{const c=await window.petHost?.getConfig?.();if(c?.ok){SAO_EV={...SAO_EV,...c.everything};SAO_HARNESS.keySet=!!c.deepseek?.keySet;}}catch(e){}
+  try{const a=await window.petHost?.autoStart?.();SAO_AUTOSTART=!!a?.on;SAO_AUTOSTART_BLOCKED=!!a?.blocked;}catch(e){}
+  try{await refreshSaoDisplays();}catch(e){}
+  if(SAO.open){renderSao();positionSao();}
+}
+function saoSelectCat(cat){
+  if(!SAO_MENU[cat])return;
+  clearTimeout(SAO.hoverT);clearTimeout(SAO.leaveT);
+  SAO.cat=cat;SAO.subRow=-1;SAO.subOf=-1;SAO.kbd=-1;
+  if(cat==='system' && window.petHost?.listDisplays){
+    refreshSaoDisplays().finally(()=>{ if(SAO.open){renderSao();positionSao();} });
+  }
+  renderSao();positionSao();
+}
+function saoBack(){
+  if(SAO.subRow>=0){const i=SAO.subRow;SAO.subRow=-1;SAO.subOf=-1;renderSao();positionSao();els.saoSub.querySelector('[data-i="'+i+'"]')?.focus();}
+  else closeMenu();
+}
+async function saoRunSub(i){
+  const cat=SAO_MENU[SAO.cat],branch=saoResolvedSub(cat.items[SAO.subRow]),it=(branch||cat.items)[i];
+  if(!it||it.disabled?.()||SAO.running)return;
+  if(saoResolvedSub(it)){SAO.subRow=i;renderSao();positionSao();els.saoSub.querySelector('.row:not(:disabled)')?.focus();return;}
+  const keep=!!branch||!!it.keepOpen;
+  SAO.running=true;
+  try{if(!keep)closeMenu();await it.run?.();if(SAO.open){renderSao();positionSao();}}
+  catch(e){console.warn(e);toast('操作失败：'+(e.message||'请重试'));}
+  finally{SAO.running=false;}
+}
+
+/* ===================== 设置面板（DeepSeek API / 网址 / harness 路径） =====================
+   key 只存本机（主进程用 Windows 凭据加密后落盘），运行时通过**环境变量**注入给 harness，
+   所以既不需要改用户自己的 harness 配置，也不会把 key 写进任何随发布包分发的文件。 */
+const SET = { open:false, busy:false, keySet:false, encrypted:true, detected:'' };
+
+function setMsg(id, txt, cls){
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'hint' + (cls ? ' ' + cls : '');
+  el.textContent = txt || '';
+}
+function openSettings(){
+  if (S.open) closeSearch();
+  if (C.open) closeChat();
+  closeMenu();
+  SET.open = true; M.settingsOpen = true;
+  syncPanelGuard();
+  els.settings.classList.add('show');
+  placePanel(els.settings);
+  if (cHostOk() && window.petHost.getConfig){
+    try{ window.petHost.focusWindow(true); }catch(e){}
+    loadSettingsForm();
+  } else {
+    setMsg('setResult', '设置需要在桌面版里用（浏览器 Demo 没有配置通道）', 'bad');
+  }
+  touch(); applyState();
+}
+function closeSettings(){
+  if (!SET.open) return;
+  SET.open = false; M.settingsOpen = false;
+  syncPanelGuard();
+  els.settings.classList.remove('show');
+  try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  touch(); applyState();
+}
+function toggleSettings(){ SET.open ? closeSettings() : openSettings(); }
+
+async function loadSettingsForm(){
+  let c = null;
+  try{ c = await window.petHost.getConfig(); }catch(e){}
+  if (!c || !c.ok){ setMsg('setResult', '读配置失败：' + ((c && c.error) || '未知错误'), 'bad'); return; }
+  const k = document.getElementById('setKey');
+  k.value = '';                                   // 不回显已存的 key，只在提示里给末 4 位
+  const d = c.deepseek || {}, h = c.harness || {};
+  document.getElementById('setBase').value = d.baseUrl || '';
+  document.getElementById('setModel').value = d.model || '';
+  document.getElementById('setRepo').value = h.repo || '';
+  SET.keySet = !!d.keySet; SET.encrypted = !!d.encrypted; SET.detected = h.detected || '';
+  setMsg('setKeyHint', d.keySet
+    ? ('已保存：····' + (d.keyTail || '????') + (d.encrypted ? '（Windows 凭据加密存储，只在本机）' : '（明文存储：系统未提供加密能力）'))
+    : '未设置（不填也可以：若你本机 harness 已配好凭据，会走它自己的）', d.keySet ? 'ok' : '');
+  setMsg('setRepoHint', h.detected
+    ? ('自动探测到：' + h.detected + (h.repo ? '（已手动指定，优先用上面填的）' : '（留空即用它）'))
+    : '未探测到 harness 仓库：请填仓库根目录（含 apps/cli/src/bin.ts 的那一层）', h.detected ? '' : 'bad');
+  const ev = c.everything || {};
+  setMsg('setEverything', ev.esExe
+    ? ('文件搜索：Everything 集成就绪' + (ev.instance ? '（实例 ' + ev.instance + '）' : '（首次搜索时自动探测实例）'))
+    : '文件搜索：缺少 es.exe（Everything 的官方命令行工具），搜索会不可用', ev.esExe ? '' : 'bad');
+  els.cstatus && 0;
+  document.getElementById('setStatus').textContent =
+    (d.keySet ? '已配 key' : '未配 key') + ' · ' + (h.detected || h.repo ? 'harness 就绪' : 'harness 未找到');
+}
+async function saveSettings(){
+  if (SET.busy) return;
+  SET.busy = true; setMsg('setResult', '保存中…');
+  const patch = {
+    deepseek: {
+      baseUrl: document.getElementById('setBase').value.trim(),
+      model: document.getElementById('setModel').value.trim(),
+    },
+    harness: { repo: document.getElementById('setRepo').value.trim() },
+  };
+  const kv = document.getElementById('setKey').value.trim();
+  if (kv) patch.apiKey = kv;                     // 只在填了东西时才改 key（留空＝不动）
+  let r = null;
+  try{ r = await window.petHost.setConfig(patch); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
+  SET.busy = false;
+  if (r && r.ok){
+    document.getElementById('setKey').value = '';
+    setMsg('setResult', '已保存' + (kv ? '（key 已加密存储）' : '') + '，harness 运行时会按新设置重启', 'ok');
+    loadSettingsForm();
+  } else setMsg('setResult', '保存失败：' + ((r && r.error) || '未知错误'), 'bad');
+}
+async function clearKeySettings(){
+  let r = await window.petHost.setConfig({ apiKey: '' });
+  setMsg('setResult', r && r.ok ? '已清除本机保存的 key' : '清除失败', r && r.ok ? 'ok' : 'bad');
+  loadSettingsForm();
+}
+async function testSettings(){
+  if (SET.busy) return;
+  SET.busy = true;
+  setMsg('setResult', '正在启动 harness 并试一句（首次约 5~10 秒）…');
+  let r = null;
+  try{ r = await window.petHost.testConfig(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
+  SET.busy = false;
+  if (r && r.ok) setMsg('setResult', '连接正常 ✔ 模型 ' + (r.model || '?') + ' 回复："' + String(r.text || '').slice(0, 40) + '"（' + Math.round((r.ms || 0) / 1000) + ' 秒）', 'ok');
+  else setMsg('setResult', '连接失败：' + ((r && (r.error || r.text)) || '未知错误'), 'bad');
+}
+
+/* ===================== DeepSeek 聊天 = 真·harness 客户端 =====================
+   后端在主进程：长驻一个 harness 运行时（packages/sdk 的 stdio JSON-RPC 协议）。
+   这里订阅它的**事件流**，所以界面上看到的就是 harness 的原生过程：
+     assistant/chunk(text-delta)  → 打字机式流式输出
+     tool/call + tool/result      → 工具卡片（正在调什么、返回了什么）
+     session/title                → harness 自己给会话起的中文标题
+     assistant/chunk(usage)       → token 计量
+     session.status running/idle  → 桌宠演"操作中" / 恢复待机
+     turn/end reason.kind=error   → 明确报错（不会再"等 30 秒没动静也不说"）
+   对话记录由主进程落盘（chat-history.json），这里每次从宿主重读，避免两份真相。 */
+
+const C = { open:false, busy:false, msgs:[], t0:0, timer:0,
+            state:'', title:'', route:'', model:'',
+            stream:'', reasoning:'', tools:[], usage:null, tail:'' };
+
+function cHostOk(){ return !!(window.petHost && window.petHost.chat); }
+
+function syncPanelGuard(){        // 有任一面板打开 → 让主进程挂全局 Esc
+  try{ if (window.petHost && window.petHost.setPanelOpen) window.petHost.setPanelOpen(!!(SAO.open || S.open || C.open || SET.open)); }catch(e){}
+}
+
+/* ---------- harness 状态文案 ---------- */
+function harnessStateText(){
+  const map = { 'starting':'harness 启动中（首次约 7 秒）…', 'running':'harness 正在处理…',
+                'idle':'已连接 harness', 'dead':'harness 已停止' };
+  return map[C.state] || '未连接（发消息即启动）';
+}
+function openChat(){
+  if (SET.open) closeSettings();          // 面板互斥
+  if (S.open) closeSearch();
+  closeMenu();
+  if (hostBridge) hostBridge.evaluate();
+  C.open = true; M.chatOpen = true;
+  syncPanelGuard();
+  els.chat.classList.add('show');
+  schedulePlaceChat();
+  if (cHostOk()){
+    try{ window.petHost.focusWindow(true); }catch(e){}
+    els.cinput.focus();
+    refreshChat();
+    try{
+      window.petHost.harnessStatus().then((st)=>{
+        if (!st) return;
+        C.state = st.ready ? 'idle' : (st.alive ? 'starting' : '');
+        C.route = st.provider ? (st.provider + ' / ' + st.model) : '';
+        renderChat();
+      }).catch(()=>{});
+    }catch(e){}
+  } else {
+    C.msgs = [{ role:'err', text:'聊天要在桌面版里用（浏览器 Demo 没有 harness 通道）' }];
+    renderChat();
+  }
+  touch(); applyState();
+}
+function closeChat(){
+  if (hostBridge) hostBridge.evaluate();
+  if (!C.open) return;
+  C.open = false; M.chatOpen = false;
+  syncPanelGuard();
+  els.chat.classList.remove('show');
+  try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  touch(); applyState();
+}
+function toggleChat(){ C.open ? closeChat() : openChat(); }
+
+async function refreshChat(){
+  try{ C.msgs = await window.petHost.chatHistory(); }catch(e){ C.msgs = []; }
+  renderChat();
+}
+
+function mdLite(t){                       // 极简 markdown：代码块 / 行内代码 / 粗体，其余按纯文本转义
+  const esc2 = (x)=> String(x).replace(/[&<>]/g, (c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const parts = String(t || '').split(/```/);
+  return parts.map((seg, i)=>{
+    if (i % 2 === 1){                     // 奇数段 = 代码块
+      const body = seg.replace(/^[\w+-]*\n/, '');
+      return '<pre>' + esc2(body.replace(/\n$/, '')) + '</pre>';
+    }
+    return esc2(seg)
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  }).join('');
+}
+function fmtClock(ts){
+  if (!ts) return '';
+  const d = new Date(ts);
+  return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+}
+function toolLine(t){
+  return '<div class="ctool' + (t.isError ? ' bad' : '') + '">'
+       + '<span class="ctname">' + (t.done ? '✓' : '⏳') + ' ' + mdLite(t.name || '工具') + '</span>'
+       + (t.argText ? '<span class="ctarg">' + mdLite(t.argText) + '</span>' : '')
+       + (t.result ? '<details><summary>返回</summary><pre>' + mdLite(t.result).replace(/^<pre>|<\/pre>$/g,'') + '</pre></details>' : '')
+       + '</div>';
+}
+
+function updateChatControls(){
+  document.getElementById('cSend').disabled=C.busy||!els.cinput.value.trim()||!cHostOk();
+  document.getElementById('cCancel').disabled=!C.busy;
+  document.getElementById('cClear').disabled=C.busy||!C.msgs.length;
+}
+function chatAtBottom(box){return box.scrollHeight-box.scrollTop-box.clientHeight<40;}
+function renderChat(){
+  const box = els.cmsg;
+  const follow=chatAtBottom(box), scrollTop=box.scrollTop;
+  const expanded=[...box.querySelectorAll('details')].map(el=>el.open);
+  const statusExpanded=!!els.cstatus.querySelector('details[open]');
+  const items = C.msgs.map((m)=> m.role === 'user'
+    ? '<div class="cline user">' + mdLite(m.text) + '</div>'
+    : (m.role === 'err' ? '<div class="cline err">' + mdLite(m.text) + '</div>'
+                        : '<div class="cline assistant">' + mdLite(m.text) + '</div>'));
+  // 工具卡片 + 流式气泡（都是"本轮尚未落盘"的实时内容）
+  for (const t of C.tools) items.push(toolLine(t));
+  if (C.stream) items.push('<div class="cline assistant stream">' + mdLite(C.stream) + '<span class="caret"></span></div>');
+  if (C.reasoning) items.push('<div class="creason"><details><summary>思考过程（' + C.reasoning.length + ' 字）</summary>'
+                              + '<div>' + mdLite(C.reasoning) + '</div></details></div>');
+  if (C.state === 'starting') items.push('<div class="thinking"><span class="spinner"></span>正在启动 harness 运行时…</div>');
+  else if (C.busy){
+    const secs = C.t0 ? Math.round((now() - C.t0) / 1000) : 0;
+    items.push('<div class="thinking"><span class="spinner"></span>harness 正在处理… ' + secs + ' 秒'
+             + (secs > 25 ? '（带工具的任务会久一些；可点下方“停止生成”）' : '') + '</div>');
+  }
+  if (C.tail) items.push('<div class="cline err">' + mdLite(C.tail) + '</div>');
+  if (!items.length) items.push('<div class="cline assistant" style="color:var(--ui-dim);background:transparent;border:none">'
+    + '和 DeepSeek 聊天（走你本机的 DeepSeek Harness，带工具与记忆能力）。<br>'
+    + '</div>');
+  box.innerHTML = items.join('');
+  box.querySelectorAll('details').forEach((el,i)=>{el.open=!!expanded[i];});
+  box.scrollTop=follow?box.scrollHeight:scrollTop;
+  // Keep operational status short; technical/session details are available on demand.
+  const details=[];
+  if(C.route)details.push('<dt>模型</dt><dd>'+esc(C.route)+'</dd>');
+  if(C.title)details.push('<dt>会话</dt><dd>'+esc(C.title)+'</dd>');
+  if(C.usage?.outputTokens)details.push('<dt>用量</dt><dd>输入 '+esc(C.usage.inputTokens||0)+' / 输出 '+esc(C.usage.outputTokens)+' tokens</dd>');
+  els.cstatus.innerHTML='<span class="connection"><span class="cdot '+esc(C.state||'off')+'"></span>'+esc(harnessStateText())+'</span>'
+    +(details.length?'<details class="connection-details"'+(statusExpanded?' open':'')+'><summary>会话详情</summary><dl>'+details.join('')+'</dl></details>':'');
+  updateChatControls();
+  schedulePlaceChat();                    // 高度变了 → 重新摆位
+}
+
+/* ---------- 流式增量（高频，直接改 DOM，避免整块重绘） ---------- */
+function patchStream(){
+  const box = els.cmsg;
+  const follow=chatAtBottom(box), scrollTop=box.scrollTop;
+  let el = box.querySelector('.cline.stream');
+  if (!el){
+    el = document.createElement('div');
+    el.className = 'cline assistant stream';
+    el.innerHTML = '<span class="caret"></span>';
+    box.appendChild(el);
+  }
+  el.innerHTML = mdLite(C.stream) + '<span class="caret"></span>';
+  box.scrollTop=follow?box.scrollHeight:scrollTop;
+}
+
+function chatBusyStart(){
+  C.busy = true; C.t0 = now();
+  M.chatBusy = true;                      // → 桌宠演"操作中"（优先级高于菜单）
+  clearInterval(C.timer);
+  C.timer = setInterval(()=>{ if (C.busy) renderChat(); }, 1000);
+  renderChat(); applyState();
+}
+function chatBusyEnd(){
+  C.busy = false; clearInterval(C.timer); C.timer = 0;
+  M.chatBusy = false;
+  renderChat(); applyState();
+}
+
+/* ---------- 主进程推来的 harness 事件 ---------- */
+function onHarnessEvent(evt){
+  if (!evt) return;
+  switch (evt.kind){
+    case 'delta':     C.stream += evt.text || ''; if (C.open) patchStream(); break;
+    case 'reasoning': C.reasoning += evt.text || ''; break;
+    case 'message':   if (evt.text) C.stream = evt.text; break;      // 以提交版为准
+    case 'toolCall':  C.tools.push({ name: evt.name, argText: String(evt.args || '').slice(0, 160), done:false }); renderChat(); break;
+    case 'toolResult': {
+      const t = [...C.tools].reverse().find((x)=> !x.done);
+      if (t){ t.done = true; t.result = evt.text || ''; t.isError = !!evt.isError; }
+      renderChat(); break;
+    }
+    case 'title':     C.title = evt.title || ''; C.tail = ''; renderChat(); break;
+    case 'usage':     C.usage = evt.usage || C.usage; break;
+    case 'route':     C.route = (evt.provider || '') + ' / ' + (evt.model || ''); break;
+    case 'turnEnd': {
+      const r = evt.reason || {};
+      if (r.kind === 'error') C.tail = 'harness 出错：' + ((r.error && r.error.message) || '未知错误');
+      else C.tail = '';
+      chatBusyEnd();
+      C.stream = ''; C.reasoning = ''; C.tools = [];      // 本轮实时内容清空，改由落盘记录渲染
+      setTimeout(()=> refreshChat(), 150);
+      break;
+    }
+    default: break;
+  }
+}
+function onHarnessStatus(st){
+  if (!st) return;
+  const s = st.state;
+  C.state = s;
+  if (st.info && st.info.provider) C.route = st.info.provider + ' / ' + st.info.model;
+  if (s === 'running'){ if (!C.busy) chatBusyStart(); }
+  else if (s === 'idle'){ if (C.busy) chatBusyEnd(); }
+  else if (s === 'dead'){
+    if (C.busy) chatBusyEnd();
+    C.tail = (st.info && st.info.reason) || 'harness 已退出';
+    if (st.info && st.info.stderr) C.tail += '\n' + String(st.info.stderr).slice(-300);
+    toast('harness 已停止（下次发消息会自动重启）');
+  }
+  if (C.open) renderChat();
+}
+
+async function sendChat(){
+  if (!cHostOk()) return;
+  const text = els.cinput.value.trim();
+  if (!text) return;
+  if (C.busy){ toast('上一条还在处理，稍等或点"取消当前请求"'); return; }
+  els.cinput.value = '';
+  els.cmsg.scrollTop=els.cmsg.scrollHeight;
+  C.msgs.push({ role:'user', text, at: Date.now() });      // 乐观显示
+  C.stream = ''; C.reasoning = ''; C.tools = []; C.tail = ''; C.usage = null;
+  chatBusyStart();
+  let res = null;
+  try{ res = await window.petHost.chat(text, []); }         // 历史由主进程/harness 会话管
+  catch(e){ res = { ok:false, error:'调用失败：' + ((e && e.message) || e) }; }
+  if (res && res.ok){
+    if (res.streaming){ /* 回复走事件流，别在这里结束忙碌态 */ }
+    else { await refreshChat(); chatBusyEnd(); }
+  } else {
+    chatBusyEnd();
+    C.tail = '出事：' + ((res && res.error) || '未知错误');
+    renderChat();
+    toast('DeepSeek 请求失败');
+  }
+}
+
+async function cancelChat(){
+  if (!C.busy){ toast('当前没有在跑的请求'); return; }
+  try{ await window.petHost.cancelChat(); }catch(e){}
+  chatBusyEnd();
+  C.stream = ''; C.tools = [];
+  C.tail = '已取消这次请求（harness 运行时已停止，下次发消息会自动重启）';
+  renderChat();
+}
+async function clearChat(){
+  if (C.busy){ toast('先取消正在处理的请求'); return; }
+  try{ await window.petHost.clearChat(); }catch(e){}
+  C.msgs = []; C.stream = ''; C.reasoning = ''; C.tools = []; C.tail = ''; C.usage = null; C.title = '';
+  renderChat(); toast('对话已清空');
+}
+
+/* ===================== 初始化 ===================== */
+async function init(){
+  try{
+    const r = await fetch('assets/states.json', {cache:'no-store'});
+    if (r.ok) states = await r.json();
+  }catch(e){ /* file:// 下 fetch 被禁，用默认配置 */ }
+
+  pet = document.getElementById('pet');
+  els.shadow  = document.getElementById('shadow');
+  els.desktop = document.getElementById('desktop');
+  els.checker = document.getElementById('checker');
+  els.panel   = document.getElementById('panel');
+  els.menu    = document.getElementById('menu');
+  els.search  = document.getElementById('search');
+  els.slist   = document.getElementById('slist');
+  els.sinput  = document.getElementById('sinput');
+  els.scount  = document.getElementById('scount');
+  els.chat    = document.getElementById('chat');
+  els.cmsg    = document.getElementById('cmsg');
+  els.settings= document.getElementById('settings');
+  els.sao     = document.getElementById('sao');
+  els.saoCard = document.getElementById('saoCard');
+  els.saoCats = document.getElementById('saoCats');
+  els.saoList = document.getElementById('saoList');
+  els.saoSub  = document.getElementById('saoSub');
+  els.saoCardInfo = document.getElementById('saoCardInfo');
+  els.saoCatTri   = document.getElementById('saoCatTri');
+  els.saoCardTri  = document.getElementById('saoCardTri');
+  els.saoBridge   = document.getElementById('saoBridge');
+  els.cinput  = document.getElementById('cinput');
+  els.cstatus = document.getElementById('cstatus');
+  els.toast   = document.getElementById('toast');
+  els.stateLine = document.getElementById('stateLine');
+  els.size    = document.getElementById('size');
+  els.speed   = document.getElementById('speed');
+
+  for (const id in states){
+    const st = states[id];
+    const v = document.createElement('video');
+    v.src = VIDEO_DIR + st.file;
+    v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.loop = (st.mode === 'loop');
+    v.disablePictureInPicture = true;
+    v.addEventListener('ended', ()=>{ try{ v.pause(); }catch(e){} });   // 一次性动作播完别占着解码器
+    pet.appendChild(v);
+    videos[id] = v;
+  }
+
+  M.lastInteract = now();
+  M.loungeUntil = M.lastInteract + IDLE_HOLD_MS;
+  rollLounge();
+
+  applySize(opt.size);
+  els.size.value = opt.size;
+  document.getElementById('sizeVal').textContent = opt.size;
+  setBg(opt.bg);
+  setShadow(opt.shadow);
+  setAuto(opt.auto);
+  if (!opt.controls) els.panel.classList.add('hidden');
+
+  place(innerWidth - opt.size * CANVAS_ASPECT - 60, innerHeight - opt.size * FOOT_RATIO - 6, false);
+  bindEvents();
+  initHostBridge();                 // 桌面版(Electron)才生效
+  applyState();                     // 先起状态机，再起播（起播失败也不影响交互）
+  play('idle');
+  if (opt.menu) openMenu();                 // ?menu=1
+  setInterval(tick, 150);
+  if (!window.petHost || opt.debug) requestAnimationFrame(fpsLoop);   // 桌面宿主里不跑调试FPS循环
+  window.__petInitOK = true;
+  toast('拖动我 · 单击互动 · 右键菜单');
+}
+
+/* ===================== 尺寸/位置 ===================== */
+function applySize(h){
+  opt.size = h;
+  if(els.size){
+    els.size.value=h;
+    els.size.style.setProperty('--fill',((h-Number(els.size.min))/(Number(els.size.max)-Number(els.size.min))*100)+'%');
+    document.getElementById('sizeVal').textContent=h;
+  }
+  document.documentElement.style.setProperty('--pet-h', h + 'px');
+  document.documentElement.style.setProperty('--pet-w', Math.round(h * CANVAS_ASPECT) + 'px');
+  clampToScreen(false); updateShadow();
+}
+function place(x, y, animate){
+  if (animate) pet.classList.add('moving');
+  pet.style.left = x + 'px'; pet.style.top = y + 'px';
+  if (animate) setTimeout(()=> pet.classList.remove('moving'), 520);
+  updateShadow();
+}
+function clampToScreen(animate){
+  const w = opt.size * CANVAS_ASPECT, h = opt.size;
+  let x = parseFloat(pet.style.left) || 0, y = parseFloat(pet.style.top) || 0;
+  x = Math.min(Math.max(x, 8 - w * 0.2), innerWidth - w * 0.8);
+  y = Math.min(Math.max(y, 8), innerHeight - h * FOOT_RATIO - 4);
+  place(x, y, animate);
+}
+function updateShadow(){
+  const w = opt.size * CANVAS_ASPECT, h = opt.size;
+  const x = parseFloat(pet.style.left) || 0, y = parseFloat(pet.style.top) || 0;
+  const footY = y + h * FOOT_RATIO;
+  const sw = w * 0.42, sh = Math.max(6, h * 0.032);
+  els.shadow.style.left = (x + w * 0.5 - sw / 2) + 'px';
+  els.shadow.style.top  = (footY - sh * 0.35) + 'px';
+  els.shadow.style.width = sw + 'px';
+  els.shadow.style.height = sh + 'px';
+  els.shadow.classList.toggle('hidden',
+    !opt.shadow || opt.bg === 'none' || cur === 'grabbed');   // 被提起来时不画地面阴影
+}
+
+/* ===================== 透明像素命中判定 ===================== */
+function alphaBitmap(){
+  const v = videos[cur];
+  if (!v || v.readyState < 2) return null;
+  const t = now();
+  if (alphaCache.state === cur && alphaCache.img && t - alphaCache.t < 400) return alphaCache;
+  alphaCache.state = cur; alphaCache.t = t;
+  try{
+    if (!alphaSampler){
+      const c = document.createElement('canvas'); c.width = 96; c.height = 160;
+      alphaSampler = { c, ctx: c.getContext('2d', {willReadFrequently:true}) };
+    }
+    const {c, ctx} = alphaSampler;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    let any = false;
+    for (let i = 3; i < img.data.length; i += 4){ if (img.data[i] > 24){ any = true; break; } }
+    alphaCache.img = img; alphaCache.w = c.width; alphaCache.h = c.height; alphaCache.any = any;
+    alphaOK = true;
+  }catch(e){ alphaOK = false; alphaCache.img = null; alphaCache.any = false; }
+  return alphaCache.img ? alphaCache : null;
+}
+function hitTest(px, py){
+  const b = alphaBitmap();
+  if (!b || !b.any) return true;             // 采不到有效数据 → 按矩形命中，保证点得动
+  const x = Math.min(b.w - 1, Math.max(0, Math.floor(px * b.w)));
+  const y = Math.min(b.h - 1, Math.max(0, Math.floor(py * b.h)));
+  return b.img.data[(y * b.w + x) * 4 + 3] > 24;
+}
+
+/* ===================== 事件 ===================== */
+function bindEvents(){
+  let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0, moved = 0;
+
+  pet.addEventListener('pointerdown', (e)=>{
+    if (e.button !== 0) return;
+    const r = pet.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    if (alphaOK !== false && !hitTest(px, py)) return;      // 点在透明处不响应
+    closeMenu();
+    dragging = true; moved = 0;
+    sx = e.clientX; sy = e.clientY;
+    ox = parseFloat(pet.style.left); oy = parseFloat(pet.style.top);
+    M.dragging = true;                                      // → 抓着状态
+    pet.classList.add('dragging');
+    try{ pet.setPointerCapture(e.pointerId); }catch(err){}
+    applyState();
+  });
+
+  pet.addEventListener('pointermove', (e)=>{
+    if (!dragging) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
+    place(ox + dx, oy + dy, false);
+  });
+
+  pet.addEventListener('pointerup', (e)=>{
+    if (!dragging) return;
+    dragging = false; M.dragging = false;
+    pet.classList.remove('dragging');
+    if (moved < 5){                       // 没移动 = 单击 → 互动
+      doReact();
+    } else {                              // 拖到位松手 → 落下动作 → 接待机
+      clampToScreen(false);
+      schedulePlaceSearch();
+      schedulePlaceChat();
+      playOnce('drop');
+    }
+    touch();
+  });
+
+  pet.addEventListener('contextmenu', (e)=>{
+    e.preventDefault();
+    toggleMenu();
+  });
+
+  // 点空白：只关掉面板，**不再"走过去"**
+  // （全屏透明窗在"可交互"与"穿透"之间有切换延迟，鼠标刚从角色上移开就点击时，
+  //   这一下会落进页面里 → 角色被瞬移过去，误触率极高，用户已要求去掉）
+  document.addEventListener('pointerdown', (e)=>{
+    const t = e.target;
+    if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#sao'))) return;
+    closeMenu();
+    if (SET.open) closeSettings();
+    if (S.open) closeSearch();
+    if (C.open) closeChat();
+    touch();
+  });
+
+  els.menu.addEventListener('click', (e)=>{
+    const b = e.target.closest('button'); if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'close'){ closeMenu(); return; }
+    if (act === 'task'){
+      closeMenu(); startTask();
+      toast('开始长任务（10 秒后自动结束）');
+      setTimeout(()=>{ endTask(); toast('长任务结束'); }, 10000);
+      return;
+    }
+    if (act === 'idle'){ closeMenu(); touch(); return; }
+    if (act === 'chat'){ closeMenu(); openChat(); return; }
+    if (act === 'settings'){ closeMenu(); openSettings(); return; }
+    if (act === 'search'){ closeMenu(); openSearch(); return; }
+    if (act === 'panel'){ closeMenu(); els.panel.classList.toggle('hidden'); return; }
+    if (act === 'task'){
+      closeMenu(); startTask();
+      toast('开始长任务（10 秒后自动结束）');
+      setTimeout(()=>{ endTask(); toast('长任务结束'); }, 10000);
+      return;
+    }
+    if (states[act]){ playOnce(act); closeMenu(); }
+  });
+
+  /* ---- 文件搜索面板：输入 / 键盘 / 点击 ---- */
+  els.sinput.addEventListener('input', scheduleSearch);
+  els.sinput.addEventListener('keydown', (e)=>{
+    if (e.key === 'ArrowDown'){ e.preventDefault(); moveSel(1); return; }
+    if (e.key === 'ArrowUp'){ e.preventDefault(); moveSel(-1); return; }
+    if (e.key === 'Escape'){ e.preventDefault(); closeSearch(); return; }
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      if (S.sel < 0 && S.rows.length) S.sel = 0;
+      if (S.sel >= 0) activate(S.sel, e.ctrlKey || e.metaKey);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !String(window.getSelection())){
+      // 输入框没选中文字时，Ctrl+C = 复制当前高亮项的完整路径
+      if (S.rows[S.sel] && window.petHost && window.petHost.copyText){
+        e.preventDefault();
+        window.petHost.copyText(S.rows[S.sel].path);
+        toast('已复制路径');
+      }
+    }
+  });
+  els.slist.addEventListener('click', (e)=>{
+    const rev = e.target.closest && e.target.closest('[data-reveal]');
+    if (rev){ e.stopPropagation(); activate(parseInt(rev.getAttribute('data-reveal'), 10), true); return; }
+    const row = e.target.closest && e.target.closest('.srow');
+    if (row) activate(parseInt(row.getAttribute('data-i'), 10), e.ctrlKey || e.metaKey);
+  });
+  els.slist.addEventListener('mousemove', (e)=>{      // 鼠标划过只切 class，不重建列表（重建会闪）
+    const row = e.target.closest && e.target.closest('.srow');
+    if (!row) return;
+    const i = parseInt(row.getAttribute('data-i'), 10);
+    if (i === S.sel) return;
+    S.sel = i;
+    els.slist.querySelectorAll('.srow.sel').forEach((el)=> el.classList.remove('sel'));
+    row.classList.add('sel');
+  });
+  document.addEventListener('keydown', (e)=>{         // 面板开着但焦点不在输入框时，Esc 也要能关
+    if (e.key !== 'Escape') return;
+    if (SET.open) closeSettings();
+    else if (C.open) closeChat();
+    else if (S.open) closeSearch();
+  });
+  if (window.petHost && window.petHost.onEsc) window.petHost.onEsc(()=>{   // 窗口失焦时由全局 Esc 兜底
+    if (SET.open) closeSettings(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
+  });
+  /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
+  els.cinput.addEventListener('keydown', (e)=>{
+    if (e.isComposing || e.keyCode===229) return;
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); return; }
+    if (e.key === 'Escape'){ e.preventDefault(); closeChat(); return; }
+  });
+  els.cinput.addEventListener('input', updateChatControls);
+  document.getElementById('cSend').addEventListener('click', ()=>sendChat());
+  document.getElementById('cClose').addEventListener('click', ()=>closeChat());
+  document.getElementById('cCancel').addEventListener('click', ()=> cancelChat());
+  // 设置面板
+  document.getElementById('setSave').addEventListener('click', ()=> saveSettings());
+  document.getElementById('setTest').addEventListener('click', ()=> testSettings());
+  document.getElementById('setKeyClear').addEventListener('click', ()=> clearKeySettings());
+  document.getElementById('setDetect').addEventListener('click', ()=>{
+    document.getElementById('setRepo').value = '';
+    setMsg('setRepoHint', SET.detected ? ('自动探测到：' + SET.detected + '（保存后生效）') : '未探测到，请手动填写仓库根目录', SET.detected ? '' : 'bad');
+  });
+  document.getElementById('setKeyEye').addEventListener('click', ()=>{
+    const k = document.getElementById('setKey');
+    k.type = k.type === 'password' ? 'text' : 'password';
+  });
+  // harness 事件流：流式文本 / 工具调用 / 状态 / 标题 / token
+  try{
+    if (window.petHost.onHarnessEvent) window.petHost.onHarnessEvent(onHarnessEvent);
+    if (window.petHost.onHarnessStatus) window.petHost.onHarnessStatus(onHarnessStatus);
+  }catch(e){ console.warn('harness 事件订阅失败', e); }
+  try{
+    if (window.petHost.onSysInfo) window.petHost.onSysInfo((d)=>{      // 详情卡四角标注
+      SAO_METRICS = d;
+      if (SAO.open) renderCardMetrics();
+    });
+  }catch(e){ console.warn('sysinfo 订阅失败', e); }
+  document.getElementById('cClear').addEventListener('click', ()=> clearChat());
+
+  if (window.petHost && window.petHost.onOpenSearch) window.petHost.onOpenSearch(()=> openSearch());
+  if (window.petHost && window.petHost.onOpenChat) window.petHost.onOpenChat(()=> openChat());
+
+  document.getElementById('btnMenu').addEventListener('click', ()=> toggleMenu());
+  document.getElementById('btnSettings').addEventListener('click', ()=> openSettings());
+  /* SAO: real button focus, explicit branches, one keyboard handler. */
+  els.sao.addEventListener('click',e=>{
+    const back=e.target.closest('[data-back]');
+    if(back){
+      if(back.dataset.back==='categories'){saoSelectCat(SAO_CATS[(SAO_CATS.indexOf(SAO.cat)+1)%SAO_CATS.length]);}
+      else saoBack();
+      return;
+    }
+    const cat=e.target.closest('[data-cat]');if(cat){saoSelectCat(cat.dataset.cat);return;}
+    const row=e.target.closest('#saoSub .row');if(row&&!row.disabled)saoRunSub(Number(row.dataset.i));
+  });
+  els.saoList.addEventListener('scroll',()=>{if(SAO.open)placeSaoSub();});
+  addEventListener('resize',()=>{if(SAO.open)positionSao();});
+  document.addEventListener('keydown',e=>{
+    if(!SAO.open||e.defaultPrevented)return;
+    if(!['Escape','ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+    e.preventDefault();e.stopPropagation();
+    if(e.key==='Escape'){saoBack();return;}
+    const focused=document.activeElement;
+    const inSub=!!focused?.closest('#saoSub');
+    const box=inSub?els.saoSub:focused?.closest('#saoCats')?els.saoCats:els.saoList;
+    const buttons=[...box.querySelectorAll('button:not(:disabled)')];
+    const index=buttons.indexOf(focused);
+    if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){
+      const i=e.key==='Home'?0:e.key==='End'?buttons.length-1:index<0?0:(index+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;
+      buttons[i]?.focus();return;
+    }
+    const forward=SAO.mirror?'ArrowLeft':'ArrowRight';
+    if(e.key===forward){
+      if(!inSub){if(focused?.dataset.cat)saoSelectCat(focused.dataset.cat);els.saoSub.querySelector('.row:not(:disabled)')?.focus();}
+      else if(SAO_MENU[SAO.cat].items[Number(focused?.dataset.i)]?.sub&&SAO.subRow<0)saoRunSub(Number(focused.dataset.i));
+    }else if(inSub){
+      if(SAO.subRow>=0)saoBack();else els.saoList.querySelector('[data-cat="'+SAO.cat+'"]')?.focus();
+    }
+  });
+  document.getElementById('btnTask').addEventListener('click', (e)=>{
+    if (M.taskCount > 0) return;
+    startTask();
+    e.target.classList.add('on');
+    toast('模拟长任务 10 秒');
+    setTimeout(()=>{ endTask(); e.target.classList.remove('on'); toast('长任务结束'); }, 10000);
+  });
+  document.getElementById('btnAuto').addEventListener('click', ()=> setAuto(!opt.auto));
+  // SAO 皮肤：滑杆填充比例写进 --fill，给轨道上色（纯外观，不影响取值逻辑）
+  const rangeFill = (el)=>{
+    const upd = ()=>{ const lo = parseFloat(el.min || 0), hi = parseFloat(el.max || 100);
+      const p = ((parseFloat(el.value) - lo) / (hi - lo)) * 100;
+      el.style.setProperty('--fill', p.toFixed(1) + '%'); };
+    el.addEventListener('input', upd); el.addEventListener('change', upd); upd();
+  };
+  ['size','speed'].forEach((id)=>{ const el = document.getElementById(id); if (el) rangeFill(el); });
+  document.getElementById('btnShadow').addEventListener('click', ()=> setShadow(!opt.shadow));
+  document.getElementById('btnBg').addEventListener('click', ()=>{
+    const order = ['desktop','checker','none'];
+    setBg(order[(order.indexOf(opt.bg) + 1) % order.length]);
+  });
+  document.getElementById('btnGhost').addEventListener('click', ()=> setBg(opt.bg === 'none' ? 'desktop' : 'none'));
+
+  els.size.addEventListener('input', (e)=>{ applySize(parseInt(e.target.value));
+    document.getElementById('sizeVal').textContent = e.target.value;
+    if (SAO.open) positionSao(); schedulePlaceSearch(); schedulePlaceChat(); });
+  els.speed.addEventListener('input', (e)=>{
+    baseRate = e.target.value / 100;
+    applyRates();
+    document.getElementById('speedVal').textContent = baseRate.toFixed(1) + 'x';
+  });
+
+  addEventListener('keydown', (e)=>{
+    if(e.defaultPrevented || e.target.closest?.('input,textarea,select,[contenteditable=true]')) return;
+    if (e.key === 'Escape'){                 // 面板打开时 Esc 必须先关面板（原来被下面的 return 吃掉，只能重开再关）
+      if (SET.open){ closeSettings(); return; }
+      if (C.open){ closeChat(); return; }
+      if (S.open){ closeSearch(); return; }
+    }
+    if (S.open || C.open || SET.open || SAO.open) return;   // 搜索/聊天框开着时全局快捷键必须让位：否则打字（空格）会触发角色动作
+    if (e.key === 'h' || e.key === 'H') els.panel.classList.toggle('hidden');
+    if (e.code === 'Space'){ e.preventDefault(); doReact(); touch(); }
+    if (e.key === 'Escape') closeMenu();
+  });
+  addEventListener('resize', ()=>{ clampToScreen(false); if (SAO.open) positionSao(); schedulePlaceSearch(); schedulePlaceChat(); });
+
+  // 首次点击 → 解锁自动播放
+  document.addEventListener('pointerdown', function unlock(){
+    for (const id in videos){ try{ videos[id].load(); }catch(e){} }
+    applyRates();
+    play(cur || 'idle');
+  }, {once:true});
+}
+
+function setAuto(on){
+  opt.auto = on;
+  document.getElementById('btnAuto').classList.toggle('on', on);
+  if (on) rollLounge(); else M.lounge = 'idle';
+  applyState();
+}
+function setShadow(on){
+  opt.shadow = on;
+  document.getElementById('btnShadow').classList.toggle('on', on);
+  updateShadow();
+}
+function setBg(mode){
+  opt.bg = mode;
+  els.desktop.classList.toggle('hidden', mode !== 'desktop');
+  els.checker.classList.toggle('show', mode === 'checker');
+  document.getElementById('btnGhost').classList.toggle('on', mode === 'none');
+  updateShadow();
+}
+
+function updateStateLine(id){
+  const st = states[id] || {};
+  let why;
+  if (M.dragging) why = '拖动中';
+  else if (M.menuOpen) why = '菜单打开';
+  else if (M.searchOpen) why = '搜索文件';
+  else if (M.chatBusy) why = 'DeepSeek 处理中';
+  else if (M.chatOpen) why = '聊天打开';
+  else if (M.taskCount > 0) why = '长任务进行中';
+  else if (M.react) why = '一次性动作';
+  else if (opt.auto && now() - M.lastInteract >= IDLE_HOLD_MS) why = '长时间空闲随机';
+  else why = '操作后待机';
+  els.stateLine.textContent = '状态：' + (st.name || id) + '（' + why + '）';
+}
+
+let t0 = now(), fc = 0, fpsOn = true;
+function fpsLoop(){
+  if (!fpsOn) return;                       // 桌面宿主里不跑：60fps rAF 会一直唤醒合成器（纯调试用读数）
+  fc++;
+  const t = now();
+  if (t - t0 > 1000){
+    document.getElementById('fpsInfo').textContent = '· ' + Math.round(fc * 1000 / (t - t0)) + ' fps';
+    fc = 0; t0 = t;
+  }
+  requestAnimationFrame(fpsLoop);
+}
+
+/* ===================== 调试/基准台接口 ===================== */
+window.__petDebug = {
+  fpsRunning: ()=>fpsOn,
+  stopFps:    ()=>{ fpsOn = false; },
+  playingVideos: ()=>Object.keys(videos).filter(k=>!videos[k].paused),
+  pauseOthers
+};
+
+/* 窗口被隐藏（托盘隐藏/最小化）时停掉解码；重新可见再恢复当前状态 */
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'hidden'){
+    pauseOthers(null);
+  } else if (cur && videos[cur]){
+    try{ videos[cur].play().catch(()=>{}); }catch(e){}
+  }
+});
+
+let toastTimer = null;
+function toast(msg){
+  els.toast.textContent = msg;
+  els.toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> els.toast.classList.remove('show'), 2200);
+}
+
+/* ===================== 给后续功能用的接口 =====================
+   以后加"菜单功能""长任务"时直接调这些，不用改状态机：
+     petAPI.openMenu(x,y) / closeMenu() / toggleMenu()
+     petAPI.startTask() / endTask()   —— 长任务起止（支持并发计数）
+     petAPI.react(stateId)            —— 播一次性动作
+     petAPI.setState(stateId)         —— 强制切状态（调试用）
+     petAPI.moveTo(x,y) / getState() / getMode()
+   ===================================================================== */
+window.petAPI = {
+  /* 测试/自动化钩子：把 harness 事件流直接注入页面（真实运行时是主进程推过来的） */
+  __rebindHost:    ()=> initHostBridge(),   // 测试用：换了宿主对象后重绑（真程序 preload 先注入，不需要）
+  __harnessEvent:  (evt)=> onHarnessEvent(evt),
+  __harnessStatus: (st)=>  onHarnessStatus(st),
+  openSettings: ()=> openSettings(),
+  saoState: ()=>({ open:SAO.open, cat:SAO.cat, subRow:SAO.subRow, mirror:SAO.mirror,
+                   cats:[...document.querySelectorAll('#saoCats .cat')].map((b)=>b.dataset.cat),
+                   rows:[...document.querySelectorAll('#saoList .row')].map((b)=>b.textContent.trim()),
+                   subRows:[...document.querySelectorAll('#saoSub.show .row')].map((b)=>b.textContent.trim()) }),
+  saoSelectCat: (c)=> saoSelectCat(c),
+  saoDisplays: ()=>({ list: SAO_DISPLAY.list, currentId: SAO_DISPLAY.currentId, current: SAO_DISPLAY.current }),
+  setDisplay: async (id)=>{ const r = await window.petHost?.setDisplay?.(id); await refreshSaoDisplays(); return r; },
+  listDisplays: async ()=>{ await refreshSaoDisplays(); return { list: SAO_DISPLAY.list, currentId: SAO_DISPLAY.currentId, current: SAO_DISPLAY.current }; },
+  saoMetrics: ()=>({ metrics: SAO_METRICS, marks: [...document.querySelectorAll('#cdMarks .txt')].map((e)=>e.textContent) }),
+  closeSettings: ()=> closeSettings(),
+  getSettings: ()=> (window.petHost && window.petHost.getConfig) ? window.petHost.getConfig() : Promise.resolve(null),
+  openMenu: ()=> openMenu(),
+  closeMenu, toggleMenu,
+  getPos: ()=>({ x: parseFloat(pet.style.left) || 0, y: parseFloat(pet.style.top) || 0 }),
+  setPos: (x, y)=>{ place(x, y, false); clampToScreen(false); updateShadow(); },
+  getSize: ()=> opt.size,
+  setSize: (h)=>{ applySize(parseInt(h)); els.size.value = h; document.getElementById('sizeVal').textContent = h;
+                  if (SAO.open) positionSao(); },
+  togglePanel: ()=>{ els.panel.classList.toggle('hidden'); if (SAO.open) positionSao(); if (S.open) placeSearch(); },
+  setAuto: (v)=> setAuto(!!v),
+  startTask: ()=> startTask(),
+  endTask: ()=> endTask(),
+  react: (id)=> playOnce(id),
+  setState: (id)=>{ if (states[id]){ closeMenu(); M.react = null; M.dragging = false; M.menuOpen = false; play(id); } },
+  openChat: ()=> openChat(),
+  closeChat: ()=> closeChat(),
+  toggleChat: ()=> toggleChat(),
+  chatState: ()=>({ open:C.open, busy:C.busy, msgs:C.msgs.length }),
+  openSearch: (q)=> openSearch(q),
+  placeSearch: ()=> placeSearch(),
+  closeSearch: ()=> closeSearch(),
+  toggleSearch: ()=> toggleSearch(),
+  searchRows: ()=> S.rows.map((r)=> r.path),
+  moveTo: (x, y)=> place(x, y, true),
+  getState: ()=> cur,
+  getMode: ()=>({ dragging:M.dragging, menuOpen:M.menuOpen, searchOpen:M.searchOpen, searchRows:S.rows.length, chatOpen:M.chatOpen, chatBusy:M.chatBusy, chatMsgs:C.msgs.length, taskCount:M.taskCount,
+                  react:M.react, idleMs: now() - M.lastInteract, lounge:M.lounge })
+};
+
+window.addEventListener('error', e=>{ window.__petError = (e.message || '') + ' @' + (e.lineno||''); });
+window.addEventListener('unhandledrejection', e=>{ window.__petError = 'Promise: ' + ((e.reason && (e.reason.stack||e.reason.message)) || e.reason); });
+init().then(()=>{ window.__petInitOK = true; })
+      .catch(e=>{ window.__petError = String((e && (e.stack || e.message)) || e); });
+</script>
+</body>
+</html>
+

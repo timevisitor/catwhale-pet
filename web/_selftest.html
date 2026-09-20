@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>alpha 视频自检</title>
+<style>body{font:14px/1.6 monospace;background:#111;color:#ddd;padding:16px}pre{white-space:pre-wrap}</style>
+</head><body>
+<pre id="out">running...</pre>
+<video id="v" muted playsinline style="display:none"></video>
+<canvas id="c" width="300" height="434"></canvas>
+<script>
+const FILES = [
+  ['idle','待机'],['stand_arms','站立抬胳膊'],['tail_open','睁眼摇尾'],['tail_closed','闭眼摇尾']
+];
+const lines = [];
+function log(s){ lines.push(s); document.getElementById('out').textContent = lines.join('\n'); }
+
+function load(url){
+  return new Promise((res, rej)=>{
+    const v = document.getElementById('v');
+    v.onloadeddata = ()=> res(v); v.onerror = ()=> rej(new Error('load fail '+url));
+    v.src = url; v.load();
+  });
+}
+function seek(v, t){
+  return new Promise(res=>{ v.onseeked = ()=> res(); v.currentTime = t; });
+}
+
+(async ()=>{
+  const c = document.getElementById('c'), ctx = c.getContext('2d', {willReadFrequently:true});
+  const results = await Promise.all(FILES.map(async ([file, cn])=>{
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true;
+    try{
+      await new Promise((res, rej)=>{ v.onloadeddata = res; v.onerror = ()=> rej(new Error('load fail')); v.src = 'assets/video/'+file+'.webm'; v.load(); });
+      await new Promise(res=>{ v.onseeked = res; v.currentTime = 1.0; });
+      const cc = document.createElement('canvas'); cc.width = 300; cc.height = 434;
+      const cx2 = cc.getContext('2d', {willReadFrequently:true});
+      cx2.clearRect(0,0,cc.width,cc.height);
+      cx2.drawImage(v, 0, 0, cc.width, cc.height);
+      const d = cx2.getImageData(0,0,cc.width,cc.height).data;
+      let zero=0, full=0, semi=0, sr=[0,0,0];
+      for (let i=0;i<d.length;i+=4){
+        const a = d[i+3];
+        if (a===0) zero++; else if (a===255) full++; else { semi++; sr[0]+=d[i]; sr[1]+=d[i+1]; sr[2]+=d[i+2]; }
+      }
+      const tot = d.length/4;
+      const srgb = semi? sr.map(x=>Math.round(x/semi)).join(',') : '-';
+      const px = cx2.getImageData(150,250,1,1).data;
+      return `[OK] ${file}.webm (${cn})  ${v.videoWidth}x${v.videoHeight}  readyState=${v.readyState}  duration=${v.duration.toFixed(2)}s\n` +
+             `     透明=${(zero/tot*100).toFixed(1)}%  不透明=${(full/tot*100).toFixed(1)}%  半透明=${(semi/tot*100).toFixed(2)}%  边缘均色=${srgb}  中心alpha=${px[3]}  画布可读=true`;
+    }catch(e){ return `[FAIL] ${file}.webm  ${e.message}`; }
+  }));
+  results.forEach(log);
+  const ok = results.filter(r=>r.startsWith('[OK]')).length;
+  log('');
+  log(ok === FILES.length ? '===> 全部 4 个透明视频在真实浏览器中解码正常' : `===> 有 ${FILES.length-ok} 个失败`);
+  document.title = ok === FILES.length ? 'SELFTEST-PASS' : 'SELFTEST-FAIL';
+})();
+</script>
+</body></html>
