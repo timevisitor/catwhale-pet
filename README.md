@@ -395,7 +395,8 @@ electron . --bench                      # 五阶段：初始/7路全解/只留�
 - **取消**：协议没有 cancel/close 方法 → 取消 = 杀掉运行时（会话日志已在盘上），下次发消息自动重启。
   实测取消后**无孤儿 node 进程**（`before-quit` 也会优雅 shutdown）。
 - 对话记录另存 `%APPDATA%\桌宠\chat-history.json`（界面渲染用，跨重启保留）。
-- 配置（写在 `pet-state.json`，不硬编码）：`harnessRepo`（默认 `F:\deepseek-harness\src`）、
+- 配置（写在 `pet-state.json`，不硬编码）：`harnessRepo`（默认空串，由用户在设置面板里填自己的
+  harness 仓库路径，或用环境变量 `DSH_HARNESS_REPO`）、
   `harnessProfile`（默认 `headless`）、`harnessPatch`、`harnessCwd`、`harnessProvider`/`harnessModel`
   （默认读 `~/.dsh/settings.yaml` 的 `agent-default-model`）、`harnessMaxTokens`（默认 8192）。
 
