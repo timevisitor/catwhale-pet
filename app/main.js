@@ -28,6 +28,8 @@ const REPOTEST = (() => {
   const a = process.argv.find((x) => x.startsWith('--repotest='));
   return a === undefined ? undefined : a.slice('--repotest='.length);
 })();
+// --mirrortest：菜单翻面与"抬手镜像"的验收自检（跑完打印 JSON，另存两张裁剪图供像素级比对）
+const MIRRORTEST = process.argv.includes('--mirrortest');
 const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
@@ -359,15 +361,19 @@ function runEs(args, timeoutMs = 8000) {
     if (!es) return resolve({ ok: false, error: 'es.exe 未找到', stdout: '' });
     execFile(es, args, { windowsHide: true, encoding: 'buffer', timeout: timeoutMs,
                          maxBuffer: 8 * 1024 * 1024 },
-      (err, stdout) => {
+      (err, stdout, stderr) => {
+        const dec = (b) => {
+          if (!b) return '';
+          try { return new TextDecoder('gbk').decode(b); } catch (e) { return Buffer.from(b).toString('utf8'); }
+        };
+        // 实测（Everything 未运行时）：es.exe 退出码 8、错误写 **stderr**、stdout 只剩 39 字节的 CSV 表头
+        // —— 只按 stdout 判错会把"Everything 没开"误报成"查询成功、没有结果"。所以两边都收。
+        const errOut = dec(stderr);
         if (err && !stdout) {
-          const msg = err.killed ? '查询超时' : (err.message || 'es.exe 执行失败');
-          return resolve({ ok: false, error: msg, stdout: '' });
+          const msg = err.killed ? '查询超时' : (errOut.trim() || err.message || 'es.exe 执行失败');
+          return resolve({ ok: false, error: msg, stdout: '', stderr: errOut });
         }
-        let text = '';
-        try { text = new TextDecoder('gbk').decode(stdout); }
-        catch (e) { text = stdout.toString('utf8'); }
-        resolve({ ok: true, stdout: text });
+        resolve({ ok: true, stdout: dec(stdout), stderr: errOut, code: err ? (err.code || 1) : 0 });
       });
   });
 }
@@ -421,11 +427,19 @@ async function searchEverything(query, limit) {
   const r = await runEs(args, 10000);
   if (!r.ok) return { ok: false, error: r.error, results: [] };
   const lines = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
-  const errLine = lines.find((l) => /^Error\s+\d+/i.test(l));
+  // 错误可能出现在 stdout（历史行为）**或** stderr（实测 Everything 未运行时就在 stderr）
+  const errLine = lines.find((l) => /^Error\s+\d+/i.test(l))
+               || String(r.stderr || '').split('\n').map((s) => s.trim()).find((l) => /^Error\s+\d+/i.test(l))
+               || '';
   if (errLine) {
     const friendly = /IPC window not found|not running/i.test(errLine)
       ? '未检测到 Everything（请先启动 Everything 后重试）' : errLine;
     return { ok: false, error: friendly, detail: errLine, instance: inst, results: [] };
+  }
+  // 有错误退出码但连错误行都没给（stdout 只有表头）→ 同样按"没连上"处理，别谎报"没有结果"
+  if (r.code && r.code !== 0 && lines.length <= 1) {
+    return { ok: false, error: '未检测到 Everything（请先启动 Everything 后重试）',
+             detail: 'exit=' + r.code, instance: inst, results: [] };
   }
   const rows = parseCsv(r.stdout).filter((c) => c.length >= 2);
   const results = rows.slice(1).map((c) => {
@@ -942,6 +956,118 @@ if (!app.requestSingleInstanceLock()) {
       const root = resolvePickedRepo(REPOTEST);
       console.log('REPOTEST ' + JSON.stringify({ picked: REPOTEST, path: root || REPOTEST, valid: !!root }));
       if (process.argv.includes('--exit-after-test')) { quitting = true; app.quit(); }
+    }
+    // --mirrortest：菜单翻到右侧时，抬手动画应水平镜像（且绕站姿中轴翻、角色不位移、命中不错位）
+    if (MIRRORTEST) {
+      setTimeout(async () => {
+        const checks = [];
+        const shots = [];
+        const chk = (name, ok, detail) => { checks.push({ name, ok: !!ok, detail: detail === undefined ? null : detail }); };
+        const wc = win && win.webContents;
+        const ev = (expr) => wc.executeJavaScript(expr, true);
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const rectOf = (sel) => ev(`(()=>{const b=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
+          return {x:b.left,y:b.top,w:b.width,h:b.height,right:b.right,bottom:b.bottom};})()`);
+        const crop = async (name, rect, pad, petRect) => {
+          const x = Math.max(0, Math.round(rect.x - pad)), y = Math.max(0, Math.round(rect.y - pad));
+          const width = Math.round(rect.w + pad * 2), height = Math.round(rect.h + pad * 2);
+          const img = await wc.capturePage({ x, y, width, height });
+          const file = path.join(app.getPath('temp'), name);
+          fs.writeFileSync(file, img.toPNG());
+          const size = img.getSize();
+          shots.push({ name, file, crop: { x, y, width, height }, img: size, pet: petRect || null, pad });
+          return size;
+        };
+        const parseMatrix = (t) => {
+          const m = /matrix\(([^)]+)\)/.exec(t || '');
+          if (!m) return null;
+          const v = m[1].split(',').map((s) => parseFloat(s));
+          return { a: v[0], b: v[1], c: v[2], d: v[3], e: v[4], f: v[5] };
+        };
+        try {
+          await ev('new Promise(r=>{ if(window.__petInitOK) r(true); else addEventListener("load",()=>setTimeout(()=>r(!!window.__petInitOK),500)); })');
+          await ev('petAPI.closeMenu()');
+          await sleep(250);
+
+          // ---- A）桌宠贴左边缘 → 左边放不下 → 菜单应翻到右侧、动画应镜像 ----
+          await ev('petAPI.setPos(6, 300); petAPI.openMenu(); true');
+          await sleep(800);
+          const petA = await rectOf('#pet'), menuA = await rectOf('#sao');
+          const msA = await ev('petAPI.__mirrorState()');
+          chk('A 菜单在桌宠右侧', menuA.x >= petA.right - 1, { menuLeft: Math.round(menuA.x), petRight: Math.round(petA.right) });
+          chk('A 动画已镜像', msA.on === true && msA.cls === true, { on: msA.on, cls: msA.cls });
+          const mxA = parseMatrix(msA.video && msA.video.computed);
+          const originXA = parseFloat((msA.video && msA.video.computedOrigin) || '0');
+          const W = msA.video ? msA.video.rect.w : 0;
+          chk('A 镜像矩阵：x 轴翻转、绕站姿中轴、无额外平移',
+              !!mxA && mxA.a < 0 && Math.abs(mxA.e) <= 0.5 && Math.abs(originXA - msA.axis * W) <= 1.5,
+              { a: mxA && mxA.a, e: mxA && mxA.e, originX: originXA, expectOriginX: msA.axis * W, videoW: W,
+                petW: msA.petRect && msA.petRect.w, cssW: msA.video && msA.video.cssW, optSize: msA.optSize });
+          chk('A 抬手指向右', msA.tip.xNorm > 0.5 && msA.tip.dir === 1, { tipXNorm: +msA.tip.xNorm.toFixed(4), dir: msA.tip.dir });
+
+          // ---- C）命中测试一致性：镜像后 hitTest(px) 必须等于"未镜像画面在 2a-px 处的 alpha" ----
+          const hitRes = await ev(`(()=>{
+            const N = 26, bad = [], sampled = [];
+            let solid = 0, holes = 0;
+            for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+              const px = (i + 0.5) / N, py = (j + 0.5) / N;
+              const raw = petAPI.__rawAlpha(2 * ${msA.axis} - px, py);
+              const raw2 = petAPI.__rawAlpha(px, py);
+              if (raw === null) continue;
+              const expect = raw > 24, got = petAPI.__hit(px, py);
+              if (expect !== got) bad.push({ px: +px.toFixed(3), py: +py.toFixed(3), expect, got });
+              if (expect) solid++; else holes++;
+              sampled.push(raw2 > 24 ? 1 : 0);
+            }
+            return { bad, solid, holes, total: sampled.length };
+          })()`);
+          chk('C 命中与镜像画面一致（像素级）', hitRes.bad.length === 0,
+              { mismatches: hitRes.bad.slice(0, 6), count: hitRes.bad.length });
+          chk('C 对照样本既含实心也含透明（不是空图假通过）', hitRes.solid > 20 && hitRes.holes > 20,
+              { solid: hitRes.solid, holes: hitRes.holes, total: hitRes.total });
+
+          // ---- E）像素级：同一冻结帧，开/关镜像两次截图（交给外部脚本比对翻面等价性）----
+          await ev('petAPI.__freezeFrame(1.0)');
+          await sleep(400);
+          await crop('mirror-on.png', petA, 8, petA);
+          await ev('petAPI.__forceMirror(false)');
+          await sleep(300);
+          await crop('mirror-off.png', petA, 8, petA);
+          await ev('petAPI.__forceMirror(true)');
+          await sleep(300);
+          await crop('mirror-on2.png', petA, 8, petA);          // 复现性：与第一张应几乎一致
+          await crop('mirror-off-shift.png', { x: petA.x + 40, y: petA.y, w: petA.w, h: petA.h }, 8, petA);   // 负例对照
+          chk('E 已产出比对图（on / off / on2 / 负例）', shots.length >= 4, { files: shots.map((s) => s.name) });
+
+          // ---- B）桌宠贴右边缘 → 菜单翻到左侧、动画不镜像 ----
+          await ev('petAPI.closeMenu()'); await sleep(250);
+          await ev(`petAPI.setPos(innerWidth - document.getElementById('pet').getBoundingClientRect().width - 6, 300); petAPI.openMenu(); true`);
+          await sleep(800);
+          const petB = await rectOf('#pet'), menuB = await rectOf('#sao');
+          const msB = await ev('petAPI.__mirrorState()');
+          chk('B 菜单在桌宠左侧', menuB.right <= petB.x + 1, { menuRight: Math.round(menuB.right), petLeft: Math.round(petB.x) });
+          chk('B 动画未镜像', msB.on === false && msB.cls === false, { on: msB.on, cls: msB.cls });
+          const mxB = parseMatrix(msB.video && msB.video.computed);
+          chk('B 变换回到未镜像（x 轴正）', !!mxB && mxB.a > 0, { a: mxB && mxB.a });
+          chk('B 抬手指向左', msB.tip.xNorm < 0.5 && msB.tip.dir === -1, { tipXNorm: +msB.tip.xNorm.toFixed(4), dir: msB.tip.dir });
+
+          // ---- D）关菜单后镜像复位 ----
+          await ev('petAPI.closeMenu()'); await sleep(400);
+          const msD = await ev('petAPI.__mirrorState()');
+          const mxD = parseMatrix(msD.video && msD.video.computed);
+          chk('D 关菜单后镜像复位', msD.on === false && msD.cls === false && !!mxD && mxD.a > 0,
+              { on: msD.on, cls: msD.cls, a: mxD && mxD.a });
+
+          const failed = checks.filter((c) => !c.ok);
+          console.log('MIRRORTEST ' + JSON.stringify({
+            ok: failed.length === 0, passed: checks.length - failed.length, total: checks.length,
+            checks, shots, axis: msA.axis, verdict: failed.length ? 'FAIL' : 'PASS',
+          }));
+        } catch (e) {
+          console.log('MIRRORTEST ' + JSON.stringify({ ok: false, error: (e && e.message) || String(e) }));
+        }
+        if (process.argv.includes('--exit-after-test')) { quitting = true; app.quit(); }
+      }, 1200);
     }
     // --chattest=<消息>：命令行跑一次 harness 聊天（后端自检）
     const chatTest = (process.argv.find((a) => a.startsWith('--chattest=')) || '').split('=')[1];

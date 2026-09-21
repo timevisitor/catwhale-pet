@@ -1,7 +1,7 @@
 {
   "name": "pet-girl",
   "productName": "桌宠",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DeepSeek-猫鲸（透明桌面宠物：SAO 风格菜单 + DeepSeek 聊天 + Everything 搜索）",
   "main": "main.js",
   "scripts": {
