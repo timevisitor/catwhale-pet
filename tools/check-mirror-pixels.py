@@ -36,11 +36,20 @@ def find_latest():
     return max(cands, key=os.path.getmtime)
 
 
-def load_json(path):
+def load_shots(d):
+    """截图字典：支持面板场景的 p- 前缀文件名（把前缀归一掉，两种场景共用同一套判据）"""
+    out = {}
+    for s in d.get("shots", []):
+        out[s["name"]] = s
+        out[s["name"].replace("p-", "", 1)] = s
+    return out
+
+
+def load_json(path, prefix="MIRRORTEST "):
     for line in open(path, encoding="utf-8", errors="replace"):
-        if line.startswith("MIRRORTEST "):
-            return json.loads(line[len("MIRRORTEST "):])
-    raise SystemExit("没找到 MIRRORTEST 那一行：%s" % path)
+        if line.startswith(prefix):
+            return json.loads(line[len(prefix):])
+    raise SystemExit("没找到 %s 那一行：%s" % (prefix.strip(), path))
 
 
 def load_premul(path):
@@ -68,11 +77,15 @@ def content(img):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    prefix = "MIRRORTEST "
+    for a in sys.argv[1:]:
+        if a.startswith("--prefix="):
+            prefix = a.split("=", 1)[1]
     path = args[0] if args else find_latest()
     if not path or not os.path.exists(path):
         raise SystemExit("找不到自检输出；先跑: 桌宠.exe --mirrortest --exit-after-test")
-    d = load_json(path)
-    shots = {s["name"]: s for s in d.get("shots", [])}
+    d = load_json(path, prefix)
+    shots = load_shots(d)
     need = ["mirror-on.png", "mirror-off.png", "mirror-on2.png", "mirror-off-shift.png"]
     missing = [n for n in need if n not in shots]
     if missing:

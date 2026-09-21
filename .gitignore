@@ -41,3 +41,4 @@ tools/tmp_es/
 
 # 录制/探针实验的产出帧（tools/record/probe*.js 生成，可重新跑）
 tools/record/out/
+app/diag/

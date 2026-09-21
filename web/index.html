@@ -377,9 +377,55 @@
   ::-webkit-scrollbar-thumb:hover{ background:rgba(103,112,106,.55); }
 
   /* 显隐动画：轻快、只动透明度与位移（照说明第 7 节） */
-  #search.show,#chat.show,#settings.show,#menu.show,#panel.show{ animation:sao-open .18s cubic-bezier(.2,.8,.2,1); }
+  #search.show,#chat.show,#settings.show,#menu.show,#panel.show,#envwiz.show{ animation:sao-open .18s cubic-bezier(.2,.8,.2,1); }
   @keyframes sao-open{ 0%{opacity:0;transform:translateX(-6px);} 100%{opacity:1;transform:translateX(0);} }
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ---------- 环境自检 / 一键部署向导 ---------- */
+  #envwiz{
+    position:absolute; display:none; width:470px;
+    background:rgba(248,249,245,.92); backdrop-filter:blur(2px);
+    border:1px solid rgba(255,255,247,.85); border-radius:2px;
+    box-shadow:0 0 0 1px rgba(90,100,92,.22), 0 10px 28px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
+    color:var(--ui-fg); overflow:hidden; z-index:60;
+  }
+  #envwiz.show{ display:block; }
+  #envwiz .sbox{ background:linear-gradient(180deg, rgba(255,255,255,.55), rgba(244,246,242,.35));
+    border-bottom:1px solid rgba(103,112,106,.36); border-left:3px solid var(--accent-hi);
+    padding:9px 12px; font-weight:500; letter-spacing:.5px; font-size:13px; }
+  #envwiz .sbox .scount{ color:var(--ui-dim); font-size:11.5px; }
+  #envwiz .sform{ padding:10px 12px 12px; display:flex; flex-direction:column; gap:8px;
+    max-height:520px; overflow-y:auto; }
+  #envwiz .card{ border:1px solid rgba(103,112,106,.30); border-radius:3px; padding:8px 10px;
+    background:rgba(255,255,255,.45); }
+  #envwiz .card .ctitle{ display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; }
+  #envwiz .card .cflag{ margin-left:auto; font-size:11.5px; padding:1px 7px; border-radius:2px; white-space:nowrap; }
+  #envwiz .card .cflag.ok{ background:rgba(90,180,120,.22); color:#2f6b45; }
+  #envwiz .card .cflag.bad{ background:rgba(196,88,80,.18); color:#8f352c; }
+  #envwiz .card .cflag.warn{ background:rgba(226,178,60,.24); color:#6b5312; }
+  #envwiz .card .cdesc{ font-size:11.5px; color:var(--ui-dim); line-height:1.55; margin-top:4px;
+    word-break:break-all; }
+  #envwiz .card .cdesc code{ background:rgba(90,100,92,.10); padding:0 3px; border-radius:2px; }
+  #envwiz .card .act{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:7px; }
+  #envwiz button{ background:rgba(246,198,46,.22); border:1px solid rgba(180,140,20,.42); color:inherit;
+    font:inherit; font-size:12px; padding:5px 11px; border-radius:2px; cursor:pointer; }
+  #envwiz button:hover{ background:rgba(246,198,46,.36); }
+  #envwiz button:disabled{ opacity:.45; cursor:default; }
+  #envwiz button.ghost{ background:rgba(103,112,106,.10); border-color:rgba(103,112,106,.30); }
+  #envwiz .clink{ cursor:pointer; color:#8a6a10; font-size:11.5px; }
+  #envwiz .clink:hover{ text-decoration:underline; }
+  #envwiz .hint{ font-size:11.5px; color:var(--ui-dim); line-height:1.5; }
+  #envwiz .hint b{ color:#66521A; }
+  #envwiz .ok{ color:#3f8f5f; } #envwiz .bad{ color:#b4453f; }
+  #envwiz .progress{ height:6px; background:rgba(103,112,106,.18); border-radius:3px; overflow:hidden; margin-top:6px; }
+  #envwiz .progress > i{ display:block; height:100%; width:0; background:var(--accent-hi); transition:width .2s; }
+  #envwiz .logbox{ max-height:150px; overflow-y:auto; background:rgba(60,66,62,.06);
+    border:1px solid rgba(103,112,106,.22); border-radius:2px; padding:5px 7px;
+    font-family:ui-monospace,Consolas,monospace; font-size:10.5px; line-height:1.45; white-space:pre-wrap;
+    word-break:break-all; color:#4a5348; }
+  #envwiz .sform > label{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--ui-dim); }
+  #envwiz .sform > label input[type=checkbox]{ width:auto; margin:0; }
+  #envwiz .row{ display:flex; align-items:center; gap:8px; }
 </style>
 <link rel="stylesheet" href="sao.css">
 <link rel="stylesheet" href="chat.css">
@@ -465,10 +511,41 @@
     <div class="hint" id="setRepoHint"></div>
     <div class="hint" id="setRepoPrereq">聊天前置条件：harness 仓库要先装好依赖（官方 <b>pnpm install</b>）；只 clone 不装依赖会报 Cannot find package 'tsx'</div>
     <div class="hint" id="setEverything"></div>
+    <div class="hint">环境自检：<span class="clink" id="setEnvWiz">打开自检 / 一键部署向导</span></div>
     <div class="row" style="margin-top:4px">
       <button id="setSave">保存</button><button id="setTest">测试连接</button>
     </div>
     <div class="hint" id="setResult"></div>
+  </div>
+</div>
+
+<div id="envwiz" role="dialog" aria-label="环境自检">
+  <div class="sbox"><span>🩺</span><b style="font-size:13px">环境自检</b>
+    <span class="scount" id="envStatus"></span></div>
+  <div class="sform">
+    <div class="hint" id="envIntro">桌宠的「聊天」要用 DeepSeek Harness，「文件搜索」要用 Everything。两项都没装也能用其它功能，随时可从托盘菜单再来这里。</div>
+    <div class="card" id="envCardHarness">
+      <div class="ctitle"><span>🧠</span><span>DeepSeek Harness（聊天）</span>
+        <span class="cflag" id="envFlagHarness">检测中…</span></div>
+      <div class="cdesc" id="envDescHarness"></div>
+      <div class="act" id="envActHarness"></div>
+      <div class="progress" id="envProgHarness" style="display:none"><i></i></div>
+    </div>
+    <div class="card" id="envCardEverything">
+      <div class="ctitle"><span>🔍</span><span>Everything（文件搜索）</span>
+        <span class="cflag" id="envFlagEverything">检测中…</span></div>
+      <div class="cdesc" id="envDescEverything"></div>
+      <div class="act" id="envActEverything"></div>
+      <div class="progress" id="envProgEverything" style="display:none"><i></i></div>
+    </div>
+    <div class="hint" id="envPhase"></div>
+    <div class="logbox" id="envLogBox" style="display:none"></div>
+    <label><input type="checkbox" id="envNoAsk"> 以后别再自动提示（仍可从托盘菜单打开本窗口）</label>
+    <div class="row">
+      <button id="envRecheck">重新检测</button>
+      <button class="ghost" id="envCancelBtn" style="display:none">取消</button>
+      <button class="ghost" id="envCloseBtn" style="margin-left:auto">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -578,6 +655,7 @@ const M = {                       // 各种锁，共同决定该演哪个状态
   menuOpen: false,
   searchOpen: false,      // 文件搜索面板打开（与菜单同级：演"站立抬胳膊"）
   settingsOpen: false,    // 设置面板打开
+  envOpen: false,         // 环境自检向导打开
   chatOpen: false,        // 聊天面板打开（同上）
   chatBusy: false,        // harness 正在处理 → 演"操作中"，优先级高于菜单
   taskCount: 0,
@@ -610,7 +688,7 @@ function pickWeighted(list){
 function resolveState(){
   if (M.dragging) return 'grabbed';                        // 1 拖动中
   if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
-  if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置面板打开
+  if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen || M.envOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置/自检面板打开
   if (M.taskCount > 0) return 'working';                   // 3 长任务处理中
   if (M.react && now() < M.reactUntil) return M.react;     // 4 一次性动作(互动 / 松手落下)
   if (!opt.auto) return 'idle';
@@ -643,7 +721,7 @@ function rollLounge(){
 
 function tick(){
   if (M.react && now() >= M.reactUntil) M.react = null;
-  if (opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
+  if (opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
     rollLounge();
   }
@@ -853,6 +931,7 @@ function closeSearch(){
   S.seq++;                                   // 让在途响应作废
   els.search.classList.remove('show');
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  syncMirrorFromPanels();                    // 面板关了 → 抬手方向复位
   touch(); applyState();
 }
 function toggleSearch(){ S.open ? closeSearch() : openSearch(); }
@@ -870,9 +949,35 @@ function placePanel(el){                      // 通用：面板贴角色**左�
   if (hit) top = Math.max(MG, Math.min(r.top - h - GAP, innerHeight - h - MG));   // 兜底：搬到角色上方
   el.style.left = Math.round(left) + 'px';
   el.style.top  = Math.round(top) + 'px';
+  syncMirrorFromPanels();                      // 面板落在哪一侧 → 抬手动画跟着镜像
+}
+/* ---------- 镜像：任何"开在角色右侧"的界面都应让抬手指向右侧 ----------
+   原先只有 SAO 菜单算了镜像，文件搜索 / 聊天 / 设置 / 自检向导翻到右侧时没镜像 →
+   统一成：**看面板实际落在角色中心的哪一侧**（放置完之后再判，跟拖动/缩放/换边都自洽）。 */
+function panelOnRight(el){
+  if (!el || !el.classList.contains('show') || el.offsetWidth === 0) return null;
+  const r = pet.getBoundingClientRect(), b = el.getBoundingClientRect();
+  if (!b.width) return null;
+  return (b.left + b.width / 2) > (r.left + r.width / 2);   // 面板中心在角色中心右侧 → 需要镜像
+}
+function syncMirrorFromPanels(){
+  if (SAO.open) return;                        // SAO 菜单有自己更细的一套判定（按指尖方向），别抢
+  for (const el of [els.search, els.chat, els.settings, els.envwiz]){
+    const side = panelOnRight(el);
+    if (side !== null){ setPetMirror(side); return; }
+  }
+  setPetMirror(false);                         // 没有任何面板开着 → 复位
 }
 function placeSearch(){ placePanel(els.search); }
 function placeChat(){ placePanel(els.chat); }
+/** 角色被拖动 / 尺寸变化 / 窗口变化 → 让当前开着的面板全部跟着重摆（位置一变，镜像也跟着重算） */
+function replaceOpenPanels(){
+  if (SAO.open) positionSao();
+  if (S.open) schedulePlaceSearch();
+  if (C.open) schedulePlaceChat();
+  if (SET.open) placePanel(els.settings);
+  if (ENV.open) placePanel(els.envwiz);
+}
 
 function scheduleSearch(){
   clearTimeout(S.timer);
@@ -1333,7 +1438,7 @@ function closeMenu(){
   SAO.open=false;M.menuOpen=false;SAO.subRow=-1;SAO.subOf=-1;SAO.layoutTicket=(SAO.layoutTicket||0)+1;
   clearTimeout(SAO.hoverT);clearTimeout(SAO.leaveT);
   els.sao.classList.remove('show');els.saoSub.classList.remove('show');
-  setPetMirror(false);                       // 菜单关了 → 抬手方向复位
+  syncMirrorFromPanels();                    // 菜单关了 → 抬手方向复位（若有通用面板开着则由它接管）
   try{window.petHost?.sysInfoStop?.()?.catch?.(()=>{});window.petHost?.focusWindow?.(false);}catch(e){}
   syncPanelGuard();
   SAO.previousFocus?.focus?.({preventScroll:true});
@@ -1403,6 +1508,7 @@ function closeSettings(){
   syncPanelGuard();
   els.settings.classList.remove('show');
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  syncMirrorFromPanels();                    // 面板关了 → 抬手方向复位
   touch(); applyState();
 }
 function toggleSettings(){ SET.open ? closeSettings() : openSettings(); }
@@ -1490,7 +1596,7 @@ const C = { open:false, busy:false, msgs:[], t0:0, timer:0,
 function cHostOk(){ return !!(window.petHost && window.petHost.chat); }
 
 function syncPanelGuard(){        // 有任一面板打开 → 让主进程挂全局 Esc
-  try{ if (window.petHost && window.petHost.setPanelOpen) window.petHost.setPanelOpen(!!(SAO.open || S.open || C.open || SET.open)); }catch(e){}
+  try{ if (window.petHost && window.petHost.setPanelOpen) window.petHost.setPanelOpen(!!(SAO.open || S.open || C.open || SET.open || ENV.open)); }catch(e){}
 }
 
 /* ---------- harness 状态文案 ---------- */
@@ -1533,6 +1639,7 @@ function closeChat(){
   syncPanelGuard();
   els.chat.classList.remove('show');
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  syncMirrorFromPanels();                    // 面板关了 → 抬手方向复位
   touch(); applyState();
 }
 function toggleChat(){ C.open ? closeChat() : openChat(); }
@@ -1743,6 +1850,20 @@ async function init(){
   els.chat    = document.getElementById('chat');
   els.cmsg    = document.getElementById('cmsg');
   els.settings= document.getElementById('settings');
+  els.envwiz  = document.getElementById('envwiz');
+  els.envStatus = document.getElementById('envStatus');
+  els.envFlagHarness = document.getElementById('envFlagHarness');
+  els.envFlagEverything = document.getElementById('envFlagEverything');
+  els.envDescHarness = document.getElementById('envDescHarness');
+  els.envDescEverything = document.getElementById('envDescEverything');
+  els.envActHarness = document.getElementById('envActHarness');
+  els.envActEverything = document.getElementById('envActEverything');
+  els.envProgHarness = document.getElementById('envProgHarness');
+  els.envProgEverything = document.getElementById('envProgEverything');
+  els.envPhase = document.getElementById('envPhase');
+  els.envLogBox = document.getElementById('envLogBox');
+  els.envNoAsk = document.getElementById('envNoAsk');
+  els.envCancelBtn = document.getElementById('envCancelBtn');
   els.sao     = document.getElementById('sao');
   els.saoCard = document.getElementById('saoCard');
   els.saoCats = document.getElementById('saoCats');
@@ -1900,8 +2021,7 @@ function bindEvents(){
       doReact();
     } else {                              // 拖到位松手 → 落下动作 → 接待机
       clampToScreen(false);
-      schedulePlaceSearch();
-      schedulePlaceChat();
+      replaceOpenPanels();
       playOnce('drop');
     }
     touch();
@@ -1917,11 +2037,12 @@ function bindEvents(){
   //   这一下会落进页面里 → 角色被瞬移过去，误触率极高，用户已要求去掉）
   document.addEventListener('pointerdown', (e)=>{
     const t = e.target;
-    if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#sao'))) return;
+    if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao'))) return;
     closeMenu();
     if (SET.open) closeSettings();
     if (S.open) closeSearch();
     if (C.open) closeChat();
+    if (ENV.open && !ENV.busy) closeEnv();      // 部署进行中不因为点别处就关掉（日志还在滚）
     touch();
   });
 
@@ -1992,8 +2113,9 @@ function bindEvents(){
     else if (S.open) closeSearch();
   });
   if (window.petHost && window.petHost.onEsc) window.petHost.onEsc(()=>{   // 窗口失焦时由全局 Esc 兜底
-    if (SET.open) closeSettings(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
+    if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
   });
+  bindEnvPanel();      // 环境自检向导：按钮 / 勾选 / 日志流
   /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
   els.cinput.addEventListener('keydown', (e)=>{
     if (e.isComposing || e.keyCode===229) return;
@@ -2008,6 +2130,8 @@ function bindEvents(){
   document.getElementById('setSave').addEventListener('click', ()=> saveSettings());
   document.getElementById('setTest').addEventListener('click', ()=> testSettings());
   document.getElementById('setKeyClear').addEventListener('click', ()=> clearKeySettings());
+  const _envwizLink = document.getElementById('setEnvWiz');
+  if (_envwizLink) _envwizLink.addEventListener('click', ()=>{ closeSettings(); openEnv(); });
   document.getElementById('setDetect').addEventListener('click', async ()=>{
     document.getElementById('setRepo').value = '';
     setMsg('setRepoHint', '正在重新探测…');
@@ -2115,7 +2239,7 @@ function bindEvents(){
 
   els.size.addEventListener('input', (e)=>{ applySize(parseInt(e.target.value));
     document.getElementById('sizeVal').textContent = e.target.value;
-    if (SAO.open) positionSao(); schedulePlaceSearch(); schedulePlaceChat(); });
+    replaceOpenPanels(); });
   els.speed.addEventListener('input', (e)=>{
     baseRate = e.target.value / 100;
     applyRates();
@@ -2134,7 +2258,7 @@ function bindEvents(){
     if (e.code === 'Space'){ e.preventDefault(); doReact(); touch(); }
     if (e.key === 'Escape') closeMenu();
   });
-  addEventListener('resize', ()=>{ clampToScreen(false); if (SAO.open) positionSao(); schedulePlaceSearch(); schedulePlaceChat(); });
+  addEventListener('resize', ()=>{ clampToScreen(false); replaceOpenPanels(); });
 
   // 首次点击 → 解锁自动播放
   document.addEventListener('pointerdown', function unlock(){
@@ -2223,12 +2347,273 @@ function toast(msg){
      petAPI.setState(stateId)         —— 强制切状态（调试用）
      petAPI.moveTo(x,y) / getState() / getMode()
    ===================================================================== */
+/* ===================== 环境自检 + 一键部署向导 =====================
+   · 打开：托盘菜单「环境自检…」/ 设置面板附近 / 启动自检发现缺东西时自动弹
+   · 检测：全部在主进程做（env:check），本层只渲染与派发动作
+   · 部署：主进程跑 git clone / pnpm install / 下载解压 Everything，日志经 env:log 推进来
+   ================================================================= */
+const ENV = { open:false, busy:'', data:null, logs:[], phase:'', noAsk:false };
+const ENV_STATUS = {
+  ok:          ['ok',   '✓ 已就绪'],
+  nodeps:      ['warn', '⚠ 缺依赖'],
+  norepo:      ['bad',  '✗ 目录不对'],
+  missing:     ['bad',  '✗ 未就绪'],
+  'missing-es':['bad',  '✗ es.exe 缺失'],
+};
+
+function envFlag(id, status){
+  const el = id === 'harness' ? els.envFlagHarness : els.envFlagEverything;
+  if (!el) return;
+  const m = ENV_STATUS[status] || ['warn', '? ' + status];
+  el.className = 'cflag ' + m[0];
+  el.textContent = m[1];
+}
+function envActions(id, html){ const el = id === 'harness' ? els.envActHarness : els.envActEverything; if (el) el.innerHTML = html || ''; }
+function envDesc(id, html){ const el = id === 'harness' ? els.envDescHarness : els.envDescEverything; if (el) el.innerHTML = html || ''; }
+function envEsc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, (c)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+function envBtn(label, attr, cls){ return `<button class="${cls||''}" ${attr}>${envEsc(label)}</button>`; }
+
+async function openEnv(){
+  if (SET.open) closeSettings();          // 面板互斥：同时只留一个
+  if (S.open) closeSearch();
+  if (C.open) closeChat();
+  closeMenu();
+  ENV.open = true; M.envOpen = true;
+  syncPanelGuard();
+  els.envwiz.classList.add('show');
+  placePanel(els.envwiz);
+  try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(true); }catch(e){}
+  touch(); applyState();
+  await refreshEnv();
+}
+function closeEnv(){
+  if (!ENV.open) return;
+  ENV.open = false; M.envOpen = false;
+  syncPanelGuard();
+  els.envwiz.classList.remove('show');
+  try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
+  syncMirrorFromPanels();                    // 向导关了 → 抬手方向复位
+  touch(); applyState();
+}
+function toggleEnv(){ ENV.open ? closeEnv() : openEnv(); }
+
+async function refreshEnv(){
+  if (!(window.petHost && window.petHost.envCheck)){
+    els.envStatus.textContent = '浏览器 Demo 没有检测通道';
+    return;
+  }
+  els.envStatus.textContent = '检测中…';
+  let r = null;
+  try{ r = await window.petHost.envCheck(); }catch(e){ r = { ok:false, error:(e&&e.message)||String(e) }; }
+  if (!r || !r.ok){ els.envStatus.textContent = '检测失败：' + ((r&&r.error)||'未知错误'); return; }
+  ENV.data = r;
+  els.envNoAsk.checked = !!r.noAsk;
+  renderEnv(r);
+  if (ENV.open) placePanel(els.envwiz);      // 内容撑高后重新摆位，别让面板溢出屏幕
+}
+
+function renderEnv(r){
+  const t = r.tools || {};
+  const toolLine = `git <b>${envEsc((t.git&&t.git.version)||'未装')}</b> · node <b>${envEsc((t.node&&t.node.version)||'未装')}</b> · pnpm <b>${envEsc((t.pnpm&&t.pnpm.version)||'未装')}</b>`;
+  const items = r.items || [];
+  const okCount = items.filter((i)=>i.status==='ok').length;
+  els.envStatus.textContent = r.allOk ? '全部就绪 ✓' : `有 ${items.length - okCount} 项需要处理`;
+
+  /* ---- harness 卡片 ---- */
+  const h = items.find((i)=>i.id==='harness') || { status:'missing' };
+  envFlag('harness', h.status);
+  envDesc('harness', `状态：${envEsc(h.detail || '')}<br>工具链：${toolLine}`);
+  let ha = '';
+  if (h.status === 'ok'){
+    ha = envBtn('去设置里测试连接', 'data-env-act="harness-settings"', 'ghost');
+  } else if (h.status === 'nodeps'){
+    ha = envBtn('在这份仓库上装依赖', 'data-env-act="harness-install"') +
+         envBtn('换目录部署', 'data-env-act="harness-deploy"', 'ghost') +
+         envBtn('浏览…指定已有仓库', 'data-env-act="harness-browse"', 'ghost');
+  } else {
+    ha = envBtn('一键部署（选目录）', 'data-env-act="harness-deploy"') +
+         envBtn('浏览…指定已有仓库', 'data-env-act="harness-browse"', 'ghost') +
+         envBtn('打开仓库主页', 'data-env-act="harness-open"', 'ghost');
+  }
+  if (!(t.git && t.git.ok)) ha += '<span class="hint bad">先装 Git 才能自动克隆</span>';
+  else if (!(t.pnpm && t.pnpm.ok)) ha += '<span class="hint bad">没找到 pnpm（<code>npm i -g pnpm</code>）</span>';
+  envActions('harness', ha);
+
+  /* ---- Everything 卡片 ---- */
+  const ev = items.find((i)=>i.id==='everything') || { status:'missing' };
+  envFlag('everything', ev.status);
+  const evLines = ['状态：' + envEsc(ev.detail || '')];
+  if (ev.foundExe) evLines.push('检测到已有的 Everything：' + envEsc(ev.foundExe) + (ev.foundIsDeployed ? '（就是本程序之前部署的那份）' : ''));
+  else if (ev.deployedExe) evLines.push('已部署位置：' + envEsc(ev.deployedExe) + (ev.deployedOk ? '' : '（文件不在了）'));
+  evLines.push('搜索组件 es.exe：' + (ev.esExeOk ? '已在程序内' : '缺失'));
+  if (ev.status !== 'ok') evLines.push('<span class="hint">Everything 首次运行可能请求管理员权限（读 NTFS 索引）；不给也能用，只会退化成扫描模式。</span>');
+  envDesc('everything', evLines.join('<br>'));
+  let ea = '';
+  if (ev.running){
+    ea = envBtn('已就绪，把 Everything 调到前台', 'data-env-act="ev-open"', 'ghost');
+  } else {
+    if (ev.foundExe) ea += envBtn('用检测到的这份启动', 'data-env-act="ev-use-found"');
+    else if (ev.deployedOk) ea += envBtn('启动已部署的 Everything', 'data-env-act="ev-launch"');
+    ea += envBtn('自动下载并部署（选目录）', 'data-env-act="ev-deploy"') +
+          envBtn('打开官网下载页', 'data-env-act="ev-site"', 'ghost');
+  }
+  envActions('everything', ea);
+  renderEnvLog();
+  if (ENV.open) placePanel(els.envwiz);      // 卡片高度会变 → 跟着重量一次位置
+}
+
+function envLogPush(evt){
+  ENV.logs.push(evt);
+  if (ENV.logs.length > 300) ENV.logs.shift();
+  renderEnvLog();
+}
+function renderEnvLog(){
+  if (!els.envLogBox) return;
+  const lines = [];
+  for (const e of ENV.logs){
+    if (e.kind === 'log') lines.push(envEsc(e.line));
+    else if (e.kind === 'progress') lines.push(`… 下载 ${envEsc(e.pct)}%（${Math.round((e.got||0)/1048576)}MB${e.total ? ' / ' + Math.round(e.total/1048576) + 'MB' : ''}）`);
+    else if (e.kind === 'phase') lines.push('▶ ' + envEsc(e.text));
+  }
+  els.envLogBox.innerHTML = lines.slice(-120).join('\n');
+  els.envLogBox.style.display = lines.length ? 'block' : 'none';
+  els.envLogBox.scrollTop = els.envLogBox.scrollHeight;
+  els.envPhase.textContent = ENV.phase || (ENV.busy ? '部署中…' : '');
+  for (const [p, mine] of [[els.envProgHarness, ENV.busy === 'harness'], [els.envProgEverything, ENV.busy === 'everything']]){
+    if (!p) continue;
+    p.style.display = mine ? 'block' : 'none';
+    const bar = p.querySelector('i');
+    if (bar){
+      const last = [...ENV.logs].reverse().find((e)=>e.kind==='progress');
+      bar.style.width = (mine && last ? last.pct : 0) + '%';
+    }
+  }
+  if (els.envCancelBtn) els.envCancelBtn.style.display = ENV.busy ? 'inline-block' : 'none';
+}
+function envBusy(on, id, phase){
+  ENV.busy = on ? (id || '') : '';
+  ENV.phase = on ? (phase || '准备中…') : '';
+  if (on) ENV.logs = [];
+  if (on) els.envStatus.textContent = '部署中…';
+  for (const b of els.envwiz.querySelectorAll('.act button')) b.disabled = !!on;
+  renderEnvLog();
+}
+
+/* ---- 按钮动作 ---- */
+async function envDeploy(id, explicitDir){
+  const fn = id === 'everything' ? window.petHost && window.petHost.envDeployEverything
+                                 : window.petHost && window.petHost.envDeployHarness;
+  if (!fn) return toast('浏览器 Demo 不支持部署');
+  let dir = explicitDir || '';
+  if (!dir){
+    const o = await window.petHost.envPickDir({
+      title: id === 'everything' ? '选择 Everything 解压到哪个目录' : '选择把 harness 克隆到哪个目录（建议用空目录）',
+      sub:   id === 'everything' ? 'Everything' : 'deepseek-harness',
+    });
+    if (!o || !o.ok){ toast(o && o.canceled ? '已取消' : ('选目录失败：' + ((o&&o.error)||''))); return; }
+    dir = o.path;
+  }
+  envBusy(true, id, id === 'everything' ? '查询官方最新版…' : '检查工具链…');
+  toast(id === 'everything' ? '开始部署 Everything…' : '开始部署 harness（要下载依赖，可能几分钟）…');
+  let r = null;
+  try{
+    r = id === 'everything' ? await window.petHost.envDeployEverything({ dir })
+                            : await window.petHost.envDeployHarness({ dir, useMirror: true });
+  }catch(e){ r = { ok:false, error:(e&&e.message)||String(e) }; }
+  envBusy(false);
+  if (r && r.ok){
+    toast(id === 'everything' ? 'Everything 部署完成，已启动' : 'harness 部署完成');
+    envLogPush({ kind:'log', line:'✓ 完成：' + (r.dir || '') });
+  } else {
+    toast('部署失败：' + ((r&&r.error)||'未知错误'));
+    envLogPush({ kind:'log', line:'✗ 失败：' + ((r&&r.error)||'未知错误') });
+  }
+  await refreshEnv();
+  return r;
+}
+
+async function envClick(e){
+  const btn = e.target.closest && e.target.closest('[data-env-act]');
+  if (!btn || ENV.busy) return;
+  const act = btn.getAttribute('data-env-act');
+  if (act === 'harness-settings') return openSettings();
+  if (act === 'harness-open')     return window.petHost.envOpenUrl('https://github.com/deepseek-ai/deepseek-harness');
+  if (act === 'ev-site')          return window.petHost.envOpenUrl('https://www.voidtools.com/zh-cn/downloads/');
+  if (act === 'ev-open'){         // 已在运行：把窗口叫到前台
+    return window.petHost.envLaunchEverything();
+  }
+  if (act === 'ev-launch'){
+    const r = await window.petHost.envLaunchEverything();
+    if (!r || !r.ok) toast('启动失败：' + ((r&&r.error)||''));
+    else { toast('已启动 Everything，稍等再检测'); setTimeout(refreshEnv, 3000); }
+    return;
+  }
+  if (act === 'ev-deploy')      return envDeploy('everything');
+  if (act === 'ev-use-found'){                          // 用检测到的那一份（用户自己下载的便携版）
+    const found = ((ENV.data && (ENV.data.items||[]).find((i)=>i.id==='everything')) || {}).foundExe || '';
+    if (!found) return toast('没有检测到已有的 Everything');
+    const r = await window.petHost.envLaunchEverything(found);
+    if (!r || !r.ok) toast('启动失败：' + ((r&&r.error)||''));
+    else { toast('已用检测到的那份启动，稍等再检测'); setTimeout(refreshEnv, 3500); }
+    return;
+  }
+  if (act === 'harness-deploy') return envDeploy('harness');
+  if (act === 'harness-install'){                       // 已有仓库、只补依赖
+    const repo = ((ENV.data && (ENV.data.items||[]).find((i)=>i.id==='harness')) || {}).repo || '';
+    if (!repo) return toast('没检测到仓库路径');
+    return envDeploy('harness', repo);
+  }
+  if (act === 'harness-browse'){
+    const o = await window.petHost.browseRepo();
+    if (o && o.ok && o.valid){
+      try{ await window.petHost.setConfig({ harness:{ repo:o.path } }); }catch(err){}
+      toast('已指定：' + o.path);
+      await refreshEnv();
+    } else toast(o && o.ok ? '这个目录里没有 apps/cli/src/bin.ts，不是 harness 仓库' : '已取消');
+    return;
+  }
+}
+
+function bindEnvPanel(){
+  if (!els.envwiz) return;
+  els.envwiz.addEventListener('click', (e)=>envClick(e));
+  els.envwiz.addEventListener('keydown', (e)=>{ if (e.key === 'Escape'){ e.stopPropagation(); closeEnv(); } });
+  const rc = document.getElementById('envRecheck');
+  if (rc) rc.addEventListener('click', ()=>refreshEnv());
+  const cb = document.getElementById('envCloseBtn');
+  if (cb) cb.addEventListener('click', ()=>closeEnv());
+  if (els.envCancelBtn) els.envCancelBtn.addEventListener('click', async ()=>{
+    const id = ENV.busy; if (!id) return;
+    const r = await window.petHost.envCancel(id);
+    toast(r && r.ok ? '已请求取消…' : '没有正在进行的任务');
+  });
+  if (els.envNoAsk) els.envNoAsk.addEventListener('change', async ()=>{
+    const r = await window.petHost.envDismiss(els.envNoAsk.checked);
+    if (!r || !r.ok) toast('保存失败');
+  });
+  if (window.petHost && window.petHost.onEnvLog) window.petHost.onEnvLog((evt)=>{ if (!evt) return; envLogPush(evt); });
+}
+
 window.petAPI = {
   /* 测试/自动化钩子：把 harness 事件流直接注入页面（真实运行时是主进程推过来的） */
   __rebindHost:    ()=> initHostBridge(),   // 测试用：换了宿主对象后重绑（真程序 preload 先注入，不需要）
   __harnessEvent:  (evt)=> onHarnessEvent(evt),
   __harnessStatus: (st)=>  onHarnessStatus(st),
   openSettings: ()=> openSettings(),
+  /* ---- 环境自检向导（供托盘菜单 / 启动自检 / 验收脚本调用）---- */
+  openEnv:  ()=> openEnv(),
+  closeEnv: ()=> closeEnv(),
+  toggleEnv:()=> toggleEnv(),
+  envState: ()=>({ open: ENV.open, busy: ENV.busy, noAsk: !!(els.envNoAsk && els.envNoAsk.checked),
+                   status: (els.envStatus && els.envStatus.textContent) || '',
+                   flags: { harness: (els.envFlagHarness && els.envFlagHarness.textContent) || '',
+                            everything: (els.envFlagEverything && els.envFlagEverything.textContent) || '' },
+                   actions: { harness: [...(els.envActHarness ? els.envActHarness.querySelectorAll('button') : [])].map((b)=>b.textContent.trim()),
+                              everything: [...(els.envActEverything ? els.envActEverything.querySelectorAll('button') : [])].map((b)=>b.textContent.trim()) },
+                   logs: ENV.logs.slice(-8), phase: ENV.phase, busyId: ENV.busy }),
+  __envRefresh: ()=> refreshEnv(),
+  __envDeploy:  (id, dir)=> envDeploy(id, dir),     // 验收用：跳过选目录对话框
+  __envClick:   (act)=>{ const b = els.envwiz.querySelector(`[data-env-act="${act}"]`); if (b){ b.click(); return true; } return false; },
   saoState: ()=>({ open:SAO.open, cat:SAO.cat, subRow:SAO.subRow, mirror:SAO.mirror,
                    cats:[...document.querySelectorAll('#saoCats .cat')].map((b)=>b.dataset.cat),
                    rows:[...document.querySelectorAll('#saoList .row')].map((b)=>b.textContent.trim()),
