@@ -69,6 +69,21 @@ contextBridge.exposeInMainWorld('petHost', {
   browseRepo: () => ipcRenderer.invoke('config:browseRepo'),   // 打开"选择文件夹"对话框选 harness 仓库
   detectRepo: () => ipcRenderer.invoke('config:detect'),       // 重新自动探测（不吃缓存）
 
+  /* ---- 环境自检 + 一键部署（harness / Everything）---- */
+  envCheck:   () => ipcRenderer.invoke('env:check', { quick: false }),
+  envPickDir: (o) => ipcRenderer.invoke('env:pickDir', o || {}),
+  envDeployHarness:   (o) => ipcRenderer.invoke('env:deployHarness', o || {}),
+  envDeployEverything:(o) => ipcRenderer.invoke('env:deployEverything', o || {}),
+  envLaunchEverything:()  => ipcRenderer.invoke('env:launchEverything'),
+  envCancel:  (id) => ipcRenderer.invoke('env:cancel', id),
+  envDismiss: (on) => ipcRenderer.invoke('env:dismiss', !!on),
+  envOpenUrl: (u) => ipcRenderer.invoke('env:openUrl', u),
+  onEnvLog: (cb) => {                                          // 部署日志/进度流
+    const h = (_e, evt) => { try { cb(evt); } catch (e) {} };
+    ipcRenderer.on('env:log', h);
+    return () => ipcRenderer.removeListener('env:log', h);
+  },
+
   /* ---- 面板打开状态 → 主进程据此临时注册全局 Esc ---- */
   setPanelOpen: (on) => ipcRenderer.send('pet:panel', !!on),
   onEsc: (cb) => {

@@ -87,6 +87,18 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.1.3**
+  - **修：文件搜索 / 聊天 / 设置 / 自检这些面板翻到角色右侧时，抬手动画不会镜像**（v0.1.2 只做了 SAO 菜单那条路径）。
+    现在统一成"**看面板实际落在角色中心哪一侧**"来判定：放置完成后重算，拖动、缩放、换边都自洽；面板关闭即复位。
+    验收：`--panelmirrortest` 行为矩阵 **10/10**（5 个界面 × 角色在左/在右），
+    像素级比对 **7/7**（面板场景：开镜像 vs 绕站姿中轴翻转残差 **1.69/255**，不翻转对照 52.72，平移负例 110.96，轴位偏移 **+0.00px**）；菜单场景无退化（1.68/255）。
+  - **新增「环境自检」向导 + 一键部署**：启动时快检（不联网、不扫盘、≤2.5 秒），缺东西且没勾"不再提示"才弹一次；
+    托盘菜单常驻「🩺 环境自检…」随时可重跑。
+    - **Everything**：自动从**官方源**下载便携版 → 校验**官方 SHA256 清单**里对应的那一行 → 解压到你选的目录 → 顺手启动；
+      也会**自动发现你机器上已有的 Everything**（`Downloads\Everything-*\`、`%LOCALAPPDATA%\Everything`、Program Files 等）优先复用；一键打开官网下载页也在。
+    - **DeepSeek Harness**：检测仓库 / 依赖（`node_modules/tsx`）/ 工具链（git、node、pnpm 版本）→「一键部署」= 浅克隆到指定目录 + `pnpm install`（默认走 npmmirror 国内镜像，带实时日志、进度、可取消）；也可「浏览…」指定已有仓库，或只补装依赖。
+    - 部署动作只在用户点按钮后联网；**不随包分发第三方二进制**（Everything 走官方源、harness 走官方仓库，均为使用者自己机器上的按需获取）。
+  - 新增自检入口 `--envcheck`（环境 JSON）、`--envdeploy=<everything|harness>:<目录>`（非交互部署，验收用）、`--panelmirrortest`（面板镜像矩阵）。
 - **v0.1.2**
   - **菜单翻到角色右侧时，抬手动画自动水平镜像**：绕「站姿中轴」（实测 x=413/900，即脚部跨距中心）翻转，
     脚不动、角色不位移，抬手指向与菜单同侧；菜单关闭即复位。镜像同时映射到逐像素命中测试（否则镜像后点击位置会与画面错位）。
@@ -445,8 +457,12 @@ electron . --bench                      # 五阶段：初始/7路全解/只留�
 桌宠.exe --searchtest="ext:pdf"                       # Everything 查询 → 打印 JSON
 桌宠.exe --detecttest --exit-after-test               # 环境探测：harness 仓库 / es.exe / node 来源 / 版本
 桌宠.exe --repotest="D:\\deepseek-harness\\src\\apps\\cli\\src" --exit-after-test   # 验"浏览…"选目录后的归一化
-桌宠.exe --mirrortest --exit-after-test               # 菜单翻面 + 抬手镜像（并产出 4 张裁剪图）
-python tools/check-mirror-pixels.py                   # 上面那 4 张图的像素级比对（翻面等价性/命中一致性/负例）
+桌宠.exe --mirrortest --exit-after-test               # 菜单 + 面板两个场景各产出 4 张裁剪图（MIRRORTEST / MIRRORTEST_PANEL）
+python tools/check-mirror-pixels.py <自检输出>          # 菜单场景的像素级比对（翻面等价性/命中一致性/负例）
+python tools/check-mirror-pixels.py <自检输出> "--prefix=MIRRORTEST_PANEL "   # 面板场景（搜索/聊天/设置/自检）同一套判据
+桌宠.exe --panelmirrortest --exit-after-test           # 面板镜像矩阵：5 个界面 × 角色在左/在右（10 项）
+桌宠.exe --envcheck --exit-after-test                 # 环境自检：harness / Everything / 工具链 → JSON
+桌宠.exe "--envdeploy=everything:D:\Everything" --exit-after-test   # 非交互部署 Everything（真下载+校验+解压，验收用）
 桌宠.exe --chattest="只回答两个字：成功"                # harness 聊天 → 打印 JSON
 # 界面自检（真渲染器里跑完整链路，结果打到 stdout，可加 --exit-after-test）
 桌宠.exe --searchui="桌宠"                             # 开搜索面板 → 灌查询 → 读回渲染结果+几何
@@ -457,6 +473,19 @@ python tools/check-mirror-pixels.py                   # 上面那 4 张图的像
 ⚠ 起测试服务时**别用 8899**：本机 `MiPCAudio.exe`（小米电脑管家）占着 `0.0.0.0:8899`，
 自绑 `127.0.0.1:8899` 会被它顶掉/串线（表现是 curl 返回 000、预览页空白）。用 `8917` 之类没人用的端口：
 `python -m http.server 8917 --bind 127.0.0.1`（在 `web/` 目录下）。
+
+### 10.5 环境自检向导与一键部署（v0.1.3）
+
+托盘菜单「🩺 环境自检…」或启动时的自动快检（**缺东西且没勾"不再提示"才弹一次**）。
+
+- **启动快检只做便宜的事**：harness 查仓库路径 + `apps/cli/src/bin.ts` + `node_modules/tsx` + 工具链版本；
+  Everything 只探 ≤2 次实例（每次 2.5 秒预算）——不联网、不扫盘，不拖慢启动。
+- **慢动作一律等用户点了才做**：下载/解压/克隆/装依赖都在主进程跑，日志与进度经 `env:log` 推到面板，**可取消**（Windows 上杀进程树）。
+- **第三方只从官方源拿**：Everything 走 `www.voidtools.com` 的便携版 + 官方 sha256 清单（清单是多文件格式，按文件名取对应行再比对）；
+  harness 走 `github.com/deepseek-ai/deepseek-harness`。装不成会给出确切原因（缺 git / 缺 pnpm / 网络不通 / 目录非空）。
+- **工具链探测避开 Windows 坑**：`where.exe` 会把没有扩展名的 shim 排在 `.cmd` 前面，Node 跑不起来，
+  所以按 `.cmd → .exe → .bat → 无扩展名` 逐候选**真跑一次 `--version`**，取第一个能跑通的；
+  解压 zip 一律用 `%SystemRoot%\System32\tar.exe`（git-bash 的 `/usr/bin/tar` 会把 `C:\` 当远程主机而失败），失败再退 PowerShell `Expand-Archive`。
 
 状态机回归自检：浏览器打开 `web/_interaction_test.html`（真实渲染，11 组 / 56 项断言，含两个面板的
 "不遮挡角色 / 在角色左侧 / 垂直居中 / 打开时演站立抬胳膊 / harness 处理中演操作中"）。
@@ -498,7 +527,7 @@ python tools/check-mirror-pixels.py                   # 上面那 4 张图的像
 | 个人信息扫描 | 无 | **出包前硬门禁**：扫到 API key / 用户名 / 个人路径 / 业务敏感词就拒绝出包 |
 | 首用说明 | 简版 | 完整版（含"key 填在哪、需要装什么"） |
 
-**发布版怎么做到"集成 harness/Everything 但不含我的个人信息"**：
+**发布版怎么做到"零配置用上 harness/Everything，又不含我的个人信息"**：
 
 1. **API key 从不进包**：key 由使用者自己在桌宠的**设置面板**里填，只存本机
    （`%APPDATA%\桌宠\settings.json`，Electron `safeStorage`＝Windows 凭据加密），
@@ -509,9 +538,14 @@ python tools/check-mirror-pixels.py                   # 上面那 4 张图的像
    清掉后恢复正常（证明清除后走使用者自有凭据）。
 2. **harness 仓库位置自动探测**：配置 → `DSH_HARNESS_REPO` → 常见位置（`%USERPROFILE%\deepseek-harness\src`、`C:/D:/F:` 各盘）；
    找不到就在聊天面板给明确指引。
-3. **Everything 集成**：随包带官方 `es.exe`，用使用者本机的 Everything（自动探测实例名 1.5a/1.4）；
-   没装 Everything 时搜索不可用，其它功能不受影响，设置面板里会显示状态。
-4. **扫不到个人信息才算过**：`pack_release.py` 出包后会自动复扫（也可单独跑
+3. **Everything 不随包分发**（v0.1.3 起）：随包只带官方 `es.exe`（命令行客户端）。Everything 本体由**使用者自己在自己机器上按需获取**：
+   启动自检发现没在运行时，「环境自检」向导给三条路——① 自动从官方源下载便携版（下载后**对照官方 sha256 清单**校验，再解压到自选目录并启动）；
+   ② **复用机器上已有的那份**（自动探测 `Downloads\Everything-*`、`%LOCALAPPDATA%\Everything`、`Program Files\Everything` 等）；③ 打开官网自己安装。
+   三条都走不通时只是搜索不可用，其它功能不受影响，面板里会写明状态。
+4. **harness 也不随包分发**：许可上没问题（仓库 MIT），但装完依赖是 **1837MB**，且大头全是桌宠用不上的开发依赖
+   （`@openai/codex` 354MB、`electron` 332MB、`claude-agent-sdk` 254MB…）——做进包里等于把 160MB 的安装包干到 2GB。
+   向导改成「一键部署」：`git clone --depth 1` 到你选的目录 + `pnpm install`（默认 npmmirror 国内镜像，实时日志/进度/可取消）。
+5. **扫不到个人信息才算过**：`pack_release.py` 出包后会自动复扫（也可单独跑
    `python pack_release.py --scan-only dist\桌宠_发布版`）。
 
 **发布版实测**（在成品目录里跑）：通道检查 CHANNELS-PASS ✔ / Everything 搜索真结果 ✔ /

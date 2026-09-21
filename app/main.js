@@ -1,5 +1,6 @@
 // 桌宠桌面版主进程：全屏透明窗口 + 逐像素点击穿透 + 托盘 + Everything 文件搜索
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, shell, clipboard, globalShortcut, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, shell, clipboard, globalShortcut, safeStorage, dialog, net } = require('electron');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -30,6 +31,19 @@ const REPOTEST = (() => {
 })();
 // --mirrortest：菜单翻面与"抬手镜像"的验收自检（跑完打印 JSON，另存两张裁剪图供像素级比对）
 const MIRRORTEST = process.argv.includes('--mirrortest');
+// --envcheck：打印环境自检结果（harness / Everything / 工具链）JSON 后退出（发布验收用）
+const ENVCHECK = process.argv.includes('--envcheck');
+// --envdeploy=<everything|harness>:<目录>：非交互跑一次部署并打印结果 JSON（验收用；--no-mirror 关掉国内镜像）
+const ENVDEPLOY = (() => {
+  const a = process.argv.find((x) => x.startsWith('--envdeploy='));
+  if (a === undefined) return null;
+  const v = a.slice('--envdeploy='.length);
+  const i = v.indexOf(':');
+  return i < 0 ? { id: v, dir: '' } : { id: v.slice(0, i), dir: v.slice(i + 1) };
+})();
+// 任何自检模式：跳过"启动弹向导"这类打扰用户的行为
+const TESTMODE = ['--envcheck', '--envdeploy=', '--detecttest', '--mirrortest', '--searchtest=',
+                  '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest'].some((p) => process.argv.some((a) => a.startsWith(p)));
 const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
@@ -450,6 +464,419 @@ async function searchEverything(query, limit) {
   return { ok: true, instance: inst, results, total: results.length };
 }
 
+/* ---------- 环境自检 + 一键部署（Everything / DeepSeek Harness）----------
+   设计取舍：
+     · **启动时只做"快检"**：不联网、不扫盘，Everything 只探一次运行状态（≤2.5 秒预算），
+       harness 只查「仓库路径 → 关键文件 → 工具链版本」；慢动作（下载/克隆/装依赖）一律等用户点了才做。
+     · 部署任务全在主进程跑，日志与进度用 IPC 推给向导面板，每个任务可取消（Windows 上杀进程树）。
+     · 第三方程序只从**官方源**下载，且先校验官方 sha256 再解压；不随包分发第三方二进制。
+   ===================================================================== */
+const HARNESS_REPO_URL = 'https://github.com/deepseek-ai/deepseek-harness';
+const HARNESS_CLONE_URL = process.env.PET_HARNESS_CLONE_URL || HARNESS_REPO_URL;   // 验收时可指向小仓库
+const NPM_MIRROR = 'https://registry.npmmirror.com';
+const EVERYTHING_PAGE = 'https://www.voidtools.com/zh-cn/downloads/';
+const EVERYTHING_FALLBACK_ZIP = 'https://www.voidtools.com/Everything-1.5.0.1423b.x64.zip';
+
+function whereList(name) {
+  try {
+    const probe = process.platform === 'win32' ? 'where.exe' : 'which';
+    const r = require('node:child_process').spawnSync(probe, [name], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    return String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  } catch (e) { return []; }
+}
+/** PATH 上的同名候选（Windows 上 where 会把无扩展名的 sh 脚本排在 .cmd 前面——Node 不能直接跑它，故按扩展名排一遍） */
+function exeCandidates(name) {
+  const out = [];
+  const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', ''] : [''];
+  for (const ext of exts) for (const p of whereList(name + ext)) if (!out.includes(p)) out.push(p);
+  return out;
+}
+function tryRun(exe, args) {
+  try {
+    const r = require('node:child_process').spawnSync(exe, args, { encoding: 'utf8', timeout: 8000, windowsHide: true,
+                                                                   shell: /\.(cmd|bat)$/i.test(exe) });
+    const out = (String(r.stdout || '') + String(r.stderr || '')).trim().split(/\r?\n/)[0] || '';
+    return { ok: r.status === 0, out: out.trim() };
+  } catch (e) { return { ok: false, out: '' }; }
+}
+/** 逐个候选真跑一次 --version，取第一个能跑通的（避免选到跑不起来的 shim） */
+function toolVer(name, args) {
+  const a = args || ['--version'];
+  for (const p of exeCandidates(name)) {
+    const r = tryRun(p, a);
+    if (r.ok) return { ok: true, version: r.out, path: p };
+  }
+  return { ok: false, version: '', path: '' };
+}
+function semverCmp(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+function envTools() {
+  const t = {};
+  const tidy = (v) => String(v || '').replace(/^git version\s*/i, '').replace(/^v(?=\d)/, '');
+  t.git = toolVer('git'); t.git.version = tidy(t.git.version);
+  t.node = toolVer('node');
+  t.pnpm = toolVer('pnpm');
+  // Electron 自带的 node 也能跑 harness（chat 用它兜底），但装依赖需要真正的 node/pnpm
+  t.electronNode = { ok: true, version: 'v' + process.versions.node, path: '(Electron 自带)' };
+  t.nodeOk = !!t.node.ok && (semverCmp(t.node.version.replace(/^v/, ''), '22.19') >= 0);
+  t.pnpmOk = !!t.pnpm.ok;
+  return t;
+}
+function envHarnessStatus() {
+  const cfg = loadCfg();
+  const repo = cfg.harness.repo || loadState().harnessRepo || detectRepo();
+  const bin = repo ? path.join(repo, 'apps', 'cli', 'src', 'bin.ts') : '';
+  const hasBin = !!bin && fs.existsSync(bin);
+  const hasTsx = !!repo && fs.existsSync(path.join(repo, 'node_modules', 'tsx'));
+  const t = envTools();
+  let status = 'missing';
+  if (hasBin && hasTsx) status = 'ok';
+  else if (hasBin) status = 'nodeps';           // 克隆了但没装依赖
+  else if (repo && fs.existsSync(repo)) status = 'norepo';
+  const detail = {
+    ok: '已就绪：' + repo,
+    nodeps: (repo || '') + '（缺依赖：需要在该目录跑 pnpm install）',
+    norepo: (repo || '') + '（目录里没有 apps/cli/src/bin.ts）',
+    missing: '没有找到 harness 仓库',
+  }[status];
+  return { id: 'harness', name: 'DeepSeek Harness（聊天用）', status, repo, hasBin, hasTsx,
+           detail, tools: t, fix: status === 'ok' ? '' : 'harness' };
+}
+/** 在常见位置找一份已经存在的 Everything.exe（用户自己下载/装过的都算） */
+function findExistingEverything() {
+  const home = app.getPath('home');
+  const direct = [
+    (loadCfg().everything || {}).exe,
+    path.join(process.env.LOCALAPPDATA || '', 'Everything', 'Everything.exe'),
+    'C:\\Program Files\\Everything\\Everything.exe',
+    'C:\\Program Files (x86)\\Everything\\Everything.exe',
+    path.join(home, 'Everything', 'Everything.exe'),
+  ].filter(Boolean);
+  for (const p of direct) { try { if (fs.existsSync(p)) return p; } catch (e) {} }
+  // 再扫一层很常见的"下载/桌面里解压出来的目录"：<家>\Downloads\Everything-1.5.0.1408a.x64\Everything.exe 这种
+  for (const dir of ['Downloads', 'Desktop', 'Documents']) {
+    let ents = [];
+    try { ents = fs.readdirSync(path.join(home, dir), { withFileTypes: true }); } catch (e) { continue; }
+    for (const e of ents) {
+      if (!e.isDirectory() || !/^everything/i.test(e.name)) continue;
+      const hit = findFile(path.join(home, dir, e.name), 'Everything.exe', 2);
+      if (hit) return hit;
+    }
+  }
+  return '';
+}
+async function envEverythingStatus(quick) {
+  const cfg = loadCfg();
+  const es = esPath();
+  const deployed = (cfg.everything && cfg.everything.exe) || '';
+  const existing = findExistingEverything();
+  const p = quick ? await quickEsInstance() : await probeEsInstance();
+  const esMissing = !es;
+  return { id: 'everything', name: 'Everything（文件搜索用）', status: esMissing ? 'missing-es' : (p.running ? 'ok' : 'missing'),
+           running: p.running,
+           detail: esMissing ? '程序自带的 es.exe 不见了（重装或重新解压安装包）'
+                 : p.running ? ('Everything 正在运行' + (p.instance ? '（实例 ' + p.instance + '）' : '（默认实例）'))
+                             : (existing ? 'Everything 没有在运行，但检测到你机器上已经有一份' : 'Everything 没有在运行（文件搜索会提示未检测到）'),
+           esExe: es, esExeOk: !esMissing, instance: p.instance || '',
+           deployedExe: deployed, deployedOk: !!deployed && fs.existsSync(deployed),
+           foundExe: existing, foundIsDeployed: !!(existing && deployed && existing === deployed),
+           fix: (p.running && !esMissing) ? '' : 'everything' };
+}
+/** 快检 Everything：只试两个实例名（已记住的 + 默认），预算 ~2.5 秒/次 —— 启动时不要卡住 */
+async function quickEsInstance() { return probeEsInstance(2, 2500); }
+async function probeEsInstance(maxTries, timeoutMs) {
+  const cands = [];
+  const saved = loadState().esInstance;
+  if (typeof saved === 'string') cands.push(saved);
+  for (const c of ES_INSTANCES) if (!cands.includes(c)) cands.push(c);
+  for (const c of cands.slice(0, maxTries || cands.length)) {
+    if (!esPath()) break;
+    const r = await runEs(instanceArgs(c).concat(['-n', '1', '*']), timeoutMs || 6000);
+    const out = String(r.stdout || '').trim();
+    const errLine = String(r.stderr || '').split(/\r?\n/).map((s) => s.trim()).find((l) => /^Error\s+\d+/i.test(l)) || '';
+    if (r.ok && out && !errLine && !/^Error\s+\d+/i.test(out)) return { running: true, instance: c };
+  }
+  return { running: false, instance: '' };
+}
+async function envCheck(opts) {
+  const quick = !opts || opts.quick !== false;
+  const items = [envHarnessStatus(), await envEverythingStatus(quick)];
+  return {
+    ok: true, version: APP_VERSION, quick,
+    items,
+    tools: envTools(),
+    noAsk: !!(loadCfgRaw().envNoAsk),
+    allOk: items.every((i) => i.status === 'ok'),
+  };
+}
+
+/* ---------- 部署任务（长跑 + 进度 + 可取消）---------- */
+const envJobs = { everything: null, harness: null };
+function envJobSend(id, kind, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send('env:log', Object.assign({ id, kind, at: Date.now() }, payload));
+}
+function envLog(id, line) {
+  const s = String(line == null ? '' : line).replace(/\s+$/, '');
+  if (!s) return;
+  if (process.argv.some((a) => a.startsWith('--envdeploy='))) console.log('[env] ' + s);   // 非交互部署时把日志打到 stdout
+  envJobSend(id, 'log', { line: s.slice(0, 500) });
+}
+function cancelEnvJob(id) {
+  const j = envJobs[id];
+  if (!j || !j.child || j.child.exitCode !== null) return { ok: false, error: '没有正在进行的任务' };
+  try {
+    if (process.platform === 'win32') require('node:child_process').execFile('taskkill', ['/PID', String(j.child.pid), '/T', '/F'], () => {});
+    else j.child.kill('SIGKILL');
+  } catch (e) {}
+  envLog(id, '（已取消）');
+  return { ok: true };
+}
+function spawnJob(id, exe, args, opts) {
+  return new Promise((resolve) => {
+    const o = Object.assign({ windowsHide: true, env: process.env, shell: /\.(cmd|bat)$/i.test(exe) }, opts || {});
+    const child = require('node:child_process').spawn(exe, args, o);
+    envJobs[id] = { child, startedAt: Date.now() };
+    const onData = (buf) => String(buf).split(/\r?\n/).forEach((l) => envLog(id, l));
+    if (child.stdout) child.stdout.on('data', onData);
+    if (child.stderr) child.stderr.on('data', onData);
+    child.on('error', (e) => { envJobs[id] = null; resolve({ ok: false, code: -1, error: (e && e.message) || String(e) }); });
+    child.on('close', (code) => { envJobs[id] = null; resolve({ ok: code === 0, code }); });
+  });
+}
+function netGet(url, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const req = net.request({ method: 'GET', url, redirect: 'follow' });
+      const timer = setTimeout(() => { try { req.abort(); } catch (e) {} fin({ ok: false, error: '超时' }); }, timeoutMs || 20000);
+      req.on('response', (res) => {
+        if (res.statusCode !== 200) { clearTimeout(timer); fin({ ok: false, error: 'HTTP ' + res.statusCode }); return; }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => { clearTimeout(timer); fin({ ok: true, body: Buffer.concat(chunks).toString('utf8') }); });
+        res.on('error', (e) => { clearTimeout(timer); fin({ ok: false, error: (e && e.message) || String(e) }); });
+      });
+      req.on('error', (e) => { clearTimeout(timer); fin({ ok: false, error: (e && e.message) || String(e) }); });
+      req.end();
+    } catch (e) { fin({ ok: false, error: (e && e.message) || String(e) }); }
+  });
+}
+function netDownload(url, dest, id, phase, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const req = net.request({ method: 'GET', url, redirect: 'follow' });
+      const timer = setTimeout(() => { try { req.abort(); } catch (e) {} fin({ ok: false, error: '下载超时' }); }, timeoutMs || 300000);
+      req.on('response', (res) => {
+        if (res.statusCode !== 200) { clearTimeout(timer); fin({ ok: false, error: 'HTTP ' + res.statusCode }); return; }
+        const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
+        let got = 0, lastPct = -1;
+        const fh = fs.createWriteStream(dest);
+        res.on('data', (c) => {
+          got += c.length; fh.write(c);
+          const pct = total ? Math.floor(got * 100 / total) : 0;
+          if (pct !== lastPct && pct % 5 === 0) { lastPct = pct; envJobSend(id, 'progress', { phase, got, total, pct }); }
+        });
+        res.on('end', () => fh.end(() => { clearTimeout(timer); fin({ ok: true, bytes: got }); }));
+        res.on('error', (e) => { clearTimeout(timer); fin({ ok: false, error: (e && e.message) || String(e) }); });
+      });
+      req.on('error', (e) => { clearTimeout(timer); fin({ ok: false, error: (e && e.message) || String(e) }); });
+      req.end();
+    } catch (e) { fin({ ok: false, error: (e && e.message) || String(e) }); }
+  });
+}
+function sha256File(p) {
+  return new Promise((resolve) => {
+    try {
+      const h = crypto.createHash('sha256');
+      const s = fs.createReadStream(p);
+      s.on('data', (d) => h.update(d));
+      s.on('end', () => resolve(h.digest('hex')));
+      s.on('error', () => resolve(''));
+    } catch (e) { resolve(''); }
+  });
+}
+/** 从官方下载页解析最新的 x64 便携版 zip 直链（失败退回内置的已知版本） */
+async function resolveEverythingZip() {
+  const r = await netGet(EVERYTHING_PAGE, 15000);
+  if (r.ok) {
+    const hits = [];
+    const re = /href="\/?(Everything-([0-9][^"\/]*?)\.x64\.zip)"/g;
+    let m;
+    while ((m = re.exec(r.body))) hits.push({ file: m[1], ver: m[2] });
+    if (hits.length) {
+      hits.sort((a, b) => {
+        const ab = /b$/i.test(a.ver) ? 1 : 0, bb = /b$/i.test(b.ver) ? 1 : 0;   // 1.5 测试版优先（有 alpha 通道支持）
+        if (ab !== bb) return bb - ab;
+        return semverCmp(b.ver, a.ver);
+      });
+      return { ok: true, url: 'https://www.voidtools.com/' + hits[0].file, ver: hits[0].ver, from: '官方下载页' };
+    }
+  }
+  return { ok: true, url: EVERYTHING_FALLBACK_ZIP,
+           ver: (EVERYTHING_FALLBACK_ZIP.match(/Everything-([0-9.]+[a-z]?)\.x64\.zip$/) || [])[1] || '1.5',
+           from: '内置已知版本（下载页解析失败）' };
+}
+ipcMain.handle('env:check', async (_e, opts) => envCheck(opts));
+ipcMain.handle('env:pickDir', async (_e, o) => {
+  const home = app.getPath('home');
+  const opts = { title: (o && o.title) || '选择目录', properties: ['openDirectory'], buttonLabel: '用这个目录',
+                 defaultPath: (o && o.defaultPath) || (o && o.sub ? path.join(home, o.sub) : home) };
+  let r = null;
+  try { r = (win && !win.isDestroyed()) ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  if (!r || r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+  return { ok: true, path: r.filePaths[0] };
+});
+ipcMain.handle('env:dismiss', (_e, on) => {
+  const cur = loadCfgRaw(); cur.envNoAsk = !!on;
+  try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) { return { ok: false, error: e.message }; }
+  return { ok: true, noAsk: !!on };
+});
+ipcMain.handle('env:cancel', (_e, id) => cancelEnvJob(id));
+ipcMain.handle('env:launchEverything', async (_e, explicitExe) => {
+  let exe = typeof explicitExe === 'string' && explicitExe ? explicitExe : ((loadCfg().everything || {}).exe || '');
+  if (!exe || !fs.existsSync(exe)) exe = findExistingEverything();
+  if (!exe || !fs.existsSync(exe)) return { ok: false, error: '没有可启动的 Everything（先部署一份，或自己下载后告诉我路径）' };
+  try { require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  const cur = loadCfgRaw();                                   // 记住这份，下次直接用它
+  if (!cur.everything || cur.everything.exe !== exe) {
+    cur.everything = Object.assign({ dir: path.dirname(exe), ver: '' }, cur.everything || {}, { exe });
+    try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
+  }
+  return { ok: true, exe };
+});
+ipcMain.handle('env:openUrl', (_e, url) => { try { shell.openExternal(String(url)); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; } });
+
+ipcMain.handle('env:deployEverything', (_e, o) => deployEverything((o && o.dir) || ''));
+async function deployEverything(dir) {
+  const id = 'everything';
+  if (envJobs[id]) return { ok: false, error: '已有部署任务在进行' };
+  if (!dir) return { ok: false, error: '没有指定部署目录' };
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    envJobSend(id, 'phase', { phase: 'resolve', text: '查询官方最新便携版…' });
+    const pick = await resolveEverythingZip();
+    envLog(id, '下载源：' + pick.url + (pick.ver ? '（版本 ' + pick.ver + '）' : '') + ' — ' + pick.from);
+    const zipPath = path.join(app.getPath('temp'), 'pet-everything-' + Date.now() + '.zip');
+    envJobSend(id, 'phase', { phase: 'download', text: '正在下载（走系统代理）…' });
+    const dl = await netDownload(pick.url, zipPath, id, 'download');
+    if (!dl.ok) { envLog(id, '下载失败：' + dl.error); return { ok: false, error: '下载失败：' + dl.error + '\n（可到 ' + EVERYTHING_PAGE + ' 手动下载）' }; }
+    envLog(id, '下载完成：' + Math.round(dl.bytes / 1024) + ' KB');
+    // 官方 sha256 校验（官方校验文件是一份"多文件清单"，要按我们下载的那个 zip 名去取对应行）
+    envJobSend(id, 'phase', { phase: 'verify', text: '校验官方 SHA256…' });
+    const zipName = pick.url.split('/').pop();
+    const shaUrl = pick.url.replace(/\.[^./]*\.zip$/, '.sha256').replace(/\.zip$/, '.sha256');
+    const shaRes = await netGet(shaUrl, 15000);
+    const actual = await sha256File(zipPath);
+    if (shaRes.ok) {
+      let want = '';
+      for (const line of String(shaRes.body || '').split(/\r?\n/)) {
+        const m = line.trim().match(/^([0-9a-f]{64})\s+\*?(.+)$/i);
+        if (m && m[2].trim().toLowerCase() === zipName.toLowerCase()) { want = m[1]; break; }
+      }
+      if (!want) envLog(id, '官方校验清单里没有 ' + zipName + ' 这一行 → 跳过校验（清单共 ' + String(shaRes.body || '').split(/\r?\n/).filter(Boolean).length + ' 项）');
+      else if (want.toLowerCase() !== actual.toLowerCase()) {
+        try { fs.unlinkSync(zipPath); } catch (e) {}
+        envLog(id, 'SHA256 不匹配：期望 ' + want.slice(0, 16) + '… 实际 ' + actual.slice(0, 16) + '…');
+        return { ok: false, error: 'SHA256 校验失败，已删除下载文件（可能存在篡改或下载不完整）' };
+      } else envLog(id, 'SHA256 校验通过（对照官方清单 ' + zipName + '）：' + actual.slice(0, 16) + '…');
+    } else envLog(id, '取不到官方校验清单（' + shaRes.error + '）→ 跳过校验，仅校验 ZIP 能解开');
+    envJobSend(id, 'phase', { phase: 'extract', text: '解压到指定目录…' });
+    const ex = await extractZip(id, zipPath, dir);
+    if (!ex.ok) { envLog(id, '解压失败（' + ex.via + '）'); return { ok: false, error: '解压失败（' + ex.via + '）' }; }
+    envLog(id, '解压完成（' + ex.via + '）');
+    const exePath = findFile(dir, 'Everything.exe', 3);
+    if (!exePath) { envLog(id, '解压完成但没找到 Everything.exe'); return { ok: false, error: '解压后没找到 Everything.exe' }; }
+    const cur = loadCfgRaw();
+    cur.everything = { dir, exe: exePath, ver: pick.ver, at: new Date().toISOString() };
+    try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
+    envLog(id, '已部署：' + exePath);
+    envJobSend(id, 'phase', { phase: 'launch', text: '启动 Everything…' });
+    try { require('node:child_process').spawn(exePath, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); }
+    catch (e) { envLog(id, '启动失败：' + (e && e.message)); }
+    try { fs.unlinkSync(zipPath); } catch (e) {}
+    const st = await envEverythingStatus(false);
+    return { ok: true, dir, exe: exePath, ver: pick.ver, status: st };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
+/** 解压 zip：优先 Windows 自带的 bsdtar（System32\tar.exe，能正确处理 C:\ 路径——
+    注意 PATH 里的 git-bash /usr/bin/tar 是 MSYS 版，会把 C:\ 当远程主机而失败）；退路是 PowerShell Expand-Archive。*/
+async function extractZip(id, zipPath, dir) {
+  const sys = process.env.SystemRoot || 'C:\\Windows';
+  const tar = path.join(sys, 'System32', 'tar.exe');
+  if (fs.existsSync(tar)) {
+    const r = await spawnJob(id, tar, ['-xf', zipPath, '-C', dir]);
+    if (r.ok) return { ok: true, via: 'System32\\tar.exe' };
+    envLog(id, 'tar 退出码 ' + r.code + ' → 改用 PowerShell Expand-Archive');
+  }
+  const ps = path.join(sys, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const exe = fs.existsSync(ps) ? ps : 'powershell.exe';
+  const r2 = await spawnJob(id, exe, ['-NoProfile', '-NonInteractive', '-Command',
+    'Expand-Archive -LiteralPath "' + zipPath + '" -DestinationPath "' + dir + '" -Force']);
+  return { ok: r2.ok, via: 'Expand-Archive' };
+}
+function findFile(root, name, maxDepth, depth) {
+  depth = depth || 0;
+  let ents = [];
+  try { ents = fs.readdirSync(root, { withFileTypes: true }); } catch (e) { return ''; }
+  for (const e of ents) {
+    const p = path.join(root, e.name);
+    if (e.isFile() && e.name.toLowerCase() === name.toLowerCase()) return p;
+  }
+  if (depth >= maxDepth) return '';
+  for (const e of ents) if (e.isDirectory()) { const r = findFile(path.join(root, e.name), name, maxDepth, depth + 1); if (r) return r; }
+  return '';
+}
+ipcMain.handle('env:deployHarness', (_e, o) => deployHarness((o && o.dir) || '', !(o && o.useMirror === false)));
+async function deployHarness(dir, useMirror) {
+  const id = 'harness';
+  if (envJobs[id]) return { ok: false, error: '已有部署任务在进行' };
+  if (!dir) return { ok: false, error: '没有指定部署目录' };
+  const t = envTools();
+  envLog(id, '工具链：git ' + (t.git.version || '缺失') + ' / node ' + (t.node.version || '缺失') + ' / pnpm ' + (t.pnpm.version || '缺失'));
+  if (!t.git.ok) return { ok: false, error: '本机没有 git：请先安装 Git（https://git-scm.com/download/win）或用「浏览…」指定已有的 harness 仓库' };
+  if (!t.pnpm.ok && !t.node.ok) return { ok: false, error: '本机没有 node/pnpm：先装 Node.js 20+（自带 npm），再执行 npm i -g pnpm；装好后再来点一次' };
+  try {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    const already = isRepoDir(dir);
+    if (!already) {
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length) return { ok: false, error: '目标目录不是空的，也不是 harness 仓库：' + dir + '\n请换一个空目录，或用「浏览…」指定已有的仓库' };
+      envJobSend(id, 'phase', { phase: 'clone', text: '克隆仓库（浅克隆，只取最新一版）…' });
+      envLog(id, 'git clone ' + HARNESS_CLONE_URL + ' → ' + dir);
+      const c = await spawnJob(id, t.git.path || 'git', ['clone', '--depth', '1', HARNESS_CLONE_URL, dir], { cwd: path.dirname(dir) });
+      if (!c.ok) { envLog(id, '克隆失败（退出码 ' + c.code + '）。若在国内网络，可能需要代理；也可以手动克隆后点「浏览…」指定。'); return { ok: false, error: '克隆失败（退出码 ' + c.code + '）' }; }
+    } else envLog(id, '目录里已经是 harness 仓库，跳过克隆：' + dir);
+    envJobSend(id, 'phase', { phase: 'install', text: '安装依赖（pnpm install，约 1.8GB / 数分钟）…' });
+    const pnpm = t.pnpm.path || exeCandidates('pnpm')[0] || 'pnpm';
+    if (!t.pnpm.ok) envLog(id, '警告：没探测到可用的 pnpm，仍尝试直接调用（多半会失败）');
+    const args = ['install'];
+    if (useMirror) args.push('--registry', NPM_MIRROR);
+    envLog(id, '在 ' + dir + ' 执行：pnpm ' + args.join(' '));
+    const ins = await spawnJob(id, pnpm, args, { cwd: dir });
+    if (!ins.ok) { envLog(id, '依赖安装失败（退出码 ' + ins.code + '）'); return { ok: false, error: '依赖安装失败（退出码 ' + ins.code + '）；可到该目录手动执行 pnpm install 看完整报错' }; }
+    const okBin = fs.existsSync(path.join(dir, 'apps', 'cli', 'src', 'bin.ts'));
+    const okTsx = fs.existsSync(path.join(dir, 'node_modules', 'tsx'));
+    if (!okBin || !okTsx) { envLog(id, '装完了但校验没过：bin.ts=' + okBin + ' tsx=' + okTsx); return { ok: false, error: '安装完成但校验未通过（缺 bin.ts 或 tsx）' }; }
+    const cur = loadCfgRaw();
+    cur.harness = Object.assign({}, cur.harness || {}, { repo: dir });
+    try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
+    if (harness) { try { harness.kill(); } catch (e) {} harness = null; }
+    envLog(id, '部署完成，已写入设置：harnessRepo = ' + dir);
+    return { ok: true, dir, checked: { bin: okBin, tsx: okTsx } };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
+
 /* ---------- 设置（DeepSeek API / 网址 / Harness 路径）----------
    - key **只存本机**，默认用 Electron safeStorage（Windows 上是 DPAPI，按当前用户加密）加密后落盘；
      取不到加密能力时退化为明文并在界面上明确提示。
@@ -459,6 +886,7 @@ const CFG_FILE = path.join(app.getPath('userData'), 'settings.json');
 const CFG_DEFAULTS = {
   deepseek: { baseUrl: 'https://api.deepseek.com', model: '', provider: '' },
   harness: { repo: '', profile: 'headless', cwd: '', maxTokens: 8192 },
+  everything: { dir: '', exe: '', ver: '' },
 };
 
 function loadCfgRaw() {
@@ -469,6 +897,8 @@ function loadCfg() {
   return {
     deepseek: Object.assign({}, CFG_DEFAULTS.deepseek, raw.deepseek || {}),
     harness: Object.assign({}, CFG_DEFAULTS.harness, raw.harness || {}),
+    everything: Object.assign({}, CFG_DEFAULTS.everything, raw.everything || {}),
+    envNoAsk: !!raw.envNoAsk,
     _keyEnc: (raw.deepseek && raw.deepseek.apiKeyEnc) || '',
     _keyPlain: (raw.deepseek && raw.deepseek.apiKey) || '',
   };
@@ -719,6 +1149,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '💬 和 DeepSeek 聊天…' + chatHk, click: () => sendToPage('petAPI.openChat()') },
     { label: '⚙ 设置（DeepSeek API / 网址）…', click: () => sendToPage('petAPI.openSettings()') },
+    { label: '🩺 环境自检（harness / Everything）…', click: () => sendToPage('petAPI.openEnv()') },
     { label: '🔍 文件搜索…' + hk, click: () => sendToPage('petAPI.openSearch()') },
     { type: 'separator' },
     { label: '显示/隐藏控制面板', click: () => sendToPage('petAPI.togglePanel()') },
@@ -1058,6 +1489,56 @@ if (!app.requestSingleInstanceLock()) {
           chk('D 关菜单后镜像复位', msD.on === false && msD.cls === false && !!mxD && mxD.a > 0,
               { on: msD.on, cls: msD.cls, a: mxD && mxD.a });
 
+          // ---- P）**面板场景**（文件搜索翻到右侧）：与菜单同一套像素级验收 --------------
+          //   用户反馈过：菜单会镜像，但搜索/聊天/设置/自检这些面板翻到右侧时没镜像 —— 这里专门盯这条。
+          const pShots = [];
+          const cropP = async (name, rect, pad, petRect) => {
+            const x = Math.max(0, Math.round(rect.x - pad)), y = Math.max(0, Math.round(rect.y - pad));
+            const width = Math.round(rect.w + pad * 2), height = Math.round(rect.h + pad * 2);
+            const img = await wc.capturePage({ x, y, width, height });
+            const file = path.join(app.getPath('temp'), name);
+            fs.writeFileSync(file, img.toPNG());
+            pShots.push({ name, file, crop: { x, y, width, height }, img: img.getSize(), pet: petRect || null, pad });
+          };
+          await ev('petAPI.closeMenu()'); await sleep(250);
+          await ev('petAPI.setPos(6, 300); petAPI.openSearch(); true');       // 贴左边缘 → 搜索面板必须翻到右侧
+          await sleep(900);
+          const petP = await rectOf('#pet'), scrP = await rectOf('#search');
+          const msP = await ev('petAPI.__mirrorState()');
+          chk('P 搜索面板在桌宠右侧', scrP.x >= petP.right - 1, { panelLeft: Math.round(scrP.x), petRight: Math.round(petP.right) });
+          chk('P 面板在右 → 动画已镜像（本次修的 bug）', msP.on === true && msP.cls === true, { on: msP.on, cls: msP.cls });
+          const mxP = parseMatrix(msP.video && msP.video.computed);
+          const originXP = parseFloat((msP.video && msP.video.computedOrigin) || '0');
+          chk('P 镜像矩阵与菜单同一套（绕站姿中轴、无额外平移）',
+              !!mxP && mxP.a < 0 && Math.abs(mxP.e) <= 0.5 && Math.abs(originXP - msP.axis * (msP.video ? msP.video.rect.w : 0)) <= 1.5,
+              { a: mxP && mxP.a, e: mxP && mxP.e, originX: originXP });
+          chk('P 抬手指向右', msP.tip.xNorm > 0.5 && msP.tip.dir === 1, { tipXNorm: +msP.tip.xNorm.toFixed(4), dir: msP.tip.dir });
+          await ev('petAPI.__freezeFrame(1.0)'); await sleep(400);
+          await cropP('p-mirror-on.png', petP, 8, petP);
+          await ev('petAPI.__forceMirror(false)'); await sleep(300);
+          await cropP('p-mirror-off.png', petP, 8, petP);
+          await ev('petAPI.__forceMirror(true)'); await sleep(300);
+          await cropP('p-mirror-on2.png', petP, 8, petP);
+          await cropP('p-mirror-off-shift.png', { x: petP.x + 40, y: petP.y, w: petP.w, h: petP.h }, 8, petP);
+          chk('P 已产出面板场景比对图（on / off / on2 / 负例）', pShots.length >= 4, { files: pShots.map((s) => s.name) });
+          // 角色贴右边缘 → 面板翻到左侧 → 不应镜像
+          await ev('petAPI.closeSearch()'); await sleep(200);
+          await ev(`petAPI.setPos(innerWidth - document.getElementById('pet').getBoundingClientRect().width - 6, 300); petAPI.openSearch(); true`);
+          await sleep(800);
+          const petP2 = await rectOf('#pet'), scrP2 = await rectOf('#search');
+          const msP2 = await ev('petAPI.__mirrorState()');
+          chk('P2 面板在左侧时不镜像', scrP2.right <= petP2.x + 1 && msP2.on === false,
+              { panelRight: Math.round(scrP2.right), petLeft: Math.round(petP2.x), on: msP2.on });
+          await ev('petAPI.closeSearch()'); await sleep(300);
+          const msP3 = await ev('petAPI.__mirrorState()');
+          chk('P3 关掉面板后镜像复位', msP3.on === false, { on: msP3.on });
+          const pFailed = checks.filter((c) => !c.ok && /^P/.test(c.name));
+          console.log('MIRRORTEST_PANEL ' + JSON.stringify({
+            ok: pFailed.length === 0, passed: pShots.length && pFailed.length === 0 ? 1 : 0, total: 1,
+            checks: checks.filter((c) => /^P/.test(c.name)), shots: pShots, axis: msP.axis,
+            verdict: pFailed.length ? 'FAIL' : 'PASS',
+          }));
+
           const failed = checks.filter((c) => !c.ok);
           console.log('MIRRORTEST ' + JSON.stringify({
             ok: failed.length === 0, passed: checks.length - failed.length, total: checks.length,
@@ -1130,6 +1611,80 @@ if (!app.requestSingleInstanceLock()) {
       }, 2500);
     }
 
+    // --envcheck：环境自检（harness / Everything / 工具链）→ 打印 JSON（发布验收用）
+    if (ENVCHECK) {
+      setTimeout(async () => {
+        try { console.log('ENVCHECK ' + JSON.stringify(await envCheck({ quick: false }))); }
+        catch (e) { console.log('ENVCHECK_ERR ' + ((e && e.message) || e)); }
+        if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 400);
+      }, 1500);
+    }
+
+    // --envdeploy=<everything|harness>:<目录>：非交互部署，打印结果 JSON（发布验收用）
+    if (ENVDEPLOY) {
+      setTimeout(async () => {
+        try {
+          const r = ENVDEPLOY.id === 'everything'
+            ? await deployEverything(ENVDEPLOY.dir)
+            : await deployHarness(ENVDEPLOY.dir, !process.argv.includes('--no-mirror'));
+          console.log('ENVDEPLOY ' + JSON.stringify(r));
+        } catch (e) { console.log('ENVDEPLOY_ERR ' + ((e && e.message) || e)); }
+        if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 400);
+      }, 1500);
+    }
+
+    // 启动自检（**快检**：不联网、不扫盘、Everything 只探 ≤2 次）：缺东西且用户没勾"不再提示"才弹向导
+    if (!TESTMODE) {
+      setTimeout(async () => {
+        try {
+          const r = await envCheck({ quick: true });
+          console.log('ENVCHECK_STARTUP ' + JSON.stringify({ allOk: r.allOk, noAsk: r.noAsk,
+            items: r.items.map((i) => [i.id, i.status]) }));
+          if (!r.allOk && !r.noAsk) sendToPage('petAPI.openEnv && petAPI.openEnv()');
+        } catch (e) { console.log('ENVCHECK_STARTUP_ERR ' + ((e && e.message) || e)); }
+      }, 4500);
+    }
+
+    // --panelmirrortest：面板镜像矩阵（搜索/聊天/设置/自检/SAO 菜单 × 角色在左/在右）
+    if (process.argv.includes('--panelmirrortest')) {
+      setTimeout(async () => {
+        try {
+          const r = await win.webContents.executeJavaScript(`(async () => {
+            const wait = (ms)=> new Promise((r)=> setTimeout(r, ms));
+            const W = innerWidth, H = innerHeight;
+            const petW = ()=> pet.getBoundingClientRect().width;
+            const setX = (x)=> petAPI.setPos(x, H - petAPI.getSize() * 0.9667 - 6);
+            const cases = [
+              ['search',   '#search',   'petAPI.openSearch()',   'petAPI.closeSearch()'],
+              ['chat',     '#chat',     'petAPI.openChat()',     'petAPI.closeChat()'],
+              ['settings', '#settings', 'petAPI.openSettings()', 'petAPI.closeSettings()'],
+              ['env',      '#envwiz',   'petAPI.openEnv()',      'petAPI.closeEnv()'],
+              ['menu',     '#sao',      'petAPI.openMenu()',     'petAPI.closeMenu()'],
+            ];
+            const res = [];
+            for (const [name, sel, open, close] of cases){
+              for (const side of ['left','right']){
+                (0, eval)(close); await wait(150);
+                setX(side === 'left' ? 16 : W - petW() - 16); await wait(180);
+                (0, eval)(open); await wait(name === 'menu' ? 1100 : 550);
+                const pr = pet.getBoundingClientRect();
+                const el = document.querySelector(sel);
+                const b = el.getBoundingClientRect();
+                const panelRight = (b.left + b.width/2) > (pr.left + pr.width/2);
+                const m = petAPI.__mirrorState();
+                res.push({ name, side, panelRight, mirror: !!m.on, pass: panelRight === !!m.on,
+                           petX: Math.round(pr.left), panelX: Math.round(b.left) });
+                (0, eval)(close); await wait(150);
+              }
+            }
+            return { cases: res, allPass: res.every((x)=> x.pass), afterClose: !!petAPI.__mirrorState().on };
+          })()`);
+          console.log('PANELMIRRORTEST ' + JSON.stringify(r));
+        } catch (e) { console.log('PANELMIRRORTEST_ERR ' + ((e && e.message) || e)); }
+        if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 500);
+      }, 2500);
+    }
+
     // --shot=chat,search,settings,panel,menu：打开指定面板并截图（皮肤视觉自查用）
     const shotArg = (process.argv.find((a) => a.startsWith('--shot=')) || '').split('=')[1];
     if (shotArg) {
@@ -1142,9 +1697,10 @@ if (!app.requestSingleInstanceLock()) {
             ${want.includes('chat') ? 'petAPI.openChat();' : ''}
             ${want.includes('search') ? 'petAPI.openSearch();' : ''}
             ${want.includes('settings') ? 'petAPI.openSettings();' : ''}
+            ${want.includes('env') ? 'petAPI.openEnv();' : ''}
             return true;
           })()`);
-          await new Promise((r) => setTimeout(r, want.includes('chat') || want.includes('settings') ? 1400 : (want.includes('menu') ? 7000 : 700)));
+          await new Promise((r) => setTimeout(r, want.includes('chat') || want.includes('settings') || want.includes('env') ? 2200 : (want.includes('menu') ? 7000 : 700)));
           const png = await win.webContents.capturePage();
           const dir = path.join(__dirname, 'diag');
           require('fs').mkdirSync(dir, { recursive: true });
@@ -1153,7 +1709,7 @@ if (!app.requestSingleInstanceLock()) {
           console.log('SHOT ' + out + ' ' + JSON.stringify(png.getSize()));
           // 顺手报出可见面板/角色的实际位置，便于精确裁剪验收
           const rects = await win.webContents.executeJavaScript(
-            "Object.fromEntries(['panel','menu','search','chat','settings','pet','sao','saoCard','saoCats','saoList','saoSub'].map((id)=>{const e=document.getElementById(id);if(!e)return null;const s=getComputedStyle(e);if(s.display==='none'||e.classList.contains('hidden'))return null;const r=e.getBoundingClientRect();return [id,[r.left|0,r.top|0,r.right|0,r.bottom|0]];}).filter(Boolean))");
+            "Object.fromEntries(['panel','menu','search','chat','settings','envwiz','pet','sao','saoCard','saoCats','saoList','saoSub'].map((id)=>{const e=document.getElementById(id);if(!e)return null;const s=getComputedStyle(e);if(s.display==='none'||e.classList.contains('hidden'))return null;const r=e.getBoundingClientRect();return [id,[r.left|0,r.top|0,r.right|0,r.bottom|0]];}).filter(Boolean))");
           console.log('SHOT_RECTS ' + JSON.stringify(rects));
         } catch (e) { console.log('SHOT_ERR ' + e.message); }
         if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 600);
