@@ -145,8 +145,8 @@ def write_readme(path):
       → 设置里点“浏览…”选中仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层），或设环境变量 DSH_HARNESS_REPO。
   聊天报“API request to … failed”
       → key 或网址不对：到设置里点“测试连接”，按提示修正。
-  文件搜索没结果
-      → 确认 Everything 正在运行（托盘里能看到它的图标）。
+  文件搜索没结果 / 提示“未检测到 Everything”
+      → Everything 没在运行：启动 Everything（托盘里能看到它的图标）后重试。
 """)
 
 

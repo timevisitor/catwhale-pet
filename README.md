@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.1-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.2-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
@@ -27,7 +27,8 @@
 - **交互**：拖动角色＝抓着；单击＝随机互动；右键＝菜单从"抬手指向的那一侧"弹出；单击空白处＝走过去；
   空格＝随机互动；H＝显隐控制面板（大小 120~620px、播放速度 0.5~2.0x）。角色位置和大小自动记住。
 - **点击穿透**：角色以外的区域完全不挡鼠标，和平时一样操作电脑。
-- **SAO 风格菜单**（右键角色）：卡片式菜单 + 子菜单，Esc 关闭，贴边自动翻面、出屏自动夹回。
+- **右键菜单**（SAO 风格）：卡片式菜单 + 子菜单，Esc 关闭，贴边自动翻面、出屏自动夹回；
+  **菜单因左边放不下而翻到角色右侧时，抬手动画会自动水平镜像**，手始终指向菜单那一侧（脚不动、位置不变）。
 - **DeepSeek 聊天**（`Ctrl+Shift+D`）：背后是真·agent 运行时，流式文本 + 工具调用卡片 + 计时 + 取消。
 - **文件搜索**（`Ctrl+Shift+F`）：走 Everything 官方命令行 `es.exe`（随包附带），不改动你的 Everything 设置。
 - **托盘**：控制面板 / 大小 / 开机自启 / 设置 / 退出。
@@ -86,6 +87,13 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.1.2**
+  - **菜单翻到角色右侧时，抬手动画自动水平镜像**：绕「站姿中轴」（实测 x=413/900，即脚部跨距中心）翻转，
+    脚不动、角色不位移，抬手指向与菜单同侧；菜单关闭即复位。镜像同时映射到逐像素命中测试（否则镜像后点击位置会与画面错位）。
+  - 文件搜索：**Everything 没运行时不再谎报"没有结果"**，直接提示「未检测到 Everything（请先启动 Everything 后重试）」。
+    （实测 es.exe 在 Everything 未运行时把错误写到 **stderr**、退出码 8、stdout 只剩 CSV 表头，旧代码只看 stdout 就当成空结果。）
+  - 新增 `--mirrortest` 自检开关与 `tools/check-mirror-pixels.py` 像素级验收脚本
+    （绕轴翻面等价性 + 命中一致性 + 两个负例对照 + 轴位扫描）。
 - **v0.1.1**
   - 设置面板新增 **「浏览…」目录选择**（直接选 harness 仓库根目录；选深了/选浅了都会自动归一到仓库根）与 **Provider** 字段；
   - harness 仓库**自动探测大扩展**：补上 `git clone` 的标准布局 `<家目录>\deepseek-harness`、`Documents\GitHub\…`、`source\repos`、`code\projects\dev\Desktop`，以及各盘根目录与其下一层；探测顺序改为「环境变量 → 家目录布局 → 家目录下探 → 盘符布局 → 盘符下探」；
@@ -437,6 +445,8 @@ electron . --bench                      # 五阶段：初始/7路全解/只留�
 桌宠.exe --searchtest="ext:pdf"                       # Everything 查询 → 打印 JSON
 桌宠.exe --detecttest --exit-after-test               # 环境探测：harness 仓库 / es.exe / node 来源 / 版本
 桌宠.exe --repotest="D:\\deepseek-harness\\src\\apps\\cli\\src" --exit-after-test   # 验"浏览…"选目录后的归一化
+桌宠.exe --mirrortest --exit-after-test               # 菜单翻面 + 抬手镜像（并产出 4 张裁剪图）
+python tools/check-mirror-pixels.py                   # 上面那 4 张图的像素级比对（翻面等价性/命中一致性/负例）
 桌宠.exe --chattest="只回答两个字：成功"                # harness 聊天 → 打印 JSON
 # 界面自检（真渲染器里跑完整链路，结果打到 stdout，可加 --exit-after-test）
 桌宠.exe --searchui="桌宠"                             # 开搜索面板 → 灌查询 → 读回渲染结果+几何

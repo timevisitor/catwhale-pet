@@ -544,6 +544,13 @@ const FOOT_RATIO = 1450 / 1500;       // 脚底在画布中的纵向位置
 const HAND_TIP = { x: 61 / 900, y: 514 / 1500, dir: -1 };
 /*  ↑ 「站立抬胳膊」里那只抬起的手的指尖在画布中的相对位置，dir=-1 表示指向画布左侧。
      菜单就开在指尖所指的方向（量法见 README：肤色检测取左侧手部的最左点，97 帧中位 (61,514)）。 */
+const MIRROR_AXIS = 413 / 900;
+/*  ↑ 「站立抬胳膊」的**站姿中轴**（脚部跨距中心，97 帧中位 x=413）。
+     菜单因为左边放不下而翻到角色右侧时，动画按这条轴水平镜像（scaleX(-1)）：
+     脚不动、角色不位移，抬手的指向随之朝右，和菜单同侧。
+     为什么不按画布中线(50%)镜像：角色在画布里并不是正中的（包围盒中心只在 45% 附近），
+     按中线翻会让角色整体横向跳 ~74 画布像素。
+     量法（与 HAND_TIP 同一套）：`build/sprite/站立抬胳膊` 里取底部 60 行 alpha>24 的横向中点。 */
 const IDLE_HOLD_MS = 12000;           // 操作结束后保持"待机"的时长，超过才进空闲随机
 const LOUNGE_MIN_MS = 7000;           // 空闲状态最短停留
 const LOUNGE_MAX_MS = 14000;          // 空闲状态最长停留
@@ -668,7 +675,7 @@ function play(id){
   if (prev && prev !== next) prev.classList.remove('active');
   pauseOthers(next);
   next.classList.add('active');
-  next.style.transform = 'scale(' + (states[id].scale ?? 1) + ')';
+  next.style.transform = (petMirror ? 'scaleX(-1) ' : '') + 'scale(' + videoScale(id) + ')';
   next.loop = (states[id].mode === 'loop');
   next.playbackRate = baseRate * stateRate(id);
   cur = id;
@@ -761,11 +768,35 @@ function doReact(){               // 单击角色 → 互动一下
 function startTask(){ M.taskCount++; touch(); applyState(); }
 function endTask(){ M.taskCount = Math.max(0, M.taskCount - 1); touch(); applyState(); }
 
-function fingertipScreen(){                       // 指尖当前在屏幕上的位置
+function fingertipScreen(){                       // 指尖当前在屏幕上的位置（镜像时指尖也随之翻到另一侧）
   const r = pet.getBoundingClientRect();
-  return { x: r.left + HAND_TIP.x * r.width,
+  const tx = petMirror ? (2 * MIRROR_AXIS - HAND_TIP.x) : HAND_TIP.x;
+  return { x: r.left + tx * r.width,
            y: r.top  + HAND_TIP.y * r.height,
-           dir: HAND_TIP.dir };
+           dir: petMirror ? 1 : HAND_TIP.dir };
+}
+
+/* ---------- 角色镜像（菜单翻到右侧 → 抬手朝右）----------
+   transform 写在每个 video 的内联样式上（play() 里按 states[id].scale 设置），
+   所以镜像也必须写在同一处，并把 transform-origin.x 从 50% 挪到站姿中轴，
+   否则翻转会绕画布中线走、角色横向位移。 */
+let petMirror = false;
+function videoScale(id){ return (states[id] && states[id].scale != null) ? states[id].scale : 1; }
+function applyVideoMirror(){
+  for (const id in videos){
+    const v = videos[id];
+    if (!v) continue;
+    v.style.transform = (petMirror ? 'scaleX(-1) ' : '') + 'scale(' + videoScale(id) + ')';
+    v.style.transformOrigin = (petMirror ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
+  }
+}
+function setPetMirror(on){
+  on = !!on;
+  const changed = (on !== petMirror);
+  petMirror = on;
+  pet.classList.toggle('mirror', on);
+  applyVideoMirror();
+  return changed;
 }
 function placeMenu(){                              // 菜单永远开在"抬手指向"的那一侧
   const m = els.menu;
@@ -1239,6 +1270,7 @@ async function positionSao(){
   const pr=pet.getBoundingClientRect(), spaceLeft=pr.left-left-gap, spaceRight=right-pr.right-gap;
   SAO.mirror=spaceLeft>=spaceRight;
   box.classList.toggle('mirror',SAO.mirror);
+  setPetMirror(!SAO.mirror);                 // 菜单在右侧 → 抬手也朝右（动画水平镜像）
   box.classList.remove('compact','narrow','mini','stack');
   box.style.setProperty('--sao-card-h',Math.min(374,Math.max(200,bottom-top))+'px');
   for(const el of [els.saoList,els.saoSub]){el.style.maxHeight=Math.max(80,bottom-top)+'px';el.style.overflowY='auto';}
@@ -1301,6 +1333,7 @@ function closeMenu(){
   SAO.open=false;M.menuOpen=false;SAO.subRow=-1;SAO.subOf=-1;SAO.layoutTicket=(SAO.layoutTicket||0)+1;
   clearTimeout(SAO.hoverT);clearTimeout(SAO.leaveT);
   els.sao.classList.remove('show');els.saoSub.classList.remove('show');
+  setPetMirror(false);                       // 菜单关了 → 抬手方向复位
   try{window.petHost?.sysInfoStop?.()?.catch?.(()=>{});window.petHost?.focusWindow?.(false);}catch(e){}
   syncPanelGuard();
   SAO.previousFocus?.focus?.({preventScroll:true});
@@ -1753,6 +1786,7 @@ async function init(){
   place(innerWidth - opt.size * CANVAS_ASPECT - 60, innerHeight - opt.size * FOOT_RATIO - 6, false);
   bindEvents();
   initHostBridge();                 // 桌面版(Electron)才生效
+  applyVideoMirror();               // 给所有 video 写上统一的 transform/origin（镜像开关都用这一处）
   applyState();                     // 先起状态机，再起播（起播失败也不影响交互）
   play('idle');
   if (opt.menu) openMenu();                 // ?menu=1
@@ -1826,6 +1860,7 @@ function alphaBitmap(){
 function hitTest(px, py){
   const b = alphaBitmap();
   if (!b || !b.any) return true;             // 采不到有效数据 → 按矩形命中，保证点得动
+  if (petMirror) px = 2 * MIRROR_AXIS - px;  // 角色被水平镜像 → 采样点也镜像回去，否则点击位置与画面错位
   const x = Math.min(b.w - 1, Math.max(0, Math.floor(px * b.w)));
   const y = Math.min(b.h - 1, Math.max(0, Math.floor(py * b.h)));
   return b.img.data[(y * b.w + x) * 4 + 3] > 24;
@@ -2203,6 +2238,41 @@ window.petAPI = {
   setDisplay: async (id)=>{ const r = await window.petHost?.setDisplay?.(id); await refreshSaoDisplays(); return r; },
   listDisplays: async ()=>{ await refreshSaoDisplays(); return { list: SAO_DISPLAY.list, currentId: SAO_DISPLAY.currentId, current: SAO_DISPLAY.current }; },
   saoMetrics: ()=>({ metrics: SAO_METRICS, marks: [...document.querySelectorAll('#cdMarks .txt')].map((e)=>e.textContent) }),
+  /* ---- 镜像验收钩子（供 --mirrortest 用，不影响正常逻辑）---- */
+  __mirrorState: ()=>({
+    on: petMirror, cls: pet.classList.contains('mirror'), axis: MIRROR_AXIS,
+    tip: (()=>{ const r = pet.getBoundingClientRect(); const t = fingertipScreen();
+                return { xNorm: (t.x - r.left) / r.width, yNorm: (t.y - r.top) / r.height, dir: t.dir }; })(),
+    video: (()=>{ const v = videos[cur]; if (!v) return null; const cs = getComputedStyle(v);
+                  return { state: cur, inline: v.style.transform, inlineOrigin: v.style.transformOrigin,
+                           computed: cs.transform, computedOrigin: cs.transformOrigin,
+                           cssW: cs.width, cssH: cs.height, clientW: v.clientWidth, clientH: v.clientHeight,
+                           rect: (()=>{ const b = v.getBoundingClientRect(); return { x:b.left, y:b.top, w:b.width, h:b.height }; })() }; })(),
+    petRect: (()=>{ const b = pet.getBoundingClientRect(); return { x:b.left, y:b.top, w:b.width, h:b.height }; })(),
+    optSize: opt.size,
+  }),
+  __rawAlpha: (px, py)=>{                       // 不走镜像映射的原始 alpha 采样（对照用）
+    const b = alphaBitmap();
+    if (!b || !b.any) return null;
+    const x = Math.min(b.w - 1, Math.max(0, Math.floor(px * b.w)));
+    const y = Math.min(b.h - 1, Math.max(0, Math.floor(py * b.h)));
+    return b.img.data[(y * b.w + x) * 4 + 3];
+  },
+  __hit: (px, py)=> hitTest(px, py),
+  __forceMirror: (on)=> setPetMirror(on),       // 验收用：不改菜单侧、只翻动画
+  __freezeFrame: (t)=>{                         // 把当前状态冻结到指定时间，供像素级比对
+    const v = videos[cur];
+    if (!v) return Promise.resolve(false);
+    v.pause();
+    return new Promise((res)=>{
+      let done = false;
+      const fin = (ok)=>{ if (done) return; done = true; v.removeEventListener('seeked', onSeek); res(ok); };
+      const onSeek = ()=> fin(true);
+      v.addEventListener('seeked', onSeek);
+      try{ v.currentTime = t; }catch(e){ fin(false); }
+      setTimeout(()=> fin(true), 1500);
+    });
+  },
   closeSettings: ()=> closeSettings(),
   getSettings: ()=> (window.petHost && window.petHost.getConfig) ? window.petHost.getConfig() : Promise.resolve(null),
   openMenu: ()=> openMenu(),
