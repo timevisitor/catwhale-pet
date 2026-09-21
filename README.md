@@ -521,7 +521,7 @@ python tools/check-mirror-pixels.py <自检输出> "--prefix=MIRRORTEST_PANEL " 
 
 | | 便携版（自己用） | 发布版（发出去） |
 |---|---|---|
-| 开发文档 README.md | 带 | **不带** |
+| 开发文档 README.md | **不带**（只有 `使用说明.txt`） | **不带** |
 | 开发工具 tools/、harness 探针脚本 | 带 | **不带** |
 | Electron 语言包 | 全部 55 个 | **只留 zh-CN + en-US**（省 48MB → 381MB 变 333MB，zip 164MB → 152MB） |
 | 个人信息扫描 | 无 | **出包前硬门禁**：扫到 API key / 用户名 / 个人路径 / 业务敏感词就拒绝出包 |
