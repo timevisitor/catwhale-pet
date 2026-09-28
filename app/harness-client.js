@@ -30,6 +30,9 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { createRequire } = require('node:module');
+const { pathToFileURL } = require('node:url');
 
 /** 运行时仓库位置：配置 > 环境变量 > 自动探测（发布版不含任何个人信息）
  *
@@ -43,7 +46,56 @@ const REPO_MARK = ['apps', 'cli', 'src', 'bin.ts'];
 
 /** 这个目录是不是 harness 仓库根（含 apps/cli/src/bin.ts） */
 function isRepoDir(p) {
-  try { return !!p && fs.existsSync(path.join(p, ...REPO_MARK)); } catch (e) { return false; }
+  try { return !!p && fs.statSync(path.join(p, ...REPO_MARK)).isFile(); } catch (e) { return false; }
+}
+
+function normalizeRepoPath(value) {
+  if (typeof value !== 'string') return '';
+  let p = value.trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  p = p.replace(/%([^%]+)%/g, (all, key) => process.env[key] || all);
+  if (/^~([\\/]|$)/.test(p)) p = os.homedir() + p.slice(1);
+  return p ? path.resolve(p) : '';
+}
+
+/** 同一规则用于手填、浏览、旧配置、环境变量与实际启动；只做有界查找。 */
+function resolveRepo(value) {
+  const p = normalizeRepoPath(value);
+  if (!p) return '';
+  const tries = [p, path.join(p, 'src'), path.join(p, 'deepseek-harness'),
+    path.join(p, 'deepseek-harness', 'src')];
+  for (let up = path.dirname(p), n = 0; n < 4; n++, up = path.dirname(up)) tries.push(up);
+  for (const candidate of tries) if (isRepoDir(candidate)) return candidate;
+  // ZIP 解压的 deepseek-harness-main 等布局；多份仓库时要求用户明确选择。
+  try {
+    const hits = fs.readdirSync(p, { withFileTypes: true }).slice(0, 400)
+      .filter((e) => e.isDirectory() && /^deepseek-harness(?:[-_].+)?$/i.test(e.name))
+      .flatMap((e) => [path.join(p, e.name), path.join(p, e.name, 'src')]).filter(isRepoDir);
+    if (hits.length === 1) return hits[0];
+  } catch (e) { /* 不存在或无权限 */ }
+  return '';
+}
+
+function inspectRepo(value) {
+  const repo = resolveRepo(value) || normalizeRepoPath(value);
+  const hasBin = isRepoDir(repo);
+  let loader = '';
+  if (hasBin) {
+    try { loader = createRequire(path.join(repo, 'package.json')).resolve('tsx/esm'); } catch (e) {}
+  }
+  const hasTsx = !!loader;
+  const status = !repo ? 'missing' : !hasBin ? 'norepo' : !hasTsx ? 'nodeps' : 'ok';
+  const detail = {
+    missing: '未配置或探测到 DeepSeek Harness 源码仓库，请在设置中选择仓库目录',
+    norepo: repo + '（未找到 apps/cli/src/bin.ts；请选择 DeepSeek Harness 源码仓库，.dsh 配置目录或桌宠目录不是仓库）',
+    nodeps: repo + '（目录正确，但 tsx 依赖缺失或损坏；请在该目录执行 pnpm install）',
+    ok: '仓库及 tsx 入口检查通过：' + repo + '（连接情况请点测试连接）',
+  }[status];
+  return { repo, hasBin, hasTsx, loader, status, detail };
+}
+
+function supportsHarnessNode(version) {
+  const [major, minor] = String(version).replace(/^v/, '').split('.').map(Number);
+  return major >= 24 || (major === 22 && minor >= 19);
 }
 
 let _repoCache;                                   // undefined=没扫过；''=扫过但没找到
@@ -52,7 +104,7 @@ function scanForRepo() {
   const env = process.env;
   const home = env.USERPROFILE || env.HOME || '';
   const j = (...a) => path.join(...a.filter(Boolean));
-  const DRIVES = ['C', 'D', 'E', 'F', 'G'];
+  const DRIVES = process.platform === 'win32' ? Array.from({ length: 24 }, (_, i) => String.fromCharCode(67 + i)) : [];
   const scan = (roots) => {                       // 在每个根下探一层：子目录本身 或 子目录\src 是仓库根
     const seen = new Set();
     for (const root of roots) {
@@ -77,7 +129,7 @@ function scanForRepo() {
                      j(home, 'deepseek-harness', 'src'),
                      j(home, 'deepseek-harness'),                  // 标准 git clone 布局
                      j(home, '.dsh', 'harness')].filter(Boolean);
-  for (const c of homeCands) if (isRepoDir(c)) return c;
+  for (const c of homeCands) { const root = resolveRepo(c); if (root) return root; }
 
   // 阶段 2：家目录下探一层（Documents\\GitHub\\… 这类）
   const r = scan([j(home, 'Documents', 'GitHub'), j(home, 'Documents'), j(home, 'source', 'repos'),
@@ -115,7 +167,7 @@ const DEFAULTS = {
 function readHarnessDefaults(dshHome) {
   const out = { provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp' };
   try {
-    const p = path.join(dshHome || path.join(process.env.USERPROFILE || '', '.dsh'), 'settings.yaml');
+    const p = path.join(dshHome || process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'settings.yaml');
     const txt = fs.readFileSync(p, 'utf8');
     const m = txt.match(/agent-default-model\s*:\s*\n?\s*\{?\s*([\s\S]{0,200}?)(?:\n\S|\n$)/);
     const block = m ? m[1] : txt;
@@ -144,9 +196,11 @@ class HarnessClient {
    */
   constructor(opts) {
     const o = Object.assign({}, DEFAULTS, opts || {});
-    this.repo = o.repo;
+    this.repo = resolveRepo(o.repo) || normalizeRepoPath(o.repo);
     this.profile = o.profile;
     this.patch = o.patch || path.join(__dirname, 'harness-sdk', 'pet-sdk.patch.yml');
+    // 外部 Node 无法读取 Electron 的 ASAR 虚拟文件，补丁随构建解包。
+    this.patch = this.patch.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
     this.cwd = o.cwd || this.repo;
     this.provider = o.provider;
     this.model = o.model;
@@ -178,39 +232,58 @@ class HarnessClient {
   async start() {
     if (this.ready && this.alive) return this;
     if (this.starting) return this.starting;
-    this.starting = this._boot().finally(() => { this.starting = null; });
+    this.starting = this._boot().catch((error) => {
+      this.kill();
+      this.deadReason = error.message;
+      throw error;
+    }).finally(() => { this.starting = null; });
     return this.starting;
   }
 
   async _boot() {
-    if (!this.repo) throw new Error('未找到 DeepSeek Harness 运行时：请把 harness 仓库路径写进配置（%APPDATA%\\桌宠\\pet-state.json 的 harnessRepo），或设置环境变量 DSH_HARNESS_REPO');
+    const check = inspectRepo(this.repo);
+    if (check.status !== 'ok') throw new Error(check.detail);
+    this.repo = check.repo;
     const bin = path.join(this.repo, 'apps', 'cli', 'src', 'bin.ts');
     if (!fs.existsSync(bin)) throw new Error('harness 入口不存在：' + bin + '（请确认 harnessRepo 指向仓库根目录）');
     if (!fs.existsSync(this.patch)) throw new Error('找不到补丁文件：' + this.patch);
-    const args = ['--import', 'tsx/esm', bin, '--profile', this.profile, '--patch', this.patch];
+    // --import 的裸包名按 cwd 查找；用户自定义工作目录时必须固定到仓库里的 loader。
+    const args = ['--import', pathToFileURL(check.loader).href, bin, '--profile', this.profile, '--patch', this.patch];
     this.log('HARNESS_SPAWN ' + path.basename(this.nodeExe) + ' ' + args.join(' '));
     const env = Object.assign({}, process.env, this.envExtras);
+    const tsconfig = path.join(this.repo, 'tsconfig.json');
+    if (fs.existsSync(tsconfig)) env.TSX_TSCONFIG_PATH = tsconfig;
     if (this.useElectronAsNode) env.ELECTRON_RUN_AS_NODE = '1';
     const t0 = Date.now();
     this.deadReason = null;
     this.stderrTail = '';
     this.buf = '';
     this.child = spawn(this.nodeExe, args, { cwd: this.cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = this.child;
+    const fail = (reason, code) => {
+      if (this.child !== child) return; // 旧进程延迟退出不能清掉新进程。
+      this.ready = false;
+      this.deadReason = reason;
+      this.child = null;
+      for (const [, { reject }] of this.pending) reject(new Error(reason));
+      this.pending.clear();
+      this.onStatus('dead', { code, reason, stderr: this.stderrTail.slice(-600) });
+      try { child.kill(); } catch (e) {}
+    };
+    child.on('error', (e) => fail('harness 启动失败：' + e.message));
+    child.stdin.on('error', (e) => fail('harness 输入管道失败：' + e.message));
     this.child.stdout.setEncoding('utf8');
     this.child.stderr.setEncoding('utf8');
-    this.child.stdout.on('data', (d) => this._onStdout(d));
+    this.child.stdout.on('data', (d) => { if (this.child === child) this._onStdout(d); });
     this.child.stderr.on('data', (d) => {
+      if (this.child !== child) return;
       this.stderrTail = (this.stderrTail + d).slice(-4000);
       const t = String(d).trim();
       if (t && !/ExperimentalWarning|trace-warnings/.test(t)) this.log('HARNESS_STDERR ' + t.slice(0, 300));
     });
     this.child.on('exit', (code, sig) => {
-      this.ready = false;
-      this.deadReason = 'harness 已退出（code=' + code + (sig ? ', sig=' + sig : '') + '）';
-      try { this.child = null; } catch (e) {}
-      for (const [, { reject }] of this.pending) reject(new Error(this.deadReason));
-      this.pending.clear();
-      this.onStatus('dead', { code, reason: this.deadReason, stderr: this.stderrTail.slice(-600) });
+      fail('harness 已退出（code=' + code + (sig ? ', sig=' + sig : '') + '）' +
+        (this.stderrTail.trim() ? '\n' + this.stderrTail.trim().slice(-1000) : ''), code);
     });
     this.onStatus('starting', {});
     const defaults = readHarnessDefaults();
@@ -364,4 +437,4 @@ class HarnessClient {
   }
 }
 
-module.exports = { HarnessClient, readHarnessDefaults, detectRepo, isRepoDir, DEFAULTS };
+module.exports = { HarnessClient, readHarnessDefaults, detectRepo, isRepoDir, resolveRepo, normalizeRepoPath, inspectRepo, supportsHarnessNode, DEFAULTS };

@@ -18,6 +18,7 @@
   "build": {
     "appId": "com.hermes.petgirl",
     "productName": "桌宠",
+    "asarUnpack": ["harness-sdk/**"],
     "files": [
       "main.js",
       "preload.js",
