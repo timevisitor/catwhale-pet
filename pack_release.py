@@ -180,7 +180,7 @@ def copy_app_tree(app_dir, APP):
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
-    required = ["main.js", "preload.js", "harness-client.js", "sysinfo.js", "package.json",
+    required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "package.json",
                 "renderer/index.html", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:

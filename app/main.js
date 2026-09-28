@@ -7,6 +7,7 @@ const http = require('http');
 const urlmod = require('url');
 const { execFile } = require('child_process');
 const { HarnessClient, detectRepo, isRepoDir, resolveRepo, inspectRepo, supportsHarnessNode } = require('./harness-client.js');
+const { checkUpdate, GITHUB_RELEASES_PAGE } = require('./updater.js');
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
@@ -1004,6 +1005,22 @@ ipcMain.handle('config:test', async () => {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
+/* ---------- 版本更新检测 ---------- */
+ipcMain.handle('update:check', async () => runUpdateCheck(false));
+ipcMain.handle('update:openUrl', (_e, url) => {
+  try {
+    shell.openExternal(url || (latestReleaseInfo && latestReleaseInfo.releaseUrl) || GITHUB_RELEASES_PAGE);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+ipcMain.handle('update:status', () => ({
+  ok: true,
+  currentVersion: APP_VERSION,
+  latest: latestReleaseInfo,
+}));
+
 /* ---------- DeepSeek Harness 聊天（长驻 SDK JSON-RPC 客户端）----------
    见 app/harness-client.js 的注释：harness 自带对外协议（packages/sdk），
    挂上 dsh-sdk-jsonrpc-server 后，桌宠就是一个真正的 harness 客户端：
@@ -1139,15 +1156,47 @@ function appendChat(userText, assistantText, meta) {
 
 /* ---------- 托盘 ---------- */
 let sendToPage = () => {};
+let latestReleaseInfo = null;
+
+async function runUpdateCheck(silent = false) {
+  try {
+    const res = await checkUpdate({ currentVersion: APP_VERSION });
+    if (res && res.ok && res.hasUpdate) {
+      latestReleaseInfo = res;
+      if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu());
+      if (win && !win.isDestroyed()) win.webContents.send('app:update-available', res);
+      sendToPage(`typeof onNewVersionAvailable==='function' && onNewVersionAvailable(${JSON.stringify(res)})`);
+    }
+    return res;
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e), currentVersion: APP_VERSION };
+  }
+}
+
 function buildTrayMenu() {
   const al = autoLaunchInfo();
   const hk = searchHotkey ? '  ' + searchHotkey.replace('Control', 'Ctrl').replace('Space', '空格') : '';
   const chatHk = chatHotkey ? '  ' + chatHotkey.replace('Control', 'Ctrl') : '';
-  return Menu.buildFromTemplate([
+  const items = [];
+
+  if (latestReleaseInfo && latestReleaseInfo.hasUpdate) {
+    items.push({
+      label: `🎉 发现新版本 v${latestReleaseInfo.latestVersion}（点击下载）`,
+      click: () => shell.openExternal(latestReleaseInfo.releaseUrl || GITHUB_RELEASES_PAGE),
+    });
+    items.push({ type: 'separator' });
+  }
+
+  items.push(
     { label: '💬 和 DeepSeek 聊天…' + chatHk, click: () => sendToPage('petAPI.openChat()') },
     { label: '⚙ 设置（DeepSeek API / 网址）…', click: () => sendToPage('petAPI.openSettings()') },
     { label: '🩺 环境自检（harness / Everything）…', click: () => sendToPage('petAPI.openEnv()') },
     { label: '🔍 文件搜索…' + hk, click: () => sendToPage('petAPI.openSearch()') },
+    { label: '🚀 检查新版本…', click: () => {
+        sendToPage('petAPI.openSettings()');
+        sendToPage('typeof triggerUpdateCheck==="function" && triggerUpdateCheck()');
+      }
+    },
     { type: 'separator' },
     { label: '显示/隐藏控制面板', click: () => sendToPage('petAPI.togglePanel()') },
     { label: '回待机', click: () => sendToPage('petAPI.setState("idle")') },
@@ -1180,7 +1229,9 @@ function buildTrayMenu() {
       click: (mi) => { if (!setAutoLaunch(mi.checked)) mi.checked = false; } },
     { label: '重新加载界面', click: () => { if (win) win.webContents.reload(); } },
     { label: '退出桌宠', click: () => { quitting = true; app.quit(); } }
-  ]);
+  );
+
+  return Menu.buildFromTemplate(items);
 }
 
 function buildTray() {
@@ -1330,6 +1381,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     await createWindow();
     buildTray();
+    // 启动 5 秒后在后台静默检查一次 GitHub 新版本
+    setTimeout(() => { runUpdateCheck(true).catch(() => {}); }, 5000);
     if (AUTOSTART) {                                   // --autostart=on|off：命令行设置（托盘里也有开关）
       const want = ['on', '1', 'true', 'yes'].includes(AUTOSTART.toLowerCase());
       const applied = setAutoLaunch(want);
