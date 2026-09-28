@@ -84,6 +84,16 @@ contextBridge.exposeInMainWorld('petHost', {
     return () => ipcRenderer.removeListener('env:log', h);
   },
 
+  /* ---- 版本检测与更新 ---- */
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  openUpdateUrl: (url) => ipcRenderer.invoke('update:openUrl', url),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  onUpdateAvailable: (cb) => {
+    const h = (_e, info) => { try { cb(info); } catch (e) {} };
+    ipcRenderer.on('app:update-available', h);
+    return () => ipcRenderer.removeListener('app:update-available', h);
+  },
+
   /* ---- 面板打开状态 → 主进程据此临时注册全局 Esc ---- */
   setPanelOpen: (on) => ipcRenderer.send('pet:panel', !!on),
   onEsc: (cb) => {

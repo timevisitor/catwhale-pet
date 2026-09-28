@@ -512,6 +512,8 @@
     <div class="hint" id="setRepoPrereq">聊天前置条件：harness 仓库要先装好依赖（官方 <b>pnpm install</b>）；只 clone 不装依赖会报 Cannot find package 'tsx'</div>
     <div class="hint" id="setEverything"></div>
     <div class="hint">环境自检：<span class="clink" id="setEnvWiz">打开自检 / 一键部署向导</span></div>
+    <div class="hint">版本更新：<span id="setAppVersion">v0.1.4</span> · <span class="clink" id="setCheckUpdate">检查新版本</span></div>
+    <div class="hint" id="setUpdateHint" style="display:none"></div>
     <div class="row" style="margin-top:4px">
       <button id="setSave">保存</button><button id="setTest">保存并测试连接</button>
     </div>
@@ -1534,8 +1536,11 @@ async function loadSettingsForm(){
     ? ('文件搜索：Everything 集成就绪' + (ev.instance ? '（实例 ' + ev.instance + '）' : '（首次搜索时自动探测实例）'))
     : '文件搜索：缺少 es.exe（Everything 的官方命令行工具），搜索会不可用', ev.esExe ? '' : 'bad');
   els.cstatus && 0;
+  const verStr = c.version || '0.1.4';
+  const verEl = document.getElementById('setAppVersion');
+  if (verEl) verEl.textContent = 'v' + verStr;
   document.getElementById('setStatus').textContent =
-    'v' + (c.version || '?') + ' · ' + (d.keySet ? '已配 key' : '未配 key') + ' · ' +
+    'v' + verStr + ' · ' + (d.keySet ? '已配 key' : '未配 key') + ' · ' +
     (h.status === 'ok' ? 'harness 目录及依赖已检查' : h.status === 'nodeps' ? 'harness 目录正确，待安装依赖' : 'harness 目录待设置');
 }
 async function saveSettings(){
@@ -1577,6 +1582,55 @@ async function testSettings(){
   if (r && r.ok) setMsg('setResult', '连接正常 ✔ 模型 ' + (r.model || '?') + ' 回复："' + String(r.text || '').slice(0, 40) + '"（' + Math.round((r.ms || 0) / 1000) + ' 秒）', 'ok');
   else setMsg('setResult', '连接失败：' + ((r && (r.error || r.text)) || '未知错误'), 'bad');
 }
+
+async function triggerUpdateCheck(){
+  const uh = document.getElementById('setUpdateHint');
+  if (!uh) return;
+  uh.style.display = 'block';
+  uh.className = 'hint';
+  uh.textContent = '正在检查 GitHub Releases…';
+  if (!(window.petHost && window.petHost.checkUpdate)){
+    uh.className = 'hint bad';
+    uh.textContent = '当前环境不支持检查更新（仅在桌面版可用）';
+    return;
+  }
+  let r = null;
+  try{ r = await window.petHost.checkUpdate(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
+  if (r && r.ok){
+    if (r.hasUpdate){
+      uh.className = 'hint ok';
+      uh.innerHTML = '🎉 发现新版本 <b>v' + r.latestVersion + '</b>！<span class="clink" id="btnGoDownloadRelease">点击前往下载</span>';
+      const btn = document.getElementById('btnGoDownloadRelease');
+      if (btn) btn.addEventListener('click', ()=> window.petHost.openUpdateUrl(r.releaseUrl || r.downloadUrl));
+      if (typeof toast === 'function') toast('🎉 发现新版本 v' + r.latestVersion);
+    } else {
+      uh.className = 'hint ok';
+      uh.textContent = '当前已是最新版本（v' + (r.currentVersion || '0.1.4') + '）';
+    }
+  } else {
+    uh.className = 'hint bad';
+    uh.textContent = '检查更新失败：' + ((r && r.error) || '未知网络错误');
+  }
+}
+window.triggerUpdateCheck = triggerUpdateCheck;
+
+function onNewVersionAvailable(info){
+  if (!info || !info.latestVersion) return;
+  const uh = document.getElementById('setUpdateHint');
+  if (uh){
+    uh.style.display = 'block';
+    uh.className = 'hint ok';
+    uh.innerHTML = '🎉 发现新版本 <b>v' + info.latestVersion + '</b>！<span class="clink" id="btnGoDownloadReleaseAuto">点击前往下载</span>';
+    const btn = document.getElementById('btnGoDownloadReleaseAuto');
+    if (btn) btn.addEventListener('click', ()=> window.petHost.openUpdateUrl(info.releaseUrl || info.downloadUrl));
+  }
+  const st = document.getElementById('setStatus');
+  if (st && !st.textContent.includes('新版本')) {
+    st.textContent = '[有新版本 v' + info.latestVersion + '] ' + st.textContent;
+  }
+  if (typeof toast === 'function') toast('🎉 发现新版本 v' + info.latestVersion + '，可前往设置下载');
+}
+window.onNewVersionAvailable = onNewVersionAvailable;
 
 /* ===================== DeepSeek 聊天 = 真·harness 客户端 =====================
    后端在主进程：长驻一个 harness 运行时（packages/sdk 的 stdio JSON-RPC 协议）。
@@ -2130,6 +2184,13 @@ function bindEvents(){
   document.getElementById('setSave').addEventListener('click', ()=> saveSettings());
   document.getElementById('setTest').addEventListener('click', ()=> testSettings());
   document.getElementById('setKeyClear').addEventListener('click', ()=> clearKeySettings());
+  const _chkUpd = document.getElementById('setCheckUpdate');
+  if (_chkUpd) _chkUpd.addEventListener('click', ()=> triggerUpdateCheck());
+  try {
+    if (window.petHost && window.petHost.onUpdateAvailable) {
+      window.petHost.onUpdateAvailable((info) => onNewVersionAvailable(info));
+    }
+  } catch(e) {}
   const _envwizLink = document.getElementById('setEnvWiz');
   if (_envwizLink) _envwizLink.addEventListener('click', ()=>{ closeSettings(); openEnv(); });
   document.getElementById('setDetect').addEventListener('click', async ()=>{
