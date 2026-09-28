@@ -6,7 +6,7 @@ const fs = require('fs');
 const http = require('http');
 const urlmod = require('url');
 const { execFile } = require('child_process');
-const { HarnessClient, detectRepo, isRepoDir } = require('./harness-client.js');
+const { HarnessClient, detectRepo, isRepoDir, resolveRepo, inspectRepo, supportsHarnessNode } = require('./harness-client.js');
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
@@ -139,7 +139,7 @@ function send(channel, payload) {
 function resolveNode() {
   try {
     const r = require('node:child_process').spawnSync('node', ['-v'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
-    if (r && r.status === 0 && /^v\d+/.test((r.stdout || '').trim())) return 'node';
+    if (r && r.status === 0 && supportsHarnessNode((r.stdout || '').trim())) return 'node';
   } catch (e) {}
   return process.execPath;
 }
@@ -525,29 +525,17 @@ function envTools() {
   t.pnpm = toolVer('pnpm');
   // Electron 自带的 node 也能跑 harness（chat 用它兜底），但装依赖需要真正的 node/pnpm
   t.electronNode = { ok: true, version: 'v' + process.versions.node, path: '(Electron 自带)' };
-  t.nodeOk = !!t.node.ok && (semverCmp(t.node.version.replace(/^v/, ''), '22.19') >= 0);
+  t.nodeOk = !!t.node.ok && supportsHarnessNode(t.node.version);
   t.pnpmOk = !!t.pnpm.ok;
   return t;
 }
+function effectiveHarnessRepo(cfg = loadCfg(), state = loadState()) {
+  return inspectRepo(cfg.harness.repo || state.harnessRepo || detectRepo());
+}
 function envHarnessStatus() {
-  const cfg = loadCfg();
-  const repo = cfg.harness.repo || loadState().harnessRepo || detectRepo();
-  const bin = repo ? path.join(repo, 'apps', 'cli', 'src', 'bin.ts') : '';
-  const hasBin = !!bin && fs.existsSync(bin);
-  const hasTsx = !!repo && fs.existsSync(path.join(repo, 'node_modules', 'tsx'));
-  const t = envTools();
-  let status = 'missing';
-  if (hasBin && hasTsx) status = 'ok';
-  else if (hasBin) status = 'nodeps';           // 克隆了但没装依赖
-  else if (repo && fs.existsSync(repo)) status = 'norepo';
-  const detail = {
-    ok: '已就绪：' + repo,
-    nodeps: (repo || '') + '（缺依赖：需要在该目录跑 pnpm install）',
-    norepo: (repo || '') + '（目录里没有 apps/cli/src/bin.ts）',
-    missing: '没有找到 harness 仓库',
-  }[status];
-  return { id: 'harness', name: 'DeepSeek Harness（聊天用）', status, repo, hasBin, hasTsx,
-           detail, tools: t, fix: status === 'ok' ? '' : 'harness' };
+  const { loader, ...check } = effectiveHarnessRepo();
+  return { id: 'harness', name: 'DeepSeek Harness（聊天用）', ...check,
+    tools: envTools(), fix: check.status === 'ok' ? '' : 'harness' };
 }
 /** 在常见位置找一份已经存在的 Everything.exe（用户自己下载/装过的都算） */
 function findExistingEverything() {
@@ -845,8 +833,8 @@ async function deployHarness(dir, useMirror) {
   if (!dir) return { ok: false, error: '没有指定部署目录' };
   const t = envTools();
   envLog(id, '工具链：git ' + (t.git.version || '缺失') + ' / node ' + (t.node.version || '缺失') + ' / pnpm ' + (t.pnpm.version || '缺失'));
-  if (!t.git.ok) return { ok: false, error: '本机没有 git：请先安装 Git（https://git-scm.com/download/win）或用「浏览…」指定已有的 harness 仓库' };
-  if (!t.pnpm.ok && !t.node.ok) return { ok: false, error: '本机没有 node/pnpm：先装 Node.js 20+（自带 npm），再执行 npm i -g pnpm；装好后再来点一次' };
+  if (!isRepoDir(dir) && !t.git.ok) return { ok: false, error: '本机没有 git：请先安装 Git（https://git-scm.com/download/win）或用「浏览…」指定已有的 harness 仓库' };
+  if (!t.nodeOk || !t.pnpmOk) return { ok: false, error: '安装依赖需要 Node.js 22.19+（22.x）或 24+，以及可用的 pnpm；请安装后重试' };
   try {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const already = isRepoDir(dir);
@@ -870,7 +858,7 @@ async function deployHarness(dir, useMirror) {
     if (!okBin || !okTsx) { envLog(id, '装完了但校验没过：bin.ts=' + okBin + ' tsx=' + okTsx); return { ok: false, error: '安装完成但校验未通过（缺 bin.ts 或 tsx）' }; }
     const cur = loadCfgRaw();
     cur.harness = Object.assign({}, cur.harness || {}, { repo: dir });
-    try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
+    try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) { return { ok: false, error: '依赖已安装，但保存仓库设置失败：' + e.message }; }
     if (harness) { try { harness.kill(); } catch (e) {} harness = null; }
     envLog(id, '部署完成，已写入设置：harnessRepo = ' + dir);
     return { ok: true, dir, checked: { bin: okBin, tsx: okTsx } };
@@ -919,6 +907,14 @@ function saveCfg(patch) {
   next.harness = Object.assign({}, CFG_DEFAULTS.harness, cur.harness || {});
   if (patch && patch.deepseek) Object.assign(next.deepseek, patch.deepseek);
   if (patch && patch.harness) Object.assign(next.harness, patch.harness);
+  if (patch && patch.harness && Object.prototype.hasOwnProperty.call(patch.harness, 'repo')) {
+    if (typeof patch.harness.repo !== 'string') return { ok: false, error: '仓库路径必须是字符串' };
+    if (patch.harness.repo.trim()) {
+      const check = inspectRepo(patch.harness.repo);
+      if (!check.hasBin) return { ok: false, error: check.detail };
+      next.harness.repo = check.repo; // 缺依赖仍可保存，界面单独提示安装。
+    } else next.harness.repo = '';
+  }
   if (patch && typeof patch.apiKey === 'string') {
     const v = patch.apiKey.trim();
     delete next.deepseek.apiKeyEnc; delete next.deepseek.apiKey;
@@ -937,6 +933,7 @@ function saveCfg(patch) {
 ipcMain.handle('config:get', () => {
   const c = loadCfg();
   const key = apiKeyPlain();
+  const checked = effectiveHarnessRepo(c);
   return {
     ok: true,
     version: APP_VERSION,
@@ -946,22 +943,15 @@ ipcMain.handle('config:get', () => {
       keySet: !!key, keyTail: key ? key.slice(-4) : '',
       encrypted: !c._keyPlain && !!c._keyEnc && safeStorage.isEncryptionAvailable(),
     },
-    harness: { repo: c.harness.repo || '', detected: detectRepo(), profile: c.harness.profile || 'headless',
+    harness: { repo: c.harness.repo ? checked.repo : '', detected: detectRepo(), effectiveRepo: checked.repo,
+               status: checked.status, detail: checked.detail, profile: c.harness.profile || 'headless',
                cwd: c.harness.cwd || '', maxTokens: c.harness.maxTokens || 8192 },
     everything: { esExe: fs.existsSync(esPath()), instance: (loadState().esInstance || '') },
   };
 });
 
 /** 用户点"浏览…"选了一个目录 → 归一到真正的仓库根（容错：多一层/少一层/选得太深） */
-function resolvePickedRepo(p) {
-  if (!p) return '';
-  const j = (...a) => path.join(...a.filter(Boolean));
-  const up1 = path.dirname(p), up2 = path.dirname(up1), up3 = path.dirname(up2);
-  const tries = [p, j(p, 'src'), j(p, 'deepseek-harness'), j(p, 'deepseek-harness', 'src'),
-                 up1, j(up1, 'src'), up2, j(up2, 'src'), up3];
-  for (const t of tries) if (isRepoDir(t)) return t;
-  return '';
-}
+function resolvePickedRepo(p) { return resolveRepo(p); }
 ipcMain.handle('config:browseRepo', async () => {
   const cur = loadCfg().harness.repo || detectRepo() || app.getPath('home');
   const opts = {
@@ -986,7 +976,7 @@ ipcMain.handle('config:detect', () => {
 ipcMain.handle('config:set', (_e, patch) => {
   const r = saveCfg(patch || {});
   if (r.ok && harness) { harness.kill(); harness = null; }   // 设置变了 → 下次发消息按新设置重启运行时
-  return Object.assign(r, { restarted: true });
+  return Object.assign(r, { restarted: !!r.ok });
 });
 ipcMain.handle('config:test', async () => {
   try {
@@ -995,17 +985,21 @@ ipcMain.handle('config:test', async () => {
     const t0 = Date.now();
     const seen = { text: '', err: '' };
     let done = null;
+    let finished = false;
     const waitTurn = new Promise((r2) => { done = r2; });
     h.onEvent = ((orig) => (evt) => {
       try {
         if (evt.kind === 'delta') seen.text += evt.text || '';
         else if (evt.kind === 'message' && evt.text) seen.text = evt.text;
-        else if (evt.kind === 'turnEnd') { if (evt.reason && evt.reason.kind === 'error') seen.err = (evt.reason.error && evt.reason.error.message) || 'error'; if (done) done(); }
+        else if (evt.kind === 'turnEnd') { finished = true; if (evt.reason && evt.reason.kind === 'error') seen.err = (evt.reason.error && evt.reason.error.message) || 'error'; if (done) done(); }
       } catch (e) {}
       return orig(evt);
     })(h.onEvent);
     await h.prompt('只回答两个字：正常');
-    await Promise.race([waitTurn, new Promise((r2) => setTimeout(r2, 120000))]);
+    let timeout;
+    try { await Promise.race([waitTurn, new Promise((r2) => { timeout = setTimeout(r2, 120000); })]); }
+    finally { clearTimeout(timeout); }
+    if (!finished) { h.kill(); seen.err = '连接测试超时，未收到完整回复'; }
     return { ok: !seen.err, text: seen.text, error: seen.err, ms: Date.now() - t0, model: h.model, sessionId: h.sessionId };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
@@ -1035,12 +1029,15 @@ function ensureHarness() {
   if (harness && harness.alive) return harness;
   const st = loadState();
   const cfg = loadCfg();
+  const repo = effectiveHarnessRepo(cfg, st).repo;
+  harnessBootedAt = 0; harnessHistorySeeded = false;
+  if (harness) void harness.shutdown();
   const patch = path.join(__dirname, 'harness-sdk', 'pet-sdk.patch.yml');   // 随 app 一起打包
   harness = new HarnessClient({
-    repo: cfg.harness.repo || st.harnessRepo || detectRepo(),
+    repo,
     profile: cfg.harness.profile || st.harnessProfile || 'headless',
     patch: st.harnessPatch || patch,
-    cwd: cfg.harness.cwd || st.harnessCwd || cfg.harness.repo || detectRepo(),
+    cwd: cfg.harness.cwd || st.harnessCwd || repo,
     provider: cfg.deepseek.provider || st.harnessProvider || undefined,
     model: cfg.deepseek.model || st.harnessModel || undefined,
     maxTokens: cfg.harness.maxTokens || 8192,
@@ -1111,13 +1108,13 @@ ipcMain.handle('harness:cancel', () => {
 });
 
 ipcMain.handle('harness:status', () => {
-  const st = loadState();
+  const st = loadState(), cfg = loadCfg();
   return {
     alive: !!(harness && harness.alive), ready: !!(harness && harness.ready),
     sessionId: harness && harness.sessionId, provider: (harness && harness.provider) || st.harnessProvider,
     model: (harness && harness.model) || st.harnessModel,
-    repo: st.harnessRepo || detectRepo(),
-    profile: st.harnessProfile || 'headless',
+    repo: effectiveHarnessRepo(cfg, st).repo,
+    profile: cfg.harness.profile || st.harnessProfile || 'headless',
     bootMs: harnessBootedAt ? Date.now() - harnessBootedAt : 0,
     dead: (harness && harness.deadReason) || null,
   };

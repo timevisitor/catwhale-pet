@@ -18,7 +18,7 @@
 | 功能 | 需要你准备 | 桌宠怎么找 |
 |---|---|---|
 | 文件搜索 | 装 [Everything](https://www.voidtools.com) 并**保持运行**（Everything 本身不用做任何设置） | `es.exe`（Everything 官方命令行工具）**已随包附带**，不需要你另外下载；实例名 1.4 / 1.5 / 1.5a 自动识别 |
-| DeepSeek 聊天 | 一份 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 仓库，**克隆后必须先装依赖**（官方 `pnpm install`，只 clone 不装依赖会报 `Cannot find package 'tsx'`）；Node.js 20+ 可选（没装会退回用 Electron 自带的运行时） | 设置面板「浏览…」直接选仓库根目录最省事；或点「重新探测」按常见布局自动找（含 `git clone` 的默认布局 `<家目录>\deepseek-harness`、`Documents\GitHub\…`、各盘根目录，并会向下探一层）；也认环境变量 `DSH_HARNESS_REPO` |
+| DeepSeek 聊天 | 一份 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 仓库，**克隆后必须先装依赖**（官方 `pnpm install`，只 clone 不装依赖会报 `Cannot find package 'tsx'`）；Node.js 22.19+（22.x）或 24+；聊天启动会跳过不兼容的系统 Node 并退回 Electron 自带运行时，安装依赖则需要外部 Node 和 pnpm | 设置面板「浏览…」直接选仓库根目录最省事；或点「重新探测」按常见布局自动找（含 `git clone` 的默认布局 `<家目录>\deepseek-harness`、`Documents\GitHub\…`、各盘根目录，并会向下探一层）；也认环境变量 `DSH_HARNESS_REPO` |
 
 ## 功能
 
@@ -88,6 +88,13 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 ## 版本记录
 
 - **v0.1.3**
+  - **修：DeepSeek Harness 仓库路径设置与误报排查**：
+    - 统一设置面板、环境自检、保存配置与实际运行时的仓库解析逻辑，修复手动指定有效目录但因不在自动探测列表而误报红字的界面判断 Bug；
+    - 路径容错增强：自动处理带引号路径、首尾空格、环境变量（`%VAR%`）、`~` 用户目录、常见 `src` 嵌套与单一解压目录，Windows 自动探测盘符扩展至 C–Z；
+    - 设置交互优化：“重新探测”失败保留已有输入，“测试连接”调整为“保存并测试连接”（先保存后测试，避免以旧配置测试）；
+    - 运行时容错：动态解析 `tsx/esm` 绝对路径与锁定 `TSX_TSCONFIG_PATH`，修复跨工作目录启动时别名解析失败与缺少 tsx 的问题；
+    - 依赖与 Node 要求对齐官方：聊天启动支持 Node 22.19+（22.x）与 24+，遇低版本 Node 自动回退至 Electron 内置运行时；Electron 打包支持 harness-sdk 补丁文件解包；
+    - 新增 18 项自动化回归测试套件（`tests/harness-regression.test.cjs`）。
   - **修：文件搜索 / 聊天 / 设置 / 自检这些面板翻到角色右侧时，抬手动画不会镜像**（v0.1.2 只做了 SAO 菜单那条路径）。
     现在统一成"**看面板实际落在角色中心哪一侧**"来判定：放置完成后重算，拖动、缩放、换边都自洽；面板关闭即复位。
     验收：`--panelmirrortest` 行为矩阵 **10/10**（5 个界面 × 角色在左/在右），
@@ -586,3 +593,18 @@ harness 聊天回复"都正常"(9.0s) ✔ / 页面自检 idle 无错误 ✔ / �
 - 协议无 cancel/close：取消 = 杀进程重启（可接受，代价是下次要重新启动 + 新会话）。
 - `sessionId` 跨进程复用会被拒（id collision），故重启后上下文靠内联历史 + harness 持久记忆。
 - 回复的 markdown 只做了极简渲染（代码块 / 行内码 / 粗体）。
+
+### Harness 路径提示与排查
+
+设置中的「保存并测试连接」会先保存当前输入，再启动验证。目录检查以实际生效路径为准：手动设置 → 旧版配置 → 环境变量及自动探测。自动探测失败不会清空手动输入。
+
+- 目录正确但缺依赖：在该仓库执行 `pnpm install`，或使用环境自检中的安装依赖按钮。
+- 目录无效：请选择含 `apps/cli/src/bin.ts` 的 DeepSeek Harness 源码仓库；`.dsh` 是配置目录，桌宠目录也不是 Harness 仓库。
+- 支持粘贴带引号的目录、常见 `src` 嵌套和唯一的 `deepseek-harness-main` 解压目录。
+- 目录及 tsx 检查通过只说明基础文件可用；API、模型与其余运行时问题请用连接测试判断。
+
+开发回归测试（项目根目录，Node.js 22.19+ 的 22.x 或 24+）：
+
+```sh
+node --test tests/harness-regression.test.cjs
+```

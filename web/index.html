@@ -505,7 +505,7 @@
     <input id="setProvider" type="text" placeholder="deepseek-official" spellcheck="false">
     <label>DeepSeek Harness 仓库路径</label>
     <div class="row">
-      <input id="setRepo" type="text" placeholder="例如 D:\\deepseek-harness\\src" spellcheck="false">
+      <input id="setRepo" type="text" placeholder="例如 D:\deepseek-harness" spellcheck="false">
       <span class="clink" id="setBrowse">浏览…</span><span class="clink" id="setDetect">重新探测</span>
     </div>
     <div class="hint" id="setRepoHint"></div>
@@ -513,7 +513,7 @@
     <div class="hint" id="setEverything"></div>
     <div class="hint">环境自检：<span class="clink" id="setEnvWiz">打开自检 / 一键部署向导</span></div>
     <div class="row" style="margin-top:4px">
-      <button id="setSave">保存</button><button id="setTest">测试连接</button>
+      <button id="setSave">保存</button><button id="setTest">保存并测试连接</button>
     </div>
     <div class="hint" id="setResult"></div>
   </div>
@@ -1528,9 +1528,7 @@ async function loadSettingsForm(){
   setMsg('setKeyHint', d.keySet
     ? ('已保存：····' + (d.keyTail || '????') + (d.encrypted ? '（Windows 凭据加密存储，只在本机）' : '（明文存储：系统未提供加密能力）'))
     : '未设置（不填也可以：若你本机 harness 已配好凭据，会走它自己的）', d.keySet ? 'ok' : '');
-  setMsg('setRepoHint', h.detected
-    ? ('自动探测到：' + h.detected + (h.repo ? '（已手动指定，优先用上面填的）' : '（留空即用它）'))
-    : '未探测到 harness 仓库：请填仓库根目录（含 apps/cli/src/bin.ts 的那一层）', h.detected ? '' : 'bad');
+  setMsg('setRepoHint', h.detail || '请在设置中选择 DeepSeek Harness 源码仓库', h.status === 'ok' ? 'ok' : 'bad');
   const ev = c.everything || {};
   setMsg('setEverything', ev.esExe
     ? ('文件搜索：Everything 集成就绪' + (ev.instance ? '（实例 ' + ev.instance + '）' : '（首次搜索时自动探测实例）'))
@@ -1538,10 +1536,10 @@ async function loadSettingsForm(){
   els.cstatus && 0;
   document.getElementById('setStatus').textContent =
     'v' + (c.version || '?') + ' · ' + (d.keySet ? '已配 key' : '未配 key') + ' · ' +
-    (h.detected || h.repo ? 'harness 就绪' : 'harness 未找到');
+    (h.status === 'ok' ? 'harness 目录及依赖已检查' : h.status === 'nodeps' ? 'harness 目录正确，待安装依赖' : 'harness 目录待设置');
 }
 async function saveSettings(){
-  if (SET.busy) return;
+  if (SET.busy) return false;
   SET.busy = true; setMsg('setResult', '保存中…');
   const patch = {
     deepseek: {
@@ -1559,8 +1557,9 @@ async function saveSettings(){
   if (r && r.ok){
     document.getElementById('setKey').value = '';
     setMsg('setResult', '已保存' + (kv ? '（key 已加密存储）' : '') + '，harness 运行时会按新设置重启', 'ok');
-    loadSettingsForm();
+    await loadSettingsForm();
   } else setMsg('setResult', '保存失败：' + ((r && r.error) || '未知错误'), 'bad');
+  return !!(r && r.ok);
 }
 async function clearKeySettings(){
   let r = await window.petHost.setConfig({ apiKey: '' });
@@ -1569,6 +1568,7 @@ async function clearKeySettings(){
 }
 async function testSettings(){
   if (SET.busy) return;
+  if (!await saveSettings()) return;
   SET.busy = true;
   setMsg('setResult', '正在启动 harness 并试一句（首次约 5~10 秒）…');
   let r = null;
@@ -2133,14 +2133,14 @@ function bindEvents(){
   const _envwizLink = document.getElementById('setEnvWiz');
   if (_envwizLink) _envwizLink.addEventListener('click', ()=>{ closeSettings(); openEnv(); });
   document.getElementById('setDetect').addEventListener('click', async ()=>{
-    document.getElementById('setRepo').value = '';
     setMsg('setRepoHint', '正在重新探测…');
     let r = null;
     try{ r = await window.petHost.detectRepo(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
     SET.detected = (r && r.path) || '';
+    if (r && r.ok && r.valid) document.getElementById('setRepo').value = r.path;
     setMsg('setRepoHint', (r && r.ok && r.path)
       ? ('自动探测到：' + r.path + '（保存后生效）')
-      : '未探测到 harness 仓库：请点“浏览…”选仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层）',
+      : '未探测到 harness 仓库，已保留当前输入：可点“浏览…”选仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层）',
       r && r.path ? '' : 'bad');
   });
   document.getElementById('setBrowse').addEventListener('click', async ()=>{
@@ -2152,7 +2152,7 @@ function bindEvents(){
     try{ r = await window.petHost.browseRepo(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
     if (!r || r.canceled){ setMsg('setRepoHint', '已取消选择'); return; }
     if (!r.ok){ setMsg('setRepoHint', '选择失败：' + ((r && r.error) || '未知错误'), 'bad'); return; }
-    document.getElementById('setRepo').value = r.path || '';
+    if (r.valid) document.getElementById('setRepo').value = r.path || '';
     setMsg('setRepoHint', r.valid
       ? ('已选择：' + r.path + '（点“保存”生效）')
       : ('这个目录里没找到 apps\\cli\\src\\bin.ts：' + r.path + '，请选 harness 仓库根目录'), r.valid ? 'ok' : 'bad');
