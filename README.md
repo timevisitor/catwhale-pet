@@ -87,6 +87,25 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.1.5**
+  - **修：环境自检向导弹出后，面板里的按钮全都点不动**（用户反馈：重新检测 / 关闭 / 「用检测到的这份启动」点了没反应）。
+    - **根因**：交互判定 `uiHitAt()` 的"可交互白名单"里只有 `#panel/#menu/#search/#chat/#settings/#sao`，**漏了自检面板 `#envwiz`**。
+      面板画得出来，但页面把光标位置的交互态一直报成 `false` → 主进程保持 `setIgnoreMouseEvents(true)` 穿透 →
+      落在按钮上的鼠标事件被系统转给了窗口下方的东西，页面根本收不到点击。
+    - **修法**：白名单补上 `#envwiz`；`openEnv()` / `closeEnv()` 各补一次 `hostBridge.evaluate()`，
+      面板弹出当下就重算命中，不必等光标先动一下。
+    - **顺带修**：`preload` 的 `envLaunchEverything(exe)` 之前没把参数转发给主进程，
+      「用检测到的这份启动」实际会落回"配置里/自动探测到的那一份"；现在按检测到的那份路径启动。
+    - **防回归**：`node tools/check-channels.js` 新增白名单校验（`web/index.html` 与 `app/renderer/index.html` 都查）。
+      反向对照已验：把 `#envwiz` 去掉，它会精确报
+      `uiHitAt 白名单缺 #envwiz → 该面板上的按钮会被点击穿透吞掉` 并以退出码 1 失败。
+  - **验收证据**（真窗口 + 真光标 + 真点击，从窗口扩展样式外部读回，不靠页面自己的日志）：
+    - 修前：光标停在「关闭」按钮上时窗口仍带 `WS_EX_TRANSPARENT`（照样穿透）；按真左键 → 前台变成 `Program Manager`（桌面）、
+      向导依旧开着 —— 就是用户看到的"点了没反应"。
+    - 修后：同一点上 `WS_EX_TRANSPARENT` 不置位（窗口可交互）；按真左键 → 向导关闭、窗口恢复穿透。
+    - 离屏对照台（真 `preload.js` + 真渲染器，只把 main 侧的环境通道换成桩）：修前三个按钮的 `uiHitAt/lastInter` 全 `false`，
+      修后全 `true`，远离面板的空白点仍为 `false`（负例对照）。
+
 - **v0.1.4**
   - **新：GitHub 新版本自动检测与更新提醒**：
     - 启动 5 秒后在后台静默检查 GitHub Releases 最新版本（带网络超时保护与静默容错）；
@@ -584,6 +603,9 @@ harness 聊天回复"都正常"(9.0s) ✔ / 页面自检 idle 无错误 ✔ / �
 **防回归**：
 - `node tools/check-channels.js` —— 按 preload 的通道清单核对 main 侧处理器是否齐活，
   并检查 `setIgnoreMouseEvents` 调用点数量（>2 就是警号）。反向对照已验：删掉处理器它会精确报错。
+- 同一个脚本还会核对 `uiHitAt()` 的**可交互白名单**是否盖住全部面板（`web/index.html` 与 `app/renderer/index.html` 都查）。
+  漏一个面板的症状就是"面板里的按钮点不动"（v0.1.5 的 `#envwiz` 就是这么漏的）：面板画得出来、JS 点击处理器也在，
+  但窗口始终穿透，点击被系统转给了下层窗口。加面板时记得把新 id 加进白名单和 `PANEL_IDS`。
 - `web/_interaction_test.html` 第【13】组：面板开着 + 光标在空白 → 必须穿透；在角色/面板上 → 必须可交互。
 
 **验证方法（不靠日志自证）**：
@@ -591,6 +613,9 @@ harness 聊天回复"都正常"(9.0s) ✔ / 页面自检 idle 无错误 ✔ / �
 - 外部用**真光标 + 真点击**复核：`SetCursorPos` 移动（Python 侧必须先 `SetProcessDpiAwareness(2)`，
   否则坐标被系统虚拟化、测出来的位置全是错的）、`mouse_event` 点击，然后读 `GetForegroundWindow`：
   面板开着时点空白 → 前台应是别的窗口（记事本 ✔）；点角色 → 前台回到桌宠（角色拖得动 ✔）。
+- **最直接的一条**：读窗口的 `GWL_EXSTYLE`，看 `WS_EX_TRANSPARENT(0x20)` 在不在。
+  光标停在面板按钮上 → **不该**有（有就是穿透，按钮必然点不动）；停在空白 → **该**有。
+  再配一次真左键点击，点击后看页面状态（面板关没关）——两条证据合起来才算"按钮真的能用"。
 - 注意：`WindowFromPoint` 探不到这种分层/透明窗（会被跳过），别拿它当证据。
 
 ## 十四、已知限制

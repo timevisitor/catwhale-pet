@@ -44,6 +44,23 @@ if (!mainCode.includes("ipcMain.on('pet:interactive'")) guard.push("缺少 pet:i
 if (ime.length > 2) guard.push(`setIgnoreMouseEvents 调用点 ${ime.length} 处（应 ≤2：初始化 + 交互开关）`);
 if (!main.includes('focusWindow') && !main.includes("ipcMain.on('pet:focus'")) guard.push('缺少 pet:focus 处理器');
 
+// uiHitAt 可交互白名单必须盖住所有面板（漏 #envwiz 时自检按钮点不动：窗口仍穿透）
+// 两个来源都查：web/index.html 是人写的源，app/renderer/index.html 是 npm run sync 的产物
+// （新建的 clone 还没 sync 时只有前者；带上产物是为了抓到"改了源码但没重新同步"的情况）
+const PANEL_IDS = ['#panel', '#menu', '#search', '#chat', '#settings', '#envwiz', '#sao'];
+const hitSources = [path.join(APP, 'renderer', 'index.html'), path.join(APP, '..', 'web', 'index.html')]
+  .filter((p) => fs.existsSync(p));
+if (!hitSources.length) guard.push('既没有 app/renderer/index.html 也没有 web/index.html，无法校验 uiHitAt 白名单');
+for (const src of hitSources) {
+  const where = path.relative(path.join(APP, '..'), src).split(path.sep).join('/');
+  const html = fs.readFileSync(src, 'utf8');
+  const uiHit = (html.match(/function uiHitAt[\s\S]{0,600}/) || [''])[0];
+  if (!uiHit) { guard.push(`${where}: 找不到 function uiHitAt（交互白名单没得查）`); continue; }
+  for (const id of PANEL_IDS) {
+    if (!uiHit.includes(`'${id}'`)) guard.push(`${where}: uiHitAt 白名单缺 ${id} → 该面板上的按钮会被点击穿透吞掉`);
+  }
+}
+
 const bad = problems.length + guard.length;
 console.log(`通道检查：preload send=${sends.length} invoke=${invokes.length} listen=${listens.length}`);
 console.log(`          main  on=${mainOn.size} handle=${mainHandle.size}`);

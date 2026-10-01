@@ -74,7 +74,7 @@ contextBridge.exposeInMainWorld('petHost', {
   envPickDir: (o) => ipcRenderer.invoke('env:pickDir', o || {}),
   envDeployHarness:   (o) => ipcRenderer.invoke('env:deployHarness', o || {}),
   envDeployEverything:(o) => ipcRenderer.invoke('env:deployEverything', o || {}),
-  envLaunchEverything:()  => ipcRenderer.invoke('env:launchEverything'),
+  envLaunchEverything:(exe) => ipcRenderer.invoke('env:launchEverything', exe),
   envCancel:  (id) => ipcRenderer.invoke('env:cancel', id),
   envDismiss: (on) => ipcRenderer.invoke('env:dismiss', !!on),
   envOpenUrl: (u) => ipcRenderer.invoke('env:openUrl', u),
