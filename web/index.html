@@ -784,7 +784,7 @@ let hostBridge = null;
 function uiHitAt(x, y){
   const el = document.elementFromPoint(x, y);
   if (!el || !el.closest) return false;
-  if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#sao')) return true;   // 面板/菜单/搜索/聊天/设置/SAO菜单可交互
+  if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#envwiz') || el.closest('#sao')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单可交互
   if (el.closest('#pet')){
     const r = pet.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
@@ -2445,6 +2445,7 @@ async function openEnv(){
   placePanel(els.envwiz);
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(true); }catch(e){}
   touch(); applyState();
+  if (hostBridge) hostBridge.evaluate();     // 面板刚弹出就重算命中，别让按钮被点击穿透吞掉
   await refreshEnv();
 }
 function closeEnv(){
@@ -2455,6 +2456,7 @@ function closeEnv(){
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
   syncMirrorFromPanels();                    // 向导关了 → 抬手方向复位
   touch(); applyState();
+  if (hostBridge) hostBridge.evaluate();
 }
 function toggleEnv(){ ENV.open ? closeEnv() : openEnv(); }
 
