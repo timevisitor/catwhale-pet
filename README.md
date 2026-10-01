@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.4-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.5-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
