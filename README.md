@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.5-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.6-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
@@ -86,6 +86,31 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 ```
 
 ## 版本记录
+
+- **v0.1.6**
+  - **优化：视频按需加载**：8 个状态各是一个 900×1500 的 VP9-alpha `<video>`，原先一律 `preload='auto'`。
+    现在只给常演状态（`idle` / `stand_arms` / `grabbed` / `working`）预加载，其余首次要演到它时才 `load()`；
+    空闲时段还会提前 7~14 秒预热下一个将要演的状态。实测（真桌宠 + CDP 直读）：
+    启动后只有这 4 路是 `auto/readyState=4`；`eat` 在触发前 `metadata/readyState=0`，
+    触发后 1.5 秒内 `readyState=4`、`currentTime=2.84`、正常在播。
+  - **优化：事件监听器显式登记与清理**：`bindEvents()` 里 43 处监听全部改经 `on()` 登记，
+    页面卸载时由 `unbindAll()` 统一摘除（原来完全依赖浏览器回收）。
+    实测：登记表 46 条；调 `unbindAll()` 后归零，同一按钮再点击不再响应 —— 是真的解绑，不只是清了计数。
+  - **优化：harness 仓库探测结果落盘**：`detectRepo()` 读缓存前会校验该路径**当下仍是**仓库根，
+    目录被移走/改名就自动重扫，不会拿着过期路径去启动。实测：冷启动（真扫描）40.0 ms → 命中缓存 4.1 ms；
+    `detectRepo(true)`（设置面板的「自动探测」）仍会忽略缓存重新扫描。
+  - **优化：仓库状态提示更明确**：`norepo` 时直接给出「源码仓库根目录长什么样」的正例
+    （`D:\code\deepseek-harness`、`C:\Users\<你>\deepseek-harness`、解压包的 `deepseek-harness-main`）
+    与三个常见反例（`~/.dsh` 配置目录、桌宠自己的目录、harness 安装产物）。
+  - **优化：错误/异常文案集中到 `ERR_TEXT`**（不引 i18n 框架 —— 本界面只有中文一种语言，
+    全量抽离收益为零且会引入回归风险）。
+  - **修：聊天记录持久化的调用位置**：`loadChatFromStorage()` 原先是 `saveChatToStorage()` 之后的
+    **顶层裸语句**，脚本解析期即执行，此时 `els` 还是空对象 `{}`，其内部 `renderChat()` 抛错又被自身
+    `catch` 静默吞掉 —— 刷新页面后数据恢复了但界面不渲染（`init()` 里也没有第二次调用）。
+    改为在 `init()` 末尾、DOM 引用就绪后调用。验收：CDP 直读刷新后的 `#cmsg` 文本，
+    修前为空串，修后为写入的标记文本。
+  - **仓库整理**：`tools/record/`、`tools/video/`、`HANDOFF_*.md` 改为整目录/整模式忽略
+    （此前被 `git add -A` 误提交进公开仓库，且交接单里含开发机绝对路径），并按用户要求从提交历史中彻底清除。
 
 - **v0.1.5**
   - **修：环境自检向导弹出后，面板里的按钮全都点不动**（用户反馈：重新检测 / 关闭 / 「用检测到的这份启动」点了没反应）。

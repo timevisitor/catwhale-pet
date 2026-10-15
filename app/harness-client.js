@@ -85,8 +85,13 @@ function inspectRepo(value) {
   const hasTsx = !!loader;
   const status = !repo ? 'missing' : !hasBin ? 'norepo' : !hasTsx ? 'nodeps' : 'ok';
   const detail = {
-    missing: '未配置或探测到 DeepSeek Harness 源码仓库，请在设置中选择仓库目录',
-    norepo: repo + '（未找到 apps/cli/src/bin.ts；请选择 DeepSeek Harness 源码仓库，.dsh 配置目录或桌宠目录不是仓库）',
+    missing: '未配置或没探测到 DeepSeek Harness 源码仓库：点设置面板里的「自动探测」，'
+           + '或手动选到 harness 的源码仓库根目录（桌宠本身不含 harness 源码）',
+    norepo: repo + ' 不是 harness 仓库根 —— 这里没有 apps/cli/src/bin.ts。\n'
+          + '请改选源码仓库根目录，常见长这样：D:\\code\\deepseek-harness、'
+          + 'C:\\Users\\<你的用户名>\\deepseek-harness（git clone 的默认位置）、'
+          + '或解压包里的 deepseek-harness-main。\n'
+          + '注意：~/.dsh 配置目录、桌宠自己的目录、harness 的安装产物都不是仓库。',
     nodeps: repo + '（目录正确，但 tsx 依赖缺失或损坏；请在该目录执行 pnpm install）',
     ok: '仓库及 tsx 入口检查通过：' + repo + '（连接情况请点测试连接）',
   }[status];
@@ -99,6 +104,30 @@ function supportsHarnessNode(version) {
 }
 
 let _repoCache;                                   // undefined=没扫过；''=扫过但没找到
+
+/* 探测结果落盘：scanForRepo 要在家目录与各盘符根下探一层，冷启动实测有几十~几百毫秒。
+   缓存文件位置由主进程用 CATWHALE_REPO_CACHE 指到 userData（本模块不认识 Electron，
+   拿不到该变量时退回 ~/.dsh）。命中缓存的唯一条件：该路径**当下仍然**是 harness 仓库根
+   —— 目录被移走/改名就自动重扫，不会拿着过期路径去启动。 */
+function repoCacheFile() {
+  if (process.env.CATWHALE_REPO_CACHE) return process.env.CATWHALE_REPO_CACHE;
+  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'catwhale-repo-cache.json');
+}
+function readRepoCache() {
+  try {
+    const j = JSON.parse(fs.readFileSync(repoCacheFile(), 'utf8'));
+    if (j && typeof j.repo === 'string' && j.repo && isRepoDir(j.repo)) return j.repo;
+  } catch (e) { /* 没缓存 / 文件坏了 → 重扫 */ }
+  return null;
+}
+function writeRepoCache(repo) {
+  if (!repo) return;            // 「没找到」不写缓存：用户可能刚装好，下次启动应当再扫一遍
+  try {
+    const f = repoCacheFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ repo, at: Date.now() }, null, 2));
+  } catch (e) { /* 写不进去不影响使用 */ }
+}
 
 function scanForRepo() {
   const env = process.env;
@@ -151,7 +180,11 @@ function scanForRepo() {
 }
 
 function detectRepo(force) {
-  if (force || _repoCache === undefined) _repoCache = scanForRepo();
+  if (force || _repoCache === undefined) {
+    const hit = force ? null : readRepoCache();     // force = 设置面板的「自动探测」，必须真扫
+    if (hit) _repoCache = hit;
+    else { _repoCache = scanForRepo(); writeRepoCache(_repoCache); }
+  }
   return _repoCache;
 }
 

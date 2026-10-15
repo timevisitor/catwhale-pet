@@ -6,6 +6,8 @@ const fs = require('fs');
 const http = require('http');
 const urlmod = require('url');
 const { execFile } = require('child_process');
+// harness 仓库探测结果的落盘位置（harness-client.js 不认识 Electron，由主进程告知）
+process.env.CATWHALE_REPO_CACHE = path.join(app.getPath('userData'), 'repo-cache.json');
 const { HarnessClient, detectRepo, isRepoDir, resolveRepo, inspectRepo, supportsHarnessNode } = require('./harness-client.js');
 const { checkUpdate, GITHUB_RELEASES_PAGE } = require('./updater.js');
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
