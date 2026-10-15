@@ -649,6 +649,19 @@ const opt = {
 let states = DEFAULT_STATES;
 let baseRate = 1;                     // 速度滑块给的全局倍率
 let pet, videos = {}, els = {}, alphaSampler = null, alphaOK = null;
+/* 常演状态：启动即 preload='auto'；其余状态只取元数据，第一次要演它时才 load()。
+   同时存在的 video 元素数 = 状态数（各 1~2MB 的 900x1500 VP9-alpha），
+   全部 auto 会让不常演的那几路也一直备着解码缓冲。 */
+const EAGER_STATES = ['idle', 'stand_arms', 'grabbed', 'working'];
+/* 错误/异常类文案集中一处（同一个说法只写一遍）。
+   不引 i18n 框架：本界面只有中文一种语言，全量抽离收益为零且会引入回归风险。 */
+const ERR_TEXT = {
+  noHost:        '聊天要在桌面版里用（浏览器 Demo 没有 harness 通道）',
+  callFailed:    '调用失败：',
+  requestFailed: 'DeepSeek 请求失败',
+  harnessError:  'harness 出错：',
+  unknown:       '未知错误',
+};
 let alphaCache = { state:null, t:0, img:null, w:0, h:0, any:false };
 
 /* ===================== 状态机 ===================== */
@@ -718,6 +731,7 @@ function rollLounge(){
     if (st.role === 'task')   pool.push({ id, w: (st.weight ?? 20) * 0.6 });   // 空闲也可能切到"操作中"
   }
   M.lounge = pool.length ? (pickWeighted(pool) || 'idle') : 'idle';
+  ensureVideoData(M.lounge);        // 预热下一个空闲状态，切换时不空帧
   M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
 }
 
@@ -751,6 +765,7 @@ function pauseOthers(keep){
 function play(id){
   const next = videos[id];
   if (!next) return;
+  ensureVideoData(id);            // 按需加载：第一次演到的状态，此时才把视频数据拉起来
   const prev = cur ? videos[cur] : null;
   if (prev && prev !== next) prev.classList.remove('active');
   pauseOthers(next);
@@ -765,6 +780,15 @@ function play(id){
     if (p && p.catch) p.catch(()=>{});
   }catch(e){}
   updateShadow();
+}
+
+/* 按需加载：非 eager 状态初始只有元数据，首次要演它（或空闲时段预选到它）时切成 auto。
+   本地文件，实测切过去到能播 <100ms；rollLounge 里还会提前 7~14 秒预热。 */
+function ensureVideoData(id){
+  const v = videos[id];
+  if (!v || v.preload === 'auto') return;
+  v.preload = 'auto';
+  try{ if (v.readyState < 2) v.load(); }catch(e){}
 }
 
 function playOnce(id, ms){
@@ -1681,7 +1705,7 @@ function openChat(){
       }).catch(()=>{});
     }catch(e){}
   } else {
-    C.msgs = [{ role:'err', text:'聊天要在桌面版里用（浏览器 Demo 没有 harness 通道）' }];
+    C.msgs = [{ role:'err', text:ERR_TEXT.noHost }];
     renderChat();
   }
   touch(); applyState();
@@ -1820,7 +1844,7 @@ function onHarnessEvent(evt){
     case 'route':     C.route = (evt.provider || '') + ' / ' + (evt.model || ''); break;
     case 'turnEnd': {
       const r = evt.reason || {};
-      if (r.kind === 'error') C.tail = 'harness 出错：' + ((r.error && r.error.message) || '未知错误');
+      if (r.kind === 'error') C.tail = ERR_TEXT.harnessError + ((r.error && r.error.message) || ERR_TEXT.unknown);
       else C.tail = '';
       chatBusyEnd();
       C.stream = ''; C.reasoning = ''; C.tools = [];      // 本轮实时内容清空，改由落盘记录渲染
@@ -1858,7 +1882,7 @@ async function sendChat(){
   chatBusyStart();
   let res = null;
   try{ res = await window.petHost.chat(text, []); }         // 历史由主进程/harness 会话管
-  catch(e){ res = { ok:false, error:'调用失败：' + ((e && e.message) || e) }; }
+  catch(e){ res = { ok:false, error:ERR_TEXT.callFailed + ((e && e.message) || e) }; }
   if (res && res.ok){
     if (res.streaming){ /* 回复走事件流，别在这里结束忙碌态 */ }
     else { await refreshChat(); chatBusyEnd(); }
@@ -1866,7 +1890,7 @@ async function sendChat(){
     chatBusyEnd();
     C.tail = '出事：' + ((res && res.error) || '未知错误');
     renderChat();
-    toast('DeepSeek 请求失败');
+    toast(ERR_TEXT.requestFailed);
   }
 }
 
@@ -1961,7 +1985,8 @@ async function init(){
     const st = states[id];
     const v = document.createElement('video');
     v.src = VIDEO_DIR + st.file;
-    v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.muted = true; v.playsInline = true;
+    v.preload = EAGER_STATES.includes(id) ? 'auto' : 'metadata';
     v.loop = (st.mode === 'loop');
     v.disablePictureInPicture = true;
     v.addEventListener('ended', ()=>{ try{ v.pause(); }catch(e){} });   // 一次性动作播完别占着解码器
@@ -2068,10 +2093,23 @@ function hitTest(px, py){
 }
 
 /* ===================== 事件 ===================== */
+/* 监听器登记表：本文件的事件监听都经 on() 登记，页面卸载时统一显式移除。
+   （原来完全依赖浏览器回收；桌面版重建宿主/刷新时不希望旧回调还挂在 document 上） */
+const boundListeners = [];
+function on(target, type, fn, opts){
+  target.addEventListener(type, fn, opts);
+  boundListeners.push([target, type, fn, opts]);
+  return fn;
+}
+function unbindAll(){
+  for (const [t, type, fn, opts] of boundListeners.splice(0)){
+    try{ t.removeEventListener(type, fn, opts); }catch(e){}
+  }
+}
 function bindEvents(){
   let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0, moved = 0;
 
-  pet.addEventListener('pointerdown', (e)=>{
+  on(pet, 'pointerdown', (e)=>{
     if (e.button !== 0) return;
     const r = pet.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
@@ -2086,14 +2124,14 @@ function bindEvents(){
     applyState();
   });
 
-  pet.addEventListener('pointermove', (e)=>{
+  on(pet, 'pointermove', (e)=>{
     if (!dragging) return;
     const dx = e.clientX - sx, dy = e.clientY - sy;
     moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
     place(ox + dx, oy + dy, false);
   });
 
-  pet.addEventListener('pointerup', (e)=>{
+  on(pet, 'pointerup', (e)=>{
     if (!dragging) return;
     dragging = false; M.dragging = false;
     pet.classList.remove('dragging');
@@ -2107,7 +2145,7 @@ function bindEvents(){
     touch();
   });
 
-  pet.addEventListener('contextmenu', (e)=>{
+  on(pet, 'contextmenu', (e)=>{
     e.preventDefault();
     toggleMenu();
   });
@@ -2115,7 +2153,7 @@ function bindEvents(){
   // 点空白：只关掉面板，**不再"走过去"**
   // （全屏透明窗在"可交互"与"穿透"之间有切换延迟，鼠标刚从角色上移开就点击时，
   //   这一下会落进页面里 → 角色被瞬移过去，误触率极高，用户已要求去掉）
-  document.addEventListener('pointerdown', (e)=>{
+  on(document, 'pointerdown', (e)=>{
     const t = e.target;
     if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao'))) return;
     closeMenu();
@@ -2126,7 +2164,7 @@ function bindEvents(){
     touch();
   });
 
-  els.menu.addEventListener('click', (e)=>{
+  on(els.menu, 'click', (e)=>{
     const b = e.target.closest('button'); if (!b) return;
     const act = b.dataset.act;
     if (act === 'close'){ closeMenu(); return; }
@@ -2145,8 +2183,8 @@ function bindEvents(){
   });
 
   /* ---- 文件搜索面板：输入 / 键盘 / 点击 ---- */
-  els.sinput.addEventListener('input', scheduleSearch);
-  els.sinput.addEventListener('keydown', (e)=>{
+  on(els.sinput, 'input', scheduleSearch);
+  on(els.sinput, 'keydown', (e)=>{
     if (e.key === 'ArrowDown'){ e.preventDefault(); moveSel(1); return; }
     if (e.key === 'ArrowUp'){ e.preventDefault(); moveSel(-1); return; }
     if (e.key === 'Escape'){ e.preventDefault(); closeSearch(); return; }
@@ -2165,13 +2203,13 @@ function bindEvents(){
       }
     }
   });
-  els.slist.addEventListener('click', (e)=>{
+  on(els.slist, 'click', (e)=>{
     const rev = e.target.closest && e.target.closest('[data-reveal]');
     if (rev){ e.stopPropagation(); activate(parseInt(rev.getAttribute('data-reveal'), 10), true); return; }
     const row = e.target.closest && e.target.closest('.srow');
     if (row) activate(parseInt(row.getAttribute('data-i'), 10), e.ctrlKey || e.metaKey);
   });
-  els.slist.addEventListener('mousemove', (e)=>{      // 鼠标划过只切 class，不重建列表（重建会闪）
+  on(els.slist, 'mousemove', (e)=>{      // 鼠标划过只切 class，不重建列表（重建会闪）
     const row = e.target.closest && e.target.closest('.srow');
     if (!row) return;
     const i = parseInt(row.getAttribute('data-i'), 10);
@@ -2180,7 +2218,7 @@ function bindEvents(){
     els.slist.querySelectorAll('.srow.sel').forEach((el)=> el.classList.remove('sel'));
     row.classList.add('sel');
   });
-  document.addEventListener('keydown', (e)=>{         // 面板开着但焦点不在输入框时，Esc 也要能关
+  on(document, 'keydown', (e)=>{         // 面板开着但焦点不在输入框时，Esc 也要能关
     if (e.key !== 'Escape') return;
     if (SET.open) closeSettings();
     else if (C.open) closeChat();
@@ -2191,29 +2229,29 @@ function bindEvents(){
   });
   bindEnvPanel();      // 环境自检向导：按钮 / 勾选 / 日志流
   /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
-  els.cinput.addEventListener('keydown', (e)=>{
+  on(els.cinput, 'keydown', (e)=>{
     if (e.isComposing || e.keyCode===229) return;
     if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); return; }
     if (e.key === 'Escape'){ e.preventDefault(); closeChat(); return; }
   });
-  els.cinput.addEventListener('input', updateChatControls);
-  document.getElementById('cSend').addEventListener('click', ()=>sendChat());
-  document.getElementById('cClose').addEventListener('click', ()=>closeChat());
-  document.getElementById('cCancel').addEventListener('click', ()=> cancelChat());
+  on(els.cinput, 'input', updateChatControls);
+  on(document.getElementById('cSend'), 'click', ()=>sendChat());
+  on(document.getElementById('cClose'), 'click', ()=>closeChat());
+  on(document.getElementById('cCancel'), 'click', ()=> cancelChat());
   // 设置面板
-  document.getElementById('setSave').addEventListener('click', ()=> saveSettings());
-  document.getElementById('setTest').addEventListener('click', ()=> testSettings());
-  document.getElementById('setKeyClear').addEventListener('click', ()=> clearKeySettings());
+  on(document.getElementById('setSave'), 'click', ()=> saveSettings());
+  on(document.getElementById('setTest'), 'click', ()=> testSettings());
+  on(document.getElementById('setKeyClear'), 'click', ()=> clearKeySettings());
   const _chkUpd = document.getElementById('setCheckUpdate');
-  if (_chkUpd) _chkUpd.addEventListener('click', ()=> triggerUpdateCheck());
+  if (_chkUpd) on(_chkUpd, 'click', ()=> triggerUpdateCheck());
   try {
     if (window.petHost && window.petHost.onUpdateAvailable) {
       window.petHost.onUpdateAvailable((info) => onNewVersionAvailable(info));
     }
   } catch(e) {}
   const _envwizLink = document.getElementById('setEnvWiz');
-  if (_envwizLink) _envwizLink.addEventListener('click', ()=>{ closeSettings(); openEnv(); });
-  document.getElementById('setDetect').addEventListener('click', async ()=>{
+  if (_envwizLink) on(_envwizLink, 'click', ()=>{ closeSettings(); openEnv(); });
+  on(document.getElementById('setDetect'), 'click', async ()=>{
     setMsg('setRepoHint', '正在重新探测…');
     let r = null;
     try{ r = await window.petHost.detectRepo(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
@@ -2224,7 +2262,7 @@ function bindEvents(){
       : '未探测到 harness 仓库，已保留当前输入：可点“浏览…”选仓库根目录（含 apps\\cli\\src\\bin.ts 的那一层）',
       r && r.path ? '' : 'bad');
   });
-  document.getElementById('setBrowse').addEventListener('click', async ()=>{
+  on(document.getElementById('setBrowse'), 'click', async ()=>{
     if (!(window.petHost && window.petHost.browseRepo)){
       setMsg('setRepoHint', '选目录要在桌面版里用（浏览器 Demo 没有这个通道）', 'bad'); return;
     }
@@ -2238,7 +2276,7 @@ function bindEvents(){
       ? ('已选择：' + r.path + '（点“保存”生效）')
       : ('这个目录里没找到 apps\\cli\\src\\bin.ts：' + r.path + '，请选 harness 仓库根目录'), r.valid ? 'ok' : 'bad');
   });
-  document.getElementById('setKeyEye').addEventListener('click', ()=>{
+  on(document.getElementById('setKeyEye'), 'click', ()=>{
     const k = document.getElementById('setKey');
     k.type = k.type === 'password' ? 'text' : 'password';
   });
@@ -2253,15 +2291,15 @@ function bindEvents(){
       if (SAO.open) renderCardMetrics();
     });
   }catch(e){ console.warn('sysinfo 订阅失败', e); }
-  document.getElementById('cClear').addEventListener('click', ()=> clearChat());
+  on(document.getElementById('cClear'), 'click', ()=> clearChat());
 
   if (window.petHost && window.petHost.onOpenSearch) window.petHost.onOpenSearch(()=> openSearch());
   if (window.petHost && window.petHost.onOpenChat) window.petHost.onOpenChat(()=> openChat());
 
-  document.getElementById('btnMenu').addEventListener('click', ()=> toggleMenu());
-  document.getElementById('btnSettings').addEventListener('click', ()=> openSettings());
+  on(document.getElementById('btnMenu'), 'click', ()=> toggleMenu());
+  on(document.getElementById('btnSettings'), 'click', ()=> openSettings());
   /* SAO: real button focus, explicit branches, one keyboard handler. */
-  els.sao.addEventListener('click',e=>{
+  on(els.sao, 'click',e=>{
     const back=e.target.closest('[data-back]');
     if(back){
       if(back.dataset.back==='categories'){saoSelectCat(SAO_CATS[(SAO_CATS.indexOf(SAO.cat)+1)%SAO_CATS.length]);}
@@ -2271,9 +2309,9 @@ function bindEvents(){
     const cat=e.target.closest('[data-cat]');if(cat){saoSelectCat(cat.dataset.cat);return;}
     const row=e.target.closest('#saoSub .row');if(row&&!row.disabled)saoRunSub(Number(row.dataset.i));
   });
-  els.saoList.addEventListener('scroll',()=>{if(SAO.open)placeSaoSub();});
-  addEventListener('resize',()=>{if(SAO.open)positionSao();});
-  document.addEventListener('keydown',e=>{
+  on(els.saoList, 'scroll',()=>{if(SAO.open)placeSaoSub();});
+  on(window, 'resize',()=>{if(SAO.open)positionSao();});
+  on(document, 'keydown',e=>{
     if(!SAO.open||e.defaultPrevented)return;
     if(!['Escape','ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
     e.preventDefault();e.stopPropagation();
@@ -2295,39 +2333,39 @@ function bindEvents(){
       if(SAO.subRow>=0)saoBack();else els.saoList.querySelector('[data-cat="'+SAO.cat+'"]')?.focus();
     }
   });
-  document.getElementById('btnTask').addEventListener('click', (e)=>{
+  on(document.getElementById('btnTask'), 'click', (e)=>{
     if (M.taskCount > 0) return;
     startTask();
     e.target.classList.add('on');
     toast('模拟长任务 10 秒');
     setTimeout(()=>{ endTask(); e.target.classList.remove('on'); toast('长任务结束'); }, 10000);
   });
-  document.getElementById('btnAuto').addEventListener('click', ()=> setAuto(!opt.auto));
+  on(document.getElementById('btnAuto'), 'click', ()=> setAuto(!opt.auto));
   // SAO 皮肤：滑杆填充比例写进 --fill，给轨道上色（纯外观，不影响取值逻辑）
   const rangeFill = (el)=>{
     const upd = ()=>{ const lo = parseFloat(el.min || 0), hi = parseFloat(el.max || 100);
       const p = ((parseFloat(el.value) - lo) / (hi - lo)) * 100;
       el.style.setProperty('--fill', p.toFixed(1) + '%'); };
-    el.addEventListener('input', upd); el.addEventListener('change', upd); upd();
+    on(el, 'input', upd); on(el, 'change', upd); upd();
   };
   ['size','speed'].forEach((id)=>{ const el = document.getElementById(id); if (el) rangeFill(el); });
-  document.getElementById('btnShadow').addEventListener('click', ()=> setShadow(!opt.shadow));
-  document.getElementById('btnBg').addEventListener('click', ()=>{
+  on(document.getElementById('btnShadow'), 'click', ()=> setShadow(!opt.shadow));
+  on(document.getElementById('btnBg'), 'click', ()=>{
     const order = ['desktop','checker','none'];
     setBg(order[(order.indexOf(opt.bg) + 1) % order.length]);
   });
-  document.getElementById('btnGhost').addEventListener('click', ()=> setBg(opt.bg === 'none' ? 'desktop' : 'none'));
+  on(document.getElementById('btnGhost'), 'click', ()=> setBg(opt.bg === 'none' ? 'desktop' : 'none'));
 
-  els.size.addEventListener('input', (e)=>{ applySize(parseInt(e.target.value));
+  on(els.size, 'input', (e)=>{ applySize(parseInt(e.target.value));
     document.getElementById('sizeVal').textContent = e.target.value;
     replaceOpenPanels(); });
-  els.speed.addEventListener('input', (e)=>{
+  on(els.speed, 'input', (e)=>{
     baseRate = e.target.value / 100;
     applyRates();
     document.getElementById('speedVal').textContent = baseRate.toFixed(1) + 'x';
   });
 
-  addEventListener('keydown', (e)=>{
+  on(window, 'keydown', (e)=>{
     if(e.defaultPrevented || e.target.closest?.('input,textarea,select,[contenteditable=true]')) return;
     if (e.key === 'Escape'){                 // 面板打开时 Esc 必须先关面板（原来被下面的 return 吃掉，只能重开再关）
       if (SET.open){ closeSettings(); return; }
@@ -2339,14 +2377,15 @@ function bindEvents(){
     if (e.code === 'Space'){ e.preventDefault(); doReact(); touch(); }
     if (e.key === 'Escape') closeMenu();
   });
-  addEventListener('resize', ()=>{ clampToScreen(false); replaceOpenPanels(); });
+  on(window, 'resize', ()=>{ clampToScreen(false); replaceOpenPanels(); });
 
   // 首次点击 → 解锁自动播放
-  document.addEventListener('pointerdown', function unlock(){
+  on(document, 'pointerdown', function unlock(){
     for (const id in videos){ try{ videos[id].load(); }catch(e){} }
     applyRates();
     play(cur || 'idle');
   }, {once:true});
+  on(window, 'beforeunload', unbindAll);        // 卸载 → 显式摘掉本函数登记的全部监听器
 }
 
 function setAuto(on){
