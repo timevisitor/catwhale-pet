@@ -21,7 +21,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const TICK_MS = 1500;            // Node 侧采样间隔
-const REAP_MS = 60000;           // 菜单关掉后继续缓存这么久再收进程
+const REAP_MS = 30000;           // 菜单关掉后继续缓存这么久再收进程（优化：从60秒降至30秒）
 
 let psChild = null;
 let psLatest = null;             // { cpuFreqMHz, cpuBaseMHz, ramSpeedMHz, gpu:{...} }
