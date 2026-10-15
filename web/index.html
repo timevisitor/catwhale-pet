@@ -2014,7 +2014,9 @@ function alphaBitmap(){
   const v = videos[cur];
   if (!v || v.readyState < 2) return null;
   const t = now();
-  if (alphaCache.state === cur && alphaCache.img && t - alphaCache.t < 400) return alphaCache;
+  // 优化：静止状态延长缓存到1000ms，减少canvas操作
+  const cacheTime = (cur === 'idle' || cur === 'lounge') ? 1000 : 400;
+  if (alphaCache.state === cur && alphaCache.img && t - alphaCache.t < cacheTime) return alphaCache;
   alphaCache.state = cur; alphaCache.t = t;
   try{
     if (!alphaSampler){
@@ -2115,12 +2117,6 @@ function bindEvents(){
     if (act === 'settings'){ closeMenu(); openSettings(); return; }
     if (act === 'search'){ closeMenu(); openSearch(); return; }
     if (act === 'panel'){ closeMenu(); els.panel.classList.toggle('hidden'); return; }
-    if (act === 'task'){
-      closeMenu(); startTask();
-      toast('开始长任务（10 秒后自动结束）');
-      setTimeout(()=>{ endTask(); toast('长任务结束'); }, 10000);
-      return;
-    }
     if (states[act]){ playOnce(act); closeMenu(); }
   });
 
