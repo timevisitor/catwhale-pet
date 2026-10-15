@@ -1701,6 +1701,7 @@ function toggleChat(){ C.open ? closeChat() : openChat(); }
 async function refreshChat(){
   try{ C.msgs = await window.petHost.chatHistory(); }catch(e){ C.msgs = []; }
   renderChat();
+  saveChatToStorage();  // 优化：持久化聊天记录
 }
 
 function mdLite(t){                       // 极简 markdown：代码块 / 行内代码 / 粗体，其余按纯文本转义
@@ -1879,9 +1880,33 @@ async function cancelChat(){
 }
 async function clearChat(){
   if (C.busy){ toast('先取消正在处理的请求'); return; }
+  saveChatToStorage();  // 优化：清空后同步持久化
   try{ await window.petHost.clearChat(); }catch(e){}
   C.msgs = []; C.stream = ''; C.reasoning = ''; C.tools = []; C.tail = ''; C.usage = null; C.title = '';
   renderChat(); toast('对话已清空');
+  saveChatToStorage();  // 优化：清空后同步持久化
+}
+
+/* ===================== 聊天记录持久化 ===================== */
+function saveChatToStorage(){
+  try{
+    const data = { msgs: C.msgs, title: C.title, savedAt: Date.now() };
+    localStorage.setItem('petChatHistory', JSON.stringify(data));
+  }catch(e){ /* 存储失败不影响主流程 */ }
+}
+  loadChatFromStorage();  // 优化：启动时恢复聊天记录
+function loadChatFromStorage(){
+  try{
+    const saved = localStorage.getItem('petChatHistory');
+    if (saved){
+      const data = JSON.parse(saved);
+      if (data.msgs && Array.isArray(data.msgs)){
+        C.msgs = data.msgs;
+        C.title = data.title || '';
+        renderChat();
+      }
+    }
+  }catch(e){ /* 恢复失败不影响主流程 */ }
 }
 
 /* ===================== 初始化 ===================== */
