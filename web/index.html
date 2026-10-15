@@ -1880,7 +1880,6 @@ async function cancelChat(){
 }
 async function clearChat(){
   if (C.busy){ toast('先取消正在处理的请求'); return; }
-  saveChatToStorage();  // 优化：清空后同步持久化
   try{ await window.petHost.clearChat(); }catch(e){}
   C.msgs = []; C.stream = ''; C.reasoning = ''; C.tools = []; C.tail = ''; C.usage = null; C.title = '';
   renderChat(); toast('对话已清空');
@@ -1894,7 +1893,6 @@ function saveChatToStorage(){
     localStorage.setItem('petChatHistory', JSON.stringify(data));
   }catch(e){ /* 存储失败不影响主流程 */ }
 }
-  loadChatFromStorage();  // 优化：启动时恢复聊天记录
 function loadChatFromStorage(){
   try{
     const saved = localStorage.getItem('petChatHistory');
@@ -1992,6 +1990,7 @@ async function init(){
   if (opt.menu) openMenu();                 // ?menu=1
   setInterval(tick, 150);
   if (!window.petHost || opt.debug) requestAnimationFrame(fpsLoop);   // 桌面宿主里不跑调试FPS循环
+  loadChatFromStorage();            // 本地聊天记录在 UI 就绪后恢复（否则 renderChat 拿不到 els）
   window.__petInitOK = true;
   toast('拖动我 · 单击互动 · 右键菜单');
 }

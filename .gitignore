@@ -39,6 +39,9 @@ tools/tmp_es/
 *.log
 *.npy
 
-# 录制/探针实验的产出帧（tools/record/probe*.js 生成，可重新跑）
-tools/record/out/
+# 他线 WIP 与个人交接单：本机脚本/素材，绝不入库
+# （曾因 `git add -A` 被误提交到公开仓库，见 H:\Hermes交付\猫鲸桌宠优化\核验与修复记录.md）
+tools/record/
+tools/video/
+HANDOFF_*.md
 app/diag/
