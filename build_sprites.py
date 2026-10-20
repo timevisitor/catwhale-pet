@@ -29,6 +29,7 @@ SHOE_BAND = 50             # 鞋区高度
 WTHR = 60                  # 判定"角色主体"的行宽阈值，用来滤掉飘起的细发丝/软阴影尖
 SOLE_NAVY = 6              # 鞋子是深蓝：像素满足 B-R >= 6 才算"鞋子墨迹"
 SOLE_MIN_PX = 20           # 一整行至少这么多鞋子墨迹像素，才算踩到鞋底
+HEAD_REF = 358             # "待机"片段的头宽实测（crown+20..+150 行 alpha 跨度中位，源画幅 724 宽）
 
 # 特殊片段的对齐配置。mode:
 #   sole  = 默认，鞋宽归一 + 鞋底对齐基线
@@ -41,6 +42,20 @@ ANCHORS = {
     # 两段素材人物偏小：按用户实测放大到原尺寸的 1.2 倍，其余按常规"鞋底对齐基线"处理
     "抓着":     dict(mode="sole", scale=1.20, ref_frame=-1, exclude_right=470),
     "松手落下": dict(mode="sole", scale=1.20, ref_frame=-1),
+    # ── 新增的 5 个待机动作（首帧=Qwen-Image 以站立参考帧编辑生成，动画=H3 I2V）──
+    # 这几段不能用鞋宽归一（坐椅子/盘腿/腾空时"底部 50 行的横向跨度"根本不是鞋宽，
+    # 实测 0.36~3.0 倍），也不能用身高（坐着本来就比站着矮）。
+    # 用 scale="auto_head"：按头宽与"待机"头宽(HEAD_REF=358)的比例算倍率——头部尺寸与姿势无关。
+    # ref_frame="lowest" = 用整段里鞋底最低的那一帧量锚点（原地跳高：落地帧才踩在基线上）。
+    # 坐椅摆腿/坐地大盆/站着打盹：头宽(HEAD_REF)归一是可靠的，用 auto_head。
+    # 荡秋千/原地跳高：头宽测量的前提(头顶=最上一行有料的行)不成立——秋千的绳子一直伸到画面顶边，
+    # "crown+20..+150 行"量到的是绳子间距；跳高则是举起的双臂。实测这两段 auto_head 给的结果
+    # 让角色比待机明显小一圈（脸宽 106/80 vs 待机 150），所以改成按对比图人工标定的固定倍率。
+    "坐椅摆腿":     dict(mode="sole", scale="auto_head", ref_frame=0),
+    "荡秋千":       dict(mode="sole", scale=1.73, ref_frame=0),
+    "坐地大盆吃饭": dict(mode="sole", scale="auto_head", ref_frame=0),
+    "站着打盹":     dict(mode="sole", scale="auto_head", ref_frame=0),
+    "原地跳高":     dict(mode="sole", scale=1.40, ref_frame="lowest"),
 }
 
 
@@ -83,6 +98,26 @@ def sole_row(a, exclude_right=None, navy=SOLE_NAVY, min_px=SOLE_MIN_PX):
     return int(rows.max()) if len(rows) else None
 
 
+def head_width(files, clip_dir, ex=None, band=(20, 150)):
+    """头宽：从头顶往下 band 行(alpha 跨度)的中位值。
+
+    坐姿/盘腿/腾空类片段不能用"身高"或"底部 50 行跨度"当尺度不变量（姿势一变全乱），
+    但头部尺寸与姿势无关，是同一角色最稳的尺度参照。
+    """
+    ws = []
+    for f in files:
+        a = np.asarray(Image.open(os.path.join(clip_dir, f)).convert("RGBA")).astype(np.float32)
+        m = a[:, :, 3] > 127
+        if ex:
+            m = _cut(m, ex)
+        top = robust_top(m)
+        seg = m[top + band[0]:top + band[1]]
+        cols = np.nonzero(seg.sum(0))[0]
+        if len(cols):
+            ws.append(int(cols.max() - cols.min() + 1))
+    return float(np.median(ws)) if ws else 0.0
+
+
 def body_center_x(m, exclude_right=None):
     """下半身质心的 x —— 角色身体中轴(避开抬起的胳膊)"""
     mm = m if exclude_right is None else _cut(m, exclude_right)
@@ -116,8 +151,17 @@ def measure(clip_dir, files, cfg):
         sw = float(np.median(shoes))
         # 默认按鞋宽归一、按所有帧的最低点(union)对齐；
         # 若配置里给了 scale / ref_frame，则用固定倍率、并用指定帧量锚点
-        scale = float(cfg["scale"]) if cfg.get("scale") else TARGET_SHOE / sw
-        ri = cfg.get("ref_frame")        # 不填=用第一帧(用户口径)，-1=末帧
+        # 默认按鞋宽归一、按所有帧的最低点(union)对齐；
+        # 若配置里给了 scale / ref_frame，则用固定倍率、并用指定帧量锚点
+        # scale="auto_head"：按头宽与"待机"头宽(HEAD_REF)的比例算倍率 —— 坐姿/腾空类用这个
+        if cfg.get("scale") == "auto_head":
+            hw = head_width(files, clip_dir, ex)
+            scale = HEAD_REF / hw if hw else 1.0
+        else:
+            scale = float(cfg["scale"]) if cfg.get("scale") else TARGET_SHOE / sw
+        ri = cfg.get("ref_frame")        # 不填=用第一帧(用户口径)，-1=末帧，"lowest"=鞋底最低帧
+        if ri == "lowest":
+            ri = int(np.argmax(soles))   # 原地跳高：落地帧的鞋底才踩地
         anchor_y = soles[ri] if ri is not None else soles[0]
         return scale, dict(shoe_w=sw, anchor_y=int(anchor_y), cx=cx, anchor="sole",
                            sole_src=int(anchor_y), legs_bottom=int(bottoms[ri if ri is not None else 0]))
@@ -209,7 +253,16 @@ def main(alpha_root, out_root, only=None):
 
     print(f"\n统一画布 {CANVAS_W}x{CANVAS_H}  基线y={BASE_Y}  中心x={CENTER_X}  "
           f"待机头顶y={idle_crown} 待机中点y={idle_mid}")
-    with open(os.path.join(out_root, "meta.json"), "w", encoding="utf-8") as fp:
+    # 只处理部分片段时（only 非空）合并旧 meta，否则会把其它片段的记录写没
+    meta_path = os.path.join(out_root, "meta.json")
+    if only and os.path.isfile(meta_path):
+        try:
+            old = json.load(open(meta_path, encoding="utf-8"))
+            old.update(meta)
+            meta = old
+        except Exception as exc:
+            print("[警告] 合并已有 meta.json 失败，将只写本次的片段: %s" % exc)
+    with open(meta_path, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=2)
 
 

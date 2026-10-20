@@ -615,7 +615,12 @@ const DEFAULT_STATES = {
   working:     { name:'操作中',     file:'working.webm',     mode:'loop', role:'task',    weight:25, scale:1.0 },
   stand_arms:  { name:'站立抬胳膊', file:'stand_arms.webm',  mode:'loop', role:'menu',    scale:1.0  },
   grabbed:     { name:'抓着',       file:'grabbed.webm',     mode:'loop', role:'drag',    scale:1.00 },
-  drop:        { name:'松手落下',   file:'drop.webm',        mode:'once', role:'release', scale:1.00, rate:2.0 }
+  drop:        { name:'松手落下',   file:'drop.webm',        mode:'once', role:'release', scale:1.00, rate:2.0 },
+  eat:         { name:'吃米饭',     file:'eat.webm',         mode:'once', role:'idle_act', scale:1.00, rate:2.0 },
+  sit_chair:   { name:'坐椅摆腿',   file:'sit_chair.webm',   mode:'loop', role:'lounge',  weight:15, react:20, scale:1.0 },
+  doze:        { name:'站着打盹',   file:'doze.webm',        mode:'loop', role:'lounge',  weight:20, react:30, scale:1.0 },
+  big_bowl:    { name:'坐地大盆吃饭', file:'big_bowl.webm',  mode:'once', role:'idle_act', scale:1.00, rate:1.5 },
+  jump_high:   { name:'原地跳高',   file:'jump_high.webm',   mode:'once', role:'idle_act', scale:1.00, rate:1.0 }
 };
 const VIDEO_DIR = 'assets/video/';
 const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
@@ -1225,7 +1230,8 @@ let SAO_METRICS = null;      // 主进程推来的实时硬件数据（详情卡
 /* ---- 状态文案（详情卡用，全是真的项目状态）---- */
 function stateCn(){
   const map = { idle:'待机', grabbed:'抓着', stand_arms:'站立抬胳膊', working:'操作中',
-                drop:'落下', tail_open:'摇尾巴', tail_closed:'闭眼摇尾' };
+                drop:'落下', tail_open:'摇尾巴', tail_closed:'闭眼摇尾', eat:'吃米饭',
+                sit_chair:'坐椅摆腿', doze:'站着打盹', big_bowl:'坐地大盆吃饭', jump_high:'原地跳高' };
   return map[cur] || cur;
 }
 function cardInfoFor(cat){

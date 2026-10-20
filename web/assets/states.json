@@ -93,5 +93,55 @@
     "duration": 3.75,
     "frames": 90,
     "bytes": 1075397
+  },
+  "sit_chair": {
+    "id": "sit_chair",
+    "name": "坐椅摆腿",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 15,
+    "react": 20,
+    "file": "sit_chair.webm",
+    "duration": 3.75,
+    "frames": 90,
+    "bytes": 1530345
+  },
+  "doze": {
+    "id": "doze",
+    "name": "站着打盹",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 20,
+    "react": 30,
+    "file": "doze.webm",
+    "duration": 3.75,
+    "frames": 90,
+    "bytes": 980687
+  },
+  "big_bowl": {
+    "id": "big_bowl",
+    "name": "坐地大盆吃饭",
+    "mode": "once",
+    "role": "idle_act",
+    "scale": 1.0,
+    "rate": 1.5,
+    "file": "big_bowl.webm",
+    "duration": 3.75,
+    "frames": 90,
+    "bytes": 1236855
+  },
+  "jump_high": {
+    "id": "jump_high",
+    "name": "原地跳高",
+    "mode": "once",
+    "role": "idle_act",
+    "scale": 1.0,
+    "rate": 1.0,
+    "file": "jump_high.webm",
+    "duration": 4.458,
+    "frames": 107,
+    "bytes": 2674360
   }
 }

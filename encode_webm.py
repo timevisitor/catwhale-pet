@@ -42,6 +42,13 @@ STATE_MAP = {
     # 空闲"小动作"：一次性播完回待机（由页面的空闲阶梯随机触发，不进循环池）。
     # 素材本身节奏慢，用户要求 2 倍速 → rate=2.0（与速度滑块相乘，和"松手落下"同一机制）。
     "吃米饭":     dict(id="eat",         name="吃米饭",     mode="once", role="idle_act", scale=1.00, rate=2.0),
+    # ── 2026-10 新增的 5 个待机动作 ──
+    # 坐姿/悬空/腾空类进 lounge 循环池（长时间空闲时停留 7~14s），跳高与大盆吃饭是一次性小动作。
+    # weight 压低（15~20），避免把原来"睁眼摇尾/闭眼摇尾"的出场率挤得太低。
+    "坐椅摆腿":   dict(id="sit_chair",  name="坐椅摆腿",    mode="loop", role="lounge",   scale=1.00, weight=15, react=20),
+    "坐地大盆吃饭": dict(id="big_bowl", name="坐地大盆吃饭", mode="once", role="idle_act", scale=1.00, rate=1.5),
+    "站着打盹":   dict(id="doze",       name="站着打盹",    mode="loop", role="lounge",   scale=1.00, weight=20, react=30),
+    "原地跳高":   dict(id="jump_high",  name="原地跳高",    mode="once", role="idle_act", scale=1.00, rate=1.0),
 }
 
 
