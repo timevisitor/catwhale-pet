@@ -33,19 +33,25 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// 每个等级追加的 Chromium 功能禁用项（会与 main.js 原有的合并，不覆盖）
+// 各等级的 Chromium 功能禁用项（会与 main.js 原有的合并，不覆盖）
+// 注意：曾试着用 disable-features=TSFImeSupport 阻止搜狗 TSF 组件注入，实测无效——
+// 桌宠进程照样加载 SogouTSF.ime / SogouPY.ime（模块数、列表与正常启动完全一致）。
+// 所以这里不再动输入法支持（那个开关只会让用户打不了中文），只做时序与渲染层面的降级。
 const LEVEL_FEATURES = {
   0: [],
-  1: ['TSFImeSupport'],
-  2: ['TSFImeSupport', 'CalculateNativeWinOcclusion'],
-  3: ['TSFImeSupport', 'CalculateNativeWinOcclusion'],
+  1: [],
+  2: ['CalculateNativeWinOcclusion'],
+  3: ['CalculateNativeWinOcclusion'],
 };
+
+// 建窗延迟（毫秒）：让输入法的注入/初始化先跑完，再建透明窗口，避开竞态
+const LEVEL_DELAY_MS = { 0: 0, 1: 800, 2: 800, 3: 3000 };
 
 const LEVEL_NOTES = {
   0: '正常',
-  1: '关掉 TSF 输入支持（避开输入法注入的 hook）',
+  1: '延迟 0.8 秒建窗（让输入法注入先跑完，改时序）',
   2: '再关硬件加速（透明窗口走软件合成）',
-  3: '再延迟建窗、降置顶级别',
+  3: '再拉长到 3 秒、降置顶级别、禁用 GPU',
 };
 
 // 常见输入法安装位置（只用于写日志，不改变行为）
@@ -106,54 +112,62 @@ module.exports = function makeBootGuard(app) {
   let crashedLastTime = false;
   if (BOOT_PHASES.includes(prev.phase) && fresh) crashedLastTime = true;
 
-  // ---- 决定本次等级 ----
-  let level = Number(prev.level || 0);
-  const badge = [];
+  // ---- 决定等级 ----
+  // persistLevel：写进文件、下次启动仍然生效的等级（只由崩溃判定和 --compat-reset 改）
+  // runLevel    ：本次实际用的等级（--compat=N / --compat-off 只改它，不落盘）
+  let persistLevel = Number(prev.level || 0);
   let resetBy = '';
   if (argv.includes('--compat-reset')) {
-    level = 0;
+    persistLevel = 0;
     prev.fails = 0;
     resetBy = '--compat-reset';
   }
+  if (crashedLastTime && !resetBy) {
+    persistLevel = Math.min(3, persistLevel + 1);
+    log(`[${new Date().toISOString()}] CRASH-DETECTED lastPhase=${prev.phase} ` +
+        `lastStart=${new Date(lastStart).toISOString()} failCount=${Number(prev.fails || 0) + 1} -> level=${persistLevel}`);
+  }
+
   const forced = argOf('--compat');
+  let runLevel = persistLevel;
+  let forcedNote = '';
   if (forced !== undefined && /^[0-3]$/.test(forced)) {
-    level = Number(forced);
-    resetBy = '--compat=' + forced;
+    runLevel = Number(forced);
+    forcedNote = '--compat=' + forced;
   }
   if (argv.includes('--compat-off')) {
-    level = 0;
-    resetBy = '--compat-off';
+    runLevel = 0;
+    forcedNote = '--compat-off';
   }
-
-  if (crashedLastTime && !resetBy) {
-    level = Math.min(3, level + 1);
-    badge.push('上次启动停在 ' + prev.phase + ' → 升到 L' + level);
-    log(`[${new Date().toISOString()}] CRASH-DETECTED lastPhase=${prev.phase} ` +
-        `lastStart=${new Date(lastStart).toISOString()} failCount=${Number(prev.fails || 0) + 1} -> level=${level}`);
-  }
+  const level = runLevel;                 // 下面一律用"本次实际等级"
 
   const state = {
-    level,
+    level: persistLevel,                  // 落盘的是持久等级
+    runLevel,                             // 本次实际（排查用，下次启动不参考）
     fails: crashedLastTime ? Number(prev.fails || 0) + 1 : Number(prev.fails || 0),
     phase: 'process-boot',
     lastStart: t0,
     lastCrashedPhase: crashedLastTime ? prev.phase : (prev.lastCrashedPhase || ''),
     lastCrashedAt: crashedLastTime ? lastStart : (prev.lastCrashedAt || 0),
-    note: LEVEL_NOTES[level],
+    note: LEVEL_NOTES[persistLevel],
   };
   writeState(state);
 
   const ime = detectIme();
-  log(`[${new Date().toISOString()}] BOOT level=${level}${resetBy ? ' (' + resetBy + ')' : ''} ` +
+  log(`[${new Date().toISOString()}] BOOT level=${level}${forcedNote ? ' (' + forcedNote + '，不落盘)' : ''}` +
+      `${resetBy ? ' (' + resetBy + ')' : ''} ` +
       `prevPhase=${prev.phase || '-'} ime=${ime.length ? ime.join(';') : '(none)'} ` +
       `electron=${process.versions.electron} win=${os.release()}`);
 
   const features = LEVEL_FEATURES[level] || [];
 
+  const delayMs = LEVEL_DELAY_MS[level] || 0;
+
   return {
-    level,
+    level,               // 本次实际生效的等级
+    delayMs,             // 建窗前等待毫秒数
+    persistLevel,        // 落盘的等级（下次启动参考）
     features,
-    badge,
     crashedLastTime,
     lastCrashedPhase: state.lastCrashedPhase,
     statePath,
@@ -168,6 +182,7 @@ module.exports = function makeBootGuard(app) {
       cur.phase = name;
       cur.lastStart = cur.lastStart || t0;
       if (extra) Object.assign(cur, extra);
+      cur.runLevel = runLevel;
       writeState(cur);
       log(`[${new Date().toISOString()}] PHASE ${name} +${Date.now() - t0}ms` +
           (extra ? ' ' + JSON.stringify(extra) : ''));

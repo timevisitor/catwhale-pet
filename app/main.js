@@ -18,6 +18,7 @@ if (bootGuard.level >= 2) {
   try { app.disableHardwareAcceleration(); } catch (e) { /* 老版本没有也不影响 */ }
   app.commandLine.appendSwitch('disable-gpu-compositing');
 }
+if (bootGuard.level >= 3) app.commandLine.appendSwitch('disable-gpu');
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
@@ -1421,8 +1422,8 @@ if (!app.requestSingleInstanceLock()) {
     console.log('BOOTGUARD ' + JSON.stringify({ level: bootGuard.level, features: bootGuard.features,
       crashedLastTime: bootGuard.crashedLastTime, lastCrashedPhase: bootGuard.lastCrashedPhase,
       ime: bootGuard.ime, log: bootGuard.logPath }));
-    // L3：先把进程晾一会儿再建窗口，避开输入法 hook 的注入时序（实测有机器是这个撞上的）
-    if (bootGuard.level >= 3) await new Promise((r) => setTimeout(r, 1200));
+    // 按等级延迟建窗：让输入法的注入/初始化先跑完，再建透明窗口（避开注入竞态）
+    if (bootGuard.delayMs > 0) await new Promise((r) => setTimeout(r, bootGuard.delayMs));
     await createWindow();
     bootGuard.phase('ready');
     buildTray();
