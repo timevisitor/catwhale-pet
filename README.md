@@ -90,6 +90,34 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.1.8**
+  - **新增启动看门狗与兼容模式（`app/boot-guard.js`）**。Windows 上"全屏透明 + 置顶 + 逐像素穿透"
+    的窗口走分层合成路径，第三方输入法（典型是搜狗 16.x：`IChat`/`isgpet`/`PicFace`/`systembeautify`
+    四个 bundle 加 `SogouPY.ime`/`SogouTSF.ime`）注入宿主进程后会 hook 窗口与输入相关 API，
+    一旦和 Chromium 的初始化顺序撞上，就在原生层 `CHECK` 失败 → `__debugbreak`（异常码 `0x80000003`），
+    进程直接消失。**这类崩溃 JS 层接不住**：`uncaughtException`、`render-process-gone`、
+    `crashReporter` 都不会触发，所以只能靠"下一次启动降级"兜底。
+  - 机制：每次启动把阶段写进 `%APPDATA%\桌宠\boot-guard.json`
+    （`process-boot` → `window-created` → `page-loaded` → `ready`）。下次启动若发现上次停在中间态
+    且距今 10 分钟内（排除关机/任务管理器结束），判定为启动期崩溃，兼容等级 +1，并往
+    `boot-guard.log` 追加一行（含上次停在哪个阶段、检测到的输入法路径、Electron/系统版本）。
+    `ready` 是终态，所以正常退出不会被误判。
+  - 等级：**L0** 正常；**L1** 关 Chromium 的 Windows TSF 输入支持（`disable-features=TSFImeSupport`）；
+    **L2** 再 `disableHardwareAcceleration()` + `disable-gpu-compositing`（透明窗口改走软件合成）；
+    **L3** 再延迟 1.2 秒建窗并把置顶级别从 `screen-saver` 降到 `normal`（避开合成时序）。
+  - 托盘：等级 >0 时菜单顶部多一条「🛡 兼容模式 Lx — 点这里恢复默认」，点一下清零（下次启动生效，
+    同时写 `phase=quit` 防止被误判成崩溃）。
+  - 命令行：`--compat=0..3` 强制本次等级（不改文件）、`--compat-off` 本次按正常跑、
+    `--compat-reset` 清零并清失败计数。
+  - 顺带修掉一个隐患：`disable-features` 只认最后一次 `appendSwitch`，后来的会覆盖前面的。
+    现在把 `CalculateNativeWinOcclusion` 与兼容等级需要的项拼成一份再 append，以后再加开关不会
+    把"防遮挡"顶掉。
+  - 实测（本机 Electron 44.4.2 / Win11 26300）：正常启动 209 ms 到 `ready`；模拟"上次崩在
+    `window-created`"后连续启动，依次升到 L1 / L2 / L3 都正常到 `ready`（L3 建窗延迟 1247 ms 生效）；
+    `--compat-reset` 归零正常；打成便携版后同样生效（包内 `resources/app/boot-guard.js`）。
+  - 注意：L1 关掉 TSF 后，桌宠内的输入框可能用不了中文输入法（取决于输入法是否只走 TSF）。
+    打不了中文就点托盘那条恢复默认，看门狗下次仍会按需要再降。
+
 - **v0.1.7**
   - **新增 4 个待机动画**：`坐椅摆腿`（sit_chair，loop）、`站着打盹`（doze，loop）、
     `坐地大盆吃饭`（big_bowl，一次性）、`原地跳高`（jump_high，一次性）。状态数 8 → 12。
@@ -661,6 +689,11 @@ harness 聊天回复"都正常"(9.0s) ✔ / 页面自检 idle 无错误 ✔ / �
 - 注意：`WindowFromPoint` 探不到这种分层/透明窗（会被跳过），别拿它当证据。
 
 ## 十四、已知限制
+
+**输入法注入**：搜狗、QQ 拼音、百度拼音都会往 GUI 进程注入 DLL 并 hook 窗口/输入 API，桌宠的
+"透明 + 置顶 + 穿透"窗口是最容易被 hook 踩到的形态。表现是双击后卡几秒、窗口不出现、进程消失
+（原生 `0x80000003`）。项目侧的应对就是 `boot-guard.js` 的自动降级，见 v0.1.8 与
+`docs/兼容模式.md`。崩溃日志固定写在 `%APPDATA%\桌宠\boot-guard.log`，反馈问题时带上它。
 
 - 冷启动 5~7 秒（tsx 转译）；要更快可先把 harness `pnpm run build`，改走构建产物启动。
 - 协议无 cancel/close：取消 = 杀进程重启（可接受，代价是下次要重新启动 + 新会话）。

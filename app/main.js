@@ -10,6 +10,14 @@ const { execFile } = require('child_process');
 process.env.CATWHALE_REPO_CACHE = path.join(app.getPath('userData'), 'repo-cache.json');
 const { HarnessClient, detectRepo, isRepoDir, resolveRepo, inspectRepo, supportsHarnessNode } = require('./harness-client.js');
 const { checkUpdate, GITHUB_RELEASES_PAGE } = require('./updater.js');
+// 启动看门狗：必须在任何 Chromium 开关之前初始化（它会决定本次的兼容等级）
+// 详见 boot-guard.js 顶部注释：透明窗口 + 输入法注入会让 Chromium 原生 CHECK 崩，JS 接不住，
+// 只能靠"下一次启动降级"兜底。
+const bootGuard = require('./boot-guard.js')(app);
+if (bootGuard.level >= 2) {
+  try { app.disableHardwareAcceleration(); } catch (e) { /* 老版本没有也不影响 */ }
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+}
 const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
@@ -174,6 +182,7 @@ function startServer() {
 
 /* ---------- 主窗口 ---------- */
 async function createWindow() {
+  bootGuard.phase('window-created');
   const wa = resolveStartupDisplay();                   // 优先恢复上次所在屏幕，否则主屏
   const st = loadState();
   const ws = WINSIZE ? WINSIZE.split('x').map(Number) : null;
@@ -189,7 +198,7 @@ async function createWindow() {
       backgroundThrottling: false
     }
   });
-  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setAlwaysOnTop(true, bootGuard.level >= 3 ? 'normal' : 'screen-saver');
   win.setIgnoreMouseEvents(true, { forward: true });     // 默认穿透；页面检测到角色才打开交互
 
   // A new renderer must never inherit a stale full-screen input state.
@@ -197,6 +206,7 @@ async function createWindow() {
 
   // ⚠ did-finish-load 必须在 loadURL 之前注册：await loadURL 返回时它已经触发过了
   win.webContents.once('did-finish-load', () => {
+    bootGuard.phase('page-loaded');
     if (PAGEMARK3) win.webContents.insertCSS('#pet{background:#ff0000 !important}').catch(()=>{});
     if (PAGEMARK2) win.webContents.executeJavaScript(`(()=>{const r=document.getElementById('pet').getBoundingClientRect();const d=document.createElement('div');d.style.cssText='position:fixed;z-index:9999;background:#ff0000;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px';document.body.appendChild(d);return 'ok';})()`).catch(()=>{});
     if (PAGEMARK) win.webContents.insertCSS('html,body{background:#ff0000 !important;}').catch(()=>{});
@@ -1175,11 +1185,36 @@ async function runUpdateCheck(silent = false) {
   }
 }
 
+/** 把兼容等级清零（下次启动生效）。用在托盘菜单那一条上。 */
+function resetCompatMode() {
+  try {
+    const st = JSON.parse(fs.readFileSync(bootGuard.statePath, 'utf8'));
+    st.level = 0; st.fails = 0; st.note = '正常';
+    fs.writeFileSync(bootGuard.statePath, JSON.stringify(st, null, 1), 'utf8');
+    bootGuard.phase('quit');
+  } catch (e) { /* ignore */ }
+  try {
+    dialog.showMessageBox({
+      type: 'info', title: '已恢复默认启动参数',
+      message: '下次启动按正常模式加载（不再关输入法支持 / 硬件加速）。\n如果又开始崩，看门狗会自动再降一档。',
+      buttons: ['好'],
+    });
+  } catch (e) { /* ignore */ }
+}
+
 function buildTrayMenu() {
   const al = autoLaunchInfo();
   const hk = searchHotkey ? '  ' + searchHotkey.replace('Control', 'Ctrl').replace('Space', '空格') : '';
   const chatHk = chatHotkey ? '  ' + chatHotkey.replace('Control', 'Ctrl') : '';
   const items = [];
+
+  if (bootGuard.level > 0) {
+    items.push({
+      label: `🛡 兼容模式 L${bootGuard.level}：${bootGuard.crashedLastTime ? '上次启动未完成' : '手动指定'} — 点这里恢复默认`,
+      click: () => resetCompatMode(),
+    });
+    items.push({ type: 'separator' });
+  }
 
   if (latestReleaseInfo && latestReleaseInfo.hasUpdate) {
     items.push({
@@ -1379,9 +1414,17 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => { if (win) win.show(); });
-  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');  // 防止被判定"被遮挡"后停止渲染
+  // disable-features 只认最后一次 appendSwitch，必须拼成一份，不能各加各的
+  app.commandLine.appendSwitch('disable-features',
+    [...new Set(['CalculateNativeWinOcclusion', ...bootGuard.features])].join(','));
   app.whenReady().then(async () => {
+    console.log('BOOTGUARD ' + JSON.stringify({ level: bootGuard.level, features: bootGuard.features,
+      crashedLastTime: bootGuard.crashedLastTime, lastCrashedPhase: bootGuard.lastCrashedPhase,
+      ime: bootGuard.ime, log: bootGuard.logPath }));
+    // L3：先把进程晾一会儿再建窗口，避开输入法 hook 的注入时序（实测有机器是这个撞上的）
+    if (bootGuard.level >= 3) await new Promise((r) => setTimeout(r, 1200));
     await createWindow();
+    bootGuard.phase('ready');
     buildTray();
     // 启动 5 秒后在后台静默检查一次 GitHub 新版本
     setTimeout(() => { runUpdateCheck(true).catch(() => {}); }, 5000);
