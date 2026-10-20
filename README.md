@@ -102,21 +102,27 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
     且距今 10 分钟内（排除关机/任务管理器结束），判定为启动期崩溃，兼容等级 +1，并往
     `boot-guard.log` 追加一行（含上次停在哪个阶段、检测到的输入法路径、Electron/系统版本）。
     `ready` 是终态，所以正常退出不会被误判。
-  - 等级：**L0** 正常；**L1** 关 Chromium 的 Windows TSF 输入支持（`disable-features=TSFImeSupport`）；
-    **L2** 再 `disableHardwareAcceleration()` + `disable-gpu-compositing`（透明窗口改走软件合成）；
-    **L3** 再延迟 1.2 秒建窗并把置顶级别从 `screen-saver` 降到 `normal`（避开合成时序）。
+  - 等级（按代价从低到高）：**L0** 正常；**L1** 建窗延后 0.8 秒（让输入法的注入/初始化先跑完，
+    改的是时序）；**L2** 再 `disableHardwareAcceleration()` + `disable-gpu-compositing`（透明窗口
+    走软件合成）；**L3** 再拉长到 3 秒 + `disable-gpu` + 置顶级别从 `screen-saver` 降到 `normal`。
+  - **没有采用 `disable-features=TSFImeSupport`**：实测它拦不住搜狗注入——L0 与 L1 下桌宠进程的
+    模块总数（93）和搜狗模块（7 个：`SogouTSF.ime` / `SogouPY.ime` / `ichat` / `isgpet` /
+    `PicFace` / `systembeautify` / `Resource.dll`）完全一致。它却有"用户打不了中文"的代价，
+    收益又未证实，所以从降级档里移除，只做时序与渲染层面的降级。
   - 托盘：等级 >0 时菜单顶部多一条「🛡 兼容模式 Lx — 点这里恢复默认」，点一下清零（下次启动生效，
     同时写 `phase=quit` 防止被误判成崩溃）。
-  - 命令行：`--compat=0..3` 强制本次等级（不改文件）、`--compat-off` 本次按正常跑、
-    `--compat-reset` 清零并清失败计数。
+  - 命令行：`--compat=0..3` 强制本次等级（**不落盘**，state 里只记 `runLevel`，`level` 保持持久值）、
+    `--compat-off` 本次按正常跑、`--compat-reset` 清零并清失败计数。
   - 顺带修掉一个隐患：`disable-features` 只认最后一次 `appendSwitch`，后来的会覆盖前面的。
     现在把 `CalculateNativeWinOcclusion` 与兼容等级需要的项拼成一份再 append，以后再加开关不会
     把"防遮挡"顶掉。
-  - 实测（本机 Electron 44.4.2 / Win11 26300）：正常启动 209 ms 到 `ready`；模拟"上次崩在
-    `window-created`"后连续启动，依次升到 L1 / L2 / L3 都正常到 `ready`（L3 建窗延迟 1247 ms 生效）；
-    `--compat-reset` 归零正常；打成便携版后同样生效（包内 `resources/app/boot-guard.js`）。
-  - 注意：L1 关掉 TSF 后，桌宠内的输入框可能用不了中文输入法（取决于输入法是否只走 TSF）。
-    打不了中文就点托盘那条恢复默认，看门狗下次仍会按需要再降。
+  - 实测（本机 Electron 44.4.2 / Win11 26300 / **装有大搜狗输入法 16.9.0.5535 且常驻运行**）：
+    - 正常启动 3 次全部存活到 `ready`，无新 dump，启动 248–277 ms；进程里确实被注入 7 个搜狗模块。
+      → **搜狗注入本身不足以单独触发那个崩溃**（issue #1 的机器上还叠加了别的条件）。
+    - 分档验证：L0 建窗 +112 ms / L1 +926 ms / L2 +918 ms / L3 +3119 ms，四档都存活到 `ready`，
+      `--compat` 不落盘（`level` 始终 0）；模拟"上次崩在 `window-created`"后自动升档也正常；
+      便携版打包后同样生效（包内 `resources/app/boot-guard.js`）。
+  - 注意：`--compat=N` 只影响本次，`level` 要清零用 `--compat-reset` 或托盘点那条。
 
 - **v0.1.7**
   - **新增 4 个待机动画**：`坐椅摆腿`（sit_chair，loop）、`站着打盹`（doze，loop）、
