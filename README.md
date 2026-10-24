@@ -5,7 +5,8 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.1.8-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.2.0-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
@@ -35,6 +36,10 @@
 - **DeepSeek 聊天**（`Ctrl+Shift+D`）：背后是真·agent 运行时，流式文本 + 工具调用卡片 + 计时 + 取消。
 - **文件搜索**（`Ctrl+Shift+F`）：走 Everything 官方命令行 `es.exe`（随包附带），不改动你的 Everything 设置。
 - **托盘**：控制面板 / 大小 / 开机自启 / 设置 / 退出。
+- **皮肤系统**（v0.2.0）：动作素材外置到 `%APPDATA%\桌宠\skins\<皮肤>\`，`skin.json` 里存每个动作的名称、
+  触发角色、权重、播放模式与速率、缩放（整体 + 宽/高分开）和位移。桌宠每 2.5 秒比对 `skin.json` 的修改时间，
+  变了就地重载页面——**换装不用重启桌宠**；皮肤被删掉会自动退回内置素材，**内置素材一个字节都没动**。
+  配套的独立编辑器见 `skin-editor/`。
 
 ## 形象来源与致谢
 
@@ -59,6 +64,7 @@
 | `build_sprites.py` | 对齐到统一画布 900×1500、鞋底基线 y=1450；边缘色扩散防绿边；跨片段尺度统一 |
 | `encode_webm.py` | 编码 yuva420p / libvpx-vp9 透明 WebM，并生成状态机配置 `states.json` |
 | `make_preview.py` | 出交付预览件（棋盘格背景的多状态预览 MP4 / 对比图） |
+| `skin-editor/` | 独立皮肤编辑器（Electron 独立窗口）：导入动作视频 → 转 VP9 alpha WebM、命名与触发逻辑、缩放/宽高比例/位移、三条实测参考线；只通过 `%APPDATA%\桌宠\skins\` 与桌宠交换数据 |
 | `pack_portable.py` / `pack_release.py` | 打便携版 / 发布版（发布版带个人信息与密钥门禁扫描） |
 | `tools/` | 开发期自检脚本（渲染器通道检查、菜单几何检查等）；`tools/record/record.js` 是按分镜自动录演示素材的录制器（离屏渲染 + ffmpeg，不录屏、不暴露真实桌面，用法见文件头注释） |
 
@@ -89,6 +95,23 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 ```
 
 ## 版本记录
+
+- **v0.2.0（皮肤系统）**
+  - **动作素材外置成皮肤包**：`%APPDATA%\桌宠\skins\<slug>\skin.json` + `videos\*.webm`，
+    `active.json` 指向当前皮肤。皮肤里的动作按 id 覆盖/追加到内置 `states.json`，没写的继续用内置——
+    「只改一个动作」和「整套替换」都成立，而**内置素材保持不变**。
+  - **热装**：主进程每 2.5 秒比对 `skin.json` 的 mtime+size，变了就 `webContents.reload()`；
+    皮肤被删掉也会重载一次，自动退回内置素材。位置与聊天记录都在 `pet-state.json` / `chat-history.json`，不受影响。
+  - **皮肤视频走本地 http 的 `/skin/` 路由**（不是 `file://`）：页面要靠 canvas 采样 alpha 做逐像素点击穿透，
+    `file://` 下 canvas 会被污染、穿透会退化成矩形。
+  - **transform 支持分轴缩放**：每个动作可单独设 `scale`（整体）、`scaleX`/`scaleY`（宽/高比例）、
+    `offX`/`offY`（按画布百分比位移）；都不写时等价于原来的 `scale(1)`，老配置行为不变。
+  - **空闲小动作改为按权重抽取**（原来等概率），可用 `weight` 调出场率。
+  - **新增独立皮肤编辑器 `skin-editor/`**：视频导入（绿幕自动抠像，或直接吃带 alpha 的源）、动作命名、
+    触发逻辑与权重、大小/比例/位移、三条参考线（脚底基线 / **标准身高** / 当前动作头顶，后两条是解视频 alpha 实测的）、
+    「应用到桌宠」一键热装。编辑器与桌宠完全解耦：删掉它不影响桌宠，桌面也照常跑。
+  - 已知边界：`idle` / `stand_arms` / `grabbed` / `drop` 这四个核心状态由主程序按 id 直接引用，
+    只能换视频、不能改名或删除；自定义动作可以挂到 空闲随机 / 空闲小动作 / 点击互动 / 干活中 四个池子。
 
 - **v0.1.8**
   - **新增启动看门狗与兼容模式（`app/boot-guard.js`）**。Windows 上"全屏透明 + 置顶 + 逐像素穿透"

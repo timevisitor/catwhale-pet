@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>猫鲸皮肤编辑器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">猫鲸<b>皮肤编辑器</b><small>独立版 · 本地实装</small></div>
+  <div class="sep"></div>
+  <div class="skinbar">
+    <label for="skinSel">皮肤</label>
+    <select id="skinSel"></select>
+    <button id="btnNew" class="ghost" title="新建皮肤">新建</button>
+    <button id="btnDup" class="ghost" title="复制当前皮肤">复制</button>
+    <button id="btnDel" class="ghost danger" title="删除当前皮肤">删除</button>
+  </div>
+  <div class="spacer"></div>
+  <span id="envChip" class="chip">初始化…</span>
+  <button id="btnOpenFolder" class="ghost" title="打开皮肤目录">目录</button>
+  <button id="btnSave" class="primary" title="Ctrl+S">保存</button>
+  <button id="btnApply" class="accent" title="保存并让桌宠立即刷新">应用到桌宠</button>
+  <button id="btnLaunch">启动桌宠</button>
+</header>
+
+<main>
+  <aside class="left">
+    <div class="listhead"><span>动作</span><button id="btnImport" class="primary">＋ 导入动作</button></div>
+    <ul id="actionList"></ul>
+    <div class="leftfoot">
+      <button id="btnFromBuiltin" class="ghost">从内置添加</button>
+      <button id="btnClean" class="ghost" title="删除没有被任何动作引用的视频文件">清理文件</button>
+    </div>
+  </aside>
+
+  <section class="stage">
+    <div class="stagehead">
+      <span id="selTitle">未选择动作</span>
+      <span class="hint" id="selHint">青=脚底基线 · 橙=标准身高（当前皮肤待机） · 紫=当前动作头顶</span>
+    </div>
+    <div class="canvasWrap">
+      <div class="petbox guide" id="petBox">
+        <video id="pv" muted playsinline loop></video>
+        <div class="frame"></div>
+        <div class="refline std" id="refStd"><span class="lbl">标准身高</span></div>
+        <div class="refline cur" id="refCur"><span class="lbl">头顶</span></div>
+        <div class="baseline" id="refFoot"><span class="lbl">脚底基线 96.7%</span></div>
+      </div>
+    </div>
+    <div class="stagefoot">
+      <button id="btnPlay">⏸ 暂停</button>
+      <label>桌宠高度<input id="sizeR" type="range" min="200" max="600" step="10" value="340"><i id="sizeVal">340</i></label>
+      <label>预览倍率<input id="zoomR" type="range" min="60" max="240" step="10" value="150"><i id="zoomVal">150%</i></label>
+      <label class="chk"><input id="chkGuide" type="checkbox" checked>参考线</label>
+      <button id="btnReset" class="ghost">重置变换</button>
+    </div>
+  </section>
+
+  <aside class="right" id="props">
+    <div class="empty">还没有选中动作。<br>点左侧的「＋ 导入动作」把自己做的视频加进来，<br>或「从内置添加」复制现有动作再调整。</div>
+  </aside>
+</main>
+
+<footer>
+  <span id="log" class="lg">就绪</span>
+  <div class="spacer"></div>
+  <span id="dirty" style="display:none;color:var(--gold)">● 未保存</span>
+  <span id="stat"></span>
+</footer>
+
+<!-- 新建皮肤 -->
+<div class="modal" id="mNew">
+  <div class="card">
+    <h2>新建皮肤</h2>
+    <div class="body">
+      <div class="field"><label>皮肤名称</label><input type="text" id="newName" placeholder="例：我的猫鲸"></div>
+      <div class="field"><label>皮肤 ID</label><input type="text" id="newSlug" placeholder="my-catwhale（字母/数字/-/_）"></div>
+      <div class="field"><label>起始内容</label>
+        <select id="newBase">
+          <option value="full">完整复制内置皮肤（11 个动作，约 20MB）</option>
+          <option value="core">只复制核心 4 个（待机/抓着/操作中/抬手）</option>
+          <option value="blank">空白（自己导入动作）</option>
+        </select>
+      </div>
+      <div class="note">内置皮肤是只读基线。新建后所有改动都写进新皮肤目录，<b>不动桌宠安装包里的素材</b>，随时可以「删除皮肤」回到内置。</div>
+    </div>
+    <div class="foot"><button class="ghost" data-close="mNew">取消</button><button id="newOk" class="primary">创建</button></div>
+  </div>
+</div>
+
+<!-- 复制皮肤 -->
+<div class="modal" id="mDup">
+  <div class="card">
+    <h2>复制皮肤</h2>
+    <div class="body">
+      <div class="field"><label>新名称</label><input type="text" id="dupName"></div>
+      <div class="field"><label>新 ID</label><input type="text" id="dupSlug"></div>
+      <div class="note">复制会连同视频文件一起拷一份，之后的改动互不影响。</div>
+    </div>
+    <div class="foot"><button class="ghost" data-close="mDup">取消</button><button id="dupOk" class="primary">复制</button></div>
+  </div>
+</div>
+
+<!-- 导入动作 -->
+<div class="modal" id="mImport">
+  <div class="card">
+    <h2>导入动作</h2>
+    <div class="body">
+      <div class="field"><label>源文件</label><input type="text" id="impSrc" readonly></div>
+      <div class="field"><label>动作名称</label><input type="text" id="impName" placeholder="例：打滚"></div>
+      <div class="field"><label>触发逻辑</label><select id="impRole"></select></div>
+      <div class="note" id="impRoleNote"></div>
+      <div class="field"><label>目标清晰度</label>
+        <div class="row"><input type="number" id="impWidth" value="576" min="180" max="1200" step="2"><span style="color:var(--dim2);font-size:11.5px">像素宽（越小越省 CPU）</span></div>
+      </div>
+      <div class="field" id="rowKey"><label>抠像颜色</label>
+        <div class="row"><input type="text" id="impKey" value="#00ff00" style="width:96px"><span style="color:var(--dim2);font-size:11.5px">源视频背景色（默认取左上角）</span></div>
+      </div>
+      <div class="field" id="rowSim"><label>抠像容差</label>
+        <div class="row"><input type="range" id="impSim" min="0.02" max="0.4" step="0.01" value="0.14"><i id="impSimVal" style="font-style:normal;color:var(--dim);min-width:34px">0.14</i></div>
+      </div>
+      <div class="note" id="impInfo">—</div>
+      <div class="progress" id="impProg" style="display:none"><i></i></div>
+    </div>
+    <div class="foot"><button class="ghost" data-close="mImport">取消</button><button id="impOk" class="primary">导入并转码</button></div>
+  </div>
+</div>
+
+<!-- 从内置添加 -->
+<div class="modal" id="mBuiltin">
+  <div class="card">
+    <h2>从内置皮肤添加动作</h2>
+    <div class="body">
+      <div class="note">复制视频文件到当前皮肤（不动原文件），加进来后可以随便改名、改触发、改大小。</div>
+      <div class="picklist" id="builtinList"></div>
+    </div>
+    <div class="foot"><button class="ghost" data-close="mBuiltin">取消</button><button id="builtinOk" class="primary">添加所选</button></div>
+  </div>
+</div>
+
+<!-- 通用确认 -->
+<div class="modal" id="mAsk">
+  <div class="card" style="width:420px">
+    <h2 id="askTitle">确认</h2>
+    <div class="body"><div class="note" id="askText" style="font-size:12.5px;color:var(--fg)"></div></div>
+    <div class="foot"><button class="ghost" data-close="mAsk">取消</button><button id="askOk" class="danger">确定</button></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
