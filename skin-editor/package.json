@@ -1,0 +1,33 @@
+{
+  "name": "catwhale-skin-editor",
+  "productName": "猫鲸皮肤编辑器",
+  "version": "0.2.0",
+  "description": "猫鲸桌宠的独立皮肤编辑器：上传动作、自定义触发逻辑、自由调整大小与比例（本地实装）",
+  "main": "editor/main.js",
+  "author": "翻个的咸鱼",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.hermes.catwhale.skineditor",
+    "productName": "猫鲸皮肤编辑器",
+    "files": [
+      "editor/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "_dist"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "editor/assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "猫鲸皮肤编辑器.exe"
+    }
+  }
+}
