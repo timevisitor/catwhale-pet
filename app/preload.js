@@ -84,6 +84,12 @@ contextBridge.exposeInMainWorld('petHost', {
     return () => ipcRenderer.removeListener('env:log', h);
   },
 
+  /* ---- 外置皮肤包（独立皮肤编辑器生成，主进程只读）---- */
+  skin: {
+    get:         () => ipcRenderer.invoke('skin:get'),
+    openFolder:  () => ipcRenderer.invoke('skin:openFolder')
+  },
+
   /* ---- 版本检测与更新 ---- */
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   openUpdateUrl: (url) => ipcRenderer.invoke('update:openUrl', url),
