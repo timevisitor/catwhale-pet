@@ -65,6 +65,17 @@ let chatHotkey = '';
 const NOGPU = process.argv.includes('--nogpu');         // 关硬件加速
 if (NOGPU) app.disableHardwareAcceleration();   // --solid: 用不透明红底测试窗口是否真的在合成
 const WEB_ROOT = path.join(__dirname, 'renderer');       // 网页资源（构建时从 ../web 拷进来）
+/* ---------- 外置皮肤包（独立「猫鲸皮肤编辑器」写、这里只读）-----------
+   %APPDATA%\<app>\skins\<slug>\skin.json + videos\*.webm；active.json 指向当前皮肤。
+   视频通过本地 http 的 /skin/ 路由暴露给页面（file:// 下 canvas 会被污染）。 */
+const SKIN_ROOT = path.join(app.getPath('userData'), 'skins');
+function activeSkinDir(){
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(SKIN_ROOT, 'active.json'), 'utf8'));
+    if (j && typeof j.slug === 'string' && /^[A-Za-z0-9_.-]+$/.test(j.slug)) return path.join(SKIN_ROOT, j.slug);
+  } catch (e) {}
+  return null;
+}
 const STATE_FILE = path.join(app.getPath('userData'), 'pet-state.json');
 const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 与 harness 的聊天记录
 const ICON_FILE = path.join(__dirname, 'assets', 'tray.png');
@@ -167,8 +178,16 @@ function startServer() {
     server = http.createServer((req, res) => {
       let p = decodeURIComponent(urlmod.parse(req.url).pathname);
       if (p === '/') p = '/index.html';
-      const file = path.join(WEB_ROOT, p);
-      if (!file.startsWith(WEB_ROOT)) { res.writeHead(403); return res.end('403'); }
+      let file;
+      if (p.startsWith('/skin/')) {                     // 当前皮肤的视频资源
+        const dir = activeSkinDir();
+        if (!dir) { res.writeHead(404); return res.end('404'); }
+        file = path.join(dir, p.slice('/skin/'.length));
+        if (!file.startsWith(dir + path.sep)) { res.writeHead(403); return res.end('403'); }
+      } else {
+        file = path.join(WEB_ROOT, p);
+        if (!file.startsWith(WEB_ROOT)) { res.writeHead(403); return res.end('403'); }
+      }
       fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); return res.end('404'); }
         res.writeHead(200, { 'Content-Type': mime[path.extname(file).toLowerCase()] || 'application/octet-stream',
@@ -240,7 +259,8 @@ async function createWindow() {
           state: cur, pos: petAPI.getPos(), size: petAPI.getSize(),
           inner: [innerWidth, innerHeight], vw: window.petHost ? 'host-ok' : 'no-host',
           videos: [...document.querySelectorAll('#pet video')].map(v => ({
-                    f: v.currentSrc.split('/').pop(), rs: v.readyState, w: v.videoWidth, h: v.videoHeight })),
+                    f: v.currentSrc.split('/').pop(), src: v.currentSrc, rs: v.readyState, w: v.videoWidth, h: v.videoHeight,
+                    tf: v.style.transform })),
           err: window.__petError || null, initOK: !!window.__petInitOK })`);
         const b = win.getBounds();
         const al = autoLaunchInfo();
@@ -1323,6 +1343,42 @@ ipcMain.handle('sysinfo:stop', () => { sysinfo.stop(); return { ok: true }; });
 ipcMain.handle('sysinfo:get', () => sysinfo.latest() || sysinfo.sample());
 
 /* SAO 菜单需要：当前屏工作区（不含任务栏）/ 退出 / 开机自启查询与设置 */
+/* ---------- 外置皮肤包：页面读当前皮肤配置 / 打开皮肤目录 ---------- */
+ipcMain.handle('skin:get', () => {
+  const dir = activeSkinDir();
+  if (!dir) return { ok: false, reason: 'no-active-skin' };
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, 'skin.json'), 'utf8'));
+    return { ok: true, slug: path.basename(dir), name: j.name || path.basename(dir), actions: j.actions || {} };
+  } catch (e) {
+    return { ok: false, reason: 'read-failed', error: String(e && e.message || e) };
+  }
+});
+ipcMain.handle('skin:openFolder', () => {
+  const dir = activeSkinDir() || SKIN_ROOT;
+  try { fs.mkdirSync(dir, { recursive: true }); shell.openPath(dir); return { ok: true, dir }; }
+  catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+
+/* 皮肤文件变更 → 自动重载页面（编辑器点「应用到桌宠」后无需手动重启）。
+   只比对 skin.json 的 mtime+size，2.5s 一次，开销可忽略；重载后位置由 pet-state.json 恢复。 */
+let skinSig = '';
+function skinSignature(){
+  const dir = activeSkinDir();
+  if (!dir) return '';
+  try { const s = fs.statSync(path.join(dir, 'skin.json')); return dir + '|' + s.mtimeMs + '|' + s.size; }
+  catch (e) { return dir + '|missing'; }
+}
+function watchSkin(){
+  skinSig = skinSignature();
+  setInterval(() => {
+    const s = skinSignature();
+    if (s === skinSig) return;                 // 含空签名：皮肤被删掉也照样重载一次，回落到内置素材
+    skinSig = s;
+    if (win && !win.isDestroyed()) { console.log('SKIN_CHANGED ' + (s ? 'reload' : 'removed->builtin')); try { win.webContents.reload(); } catch (e) {} }
+  }, 2500);
+}
+
 ipcMain.handle('pet:workarea', () => {
   try {
     /* 选窗口所在屏，并把工作区转换为渲染器的窗口内坐标。
@@ -1425,6 +1481,7 @@ if (!app.requestSingleInstanceLock()) {
     // 按等级延迟建窗：让输入法的注入/初始化先跑完，再建透明窗口（避开注入竞态）
     if (bootGuard.delayMs > 0) await new Promise((r) => setTimeout(r, bootGuard.delayMs));
     await createWindow();
+    watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();
     // 启动 5 秒后在后台静默检查一次 GitHub 新版本

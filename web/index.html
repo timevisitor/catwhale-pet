@@ -652,6 +652,7 @@ const opt = {
 };
 
 let states = DEFAULT_STATES;
+let activeSkin = null;   // 当前生效的外置皮肤包（%APPDATA%\桌宠\skins\active.json）
 let baseRate = 1;                     // 速度滑块给的全局倍率
 let pet, videos = {}, els = {}, alphaSampler = null, alphaOK = null;
 /* 常演状态：启动即 preload='auto'；其余状态只取元数据，第一次要演它时才 load()。
@@ -724,7 +725,7 @@ function rollLounge(){
   // 先看要不要做"小动作"（吃米饭）：一次性动作由 playOnce 接管，靠 M.react 优先级播完自动结束
   const acts = Object.keys(states).filter((id)=> states[id] && states[id].role === 'idle_act');
   if (acts.length && Math.random() < IDLE_ACT_CHANCE){
-    const pick = acts[Math.floor(Math.random() * acts.length)];
+    const pick = pickWeighted(acts.map((id)=> ({ id, w: (states[id].weight ?? 20) }))) || acts[0];
     M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
     playOnce(pick);
     return;
@@ -775,7 +776,7 @@ function play(id){
   if (prev && prev !== next) prev.classList.remove('active');
   pauseOthers(next);
   next.classList.add('active');
-  next.style.transform = (petMirror ? 'scaleX(-1) ' : '') + 'scale(' + videoScale(id) + ')';
+  next.style.transform = videoTransform(id);
   next.loop = (states[id].mode === 'loop');
   next.playbackRate = baseRate * stateRate(id);
   cur = id;
@@ -890,12 +891,26 @@ function fingertipScreen(){                       // 指尖当前在屏幕上的
    所以镜像也必须写在同一处，并把 transform-origin.x 从 50% 挪到站姿中轴，
    否则翻转会绕画布中线走、角色横向位移。 */
 let petMirror = false;
+/* 单个状态的变换：统一缩放 × 分轴比例 + 百分比位移。
+   scale 是「整体缩放」，scaleX/scaleY 是「相对整体再做宽/高比例」，offX/offY 按画布尺寸的百分比平移。
+   三者都可缺省 → 等价于原来的 scale(1)，老皮肤/老 states.json 行为不变。 */
 function videoScale(id){ return (states[id] && states[id].scale != null) ? states[id].scale : 1; }
+function videoTransform(id){
+  const st = states[id] || {};
+  const s = (st.scale != null) ? st.scale : 1;
+  const sx = s * ((st.scaleX != null) ? st.scaleX : 1);
+  const sy = s * ((st.scaleY != null) ? st.scaleY : 1);
+  const ox = st.offX || 0, oy = st.offY || 0;
+  let t = '';
+  if (ox || oy) t += 'translate(' + ox + '%,' + oy + '%) ';
+  t += 'scaleX(' + (petMirror ? -sx : sx) + ') scaleY(' + sy + ')';
+  return t;
+}
 function applyVideoMirror(){
   for (const id in videos){
     const v = videos[id];
     if (!v) continue;
-    v.style.transform = (petMirror ? 'scaleX(-1) ' : '') + 'scale(' + videoScale(id) + ')';
+    v.style.transform = videoTransform(id);
     v.style.transformOrigin = (petMirror ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
   }
 }
@@ -1937,12 +1952,42 @@ function loadChatFromStorage(){
   }catch(e){ /* 恢复失败不影响主流程 */ }
 }
 
+/* ===================== 外置皮肤包 =====================
+   皮肤由独立的「猫鲸皮肤编辑器」生成，放在 %APPDATA%\桌宠\skins\<slug>\：
+     skin.json          { id, name, actions: { <stateId>: {name, file, mode, role, scale, scaleX, scaleY, offX, offY, rate, weight, react, duration} } }
+     videos\*.webm      动作视频（VP9 + alpha）
+   active.json          { "slug": "<当前皮肤>" }  —— 由编辑器写
+   读取走主进程 IPC（http 页面拿不到 %APPDATA% 路径）；视频走本地 http 的 /skin/ 路由。
+   合并规则：内置 states 先铺底，皮肤 actions 逐条覆盖/追加 —— 皮肤里没写的核心状态继续用内置素材。
+   没有皮肤（或读失败）时行为与以前完全一致。 */
+async function loadActiveSkin(){
+  try{
+    const host = window.petHost;
+    if (!host || !host.skin) return;
+    const sk = await host.skin.get();
+    if (!sk || !sk.ok || !sk.actions) return;
+    const merged = {};
+    for (const id in states) merged[id] = states[id];
+    for (const id in sk.actions){
+      const a = sk.actions[id];
+      if (!a || !a.file) continue;
+      merged[id] = Object.assign({}, a);
+      let rel = String(a.file).replace(/\\/g, '/');
+      while (rel.startsWith('/')) rel = rel.slice(1);
+      merged[id].src = '/skin/' + rel;   // 走本地 http，不能用 file://
+    }
+    states = merged;
+    activeSkin = sk;
+  }catch(e){ /* 皮肤坏了就退回内置，不影响桌宠启动 */ }
+}
+
 /* ===================== 初始化 ===================== */
 async function init(){
   try{
     const r = await fetch('assets/states.json', {cache:'no-store'});
     if (r.ok) states = await r.json();
   }catch(e){ /* file:// 下 fetch 被禁，用默认配置 */ }
+  await loadActiveSkin();
 
   pet = document.getElementById('pet');
   els.shadow  = document.getElementById('shadow');
@@ -1990,7 +2035,7 @@ async function init(){
   for (const id in states){
     const st = states[id];
     const v = document.createElement('video');
-    v.src = VIDEO_DIR + st.file;
+    v.src = st.src || (VIDEO_DIR + st.file);   // 皮肤动作走 /skin/ 路由
     v.muted = true; v.playsInline = true;
     v.preload = EAGER_STATES.includes(id) ? 'auto' : 'metadata';
     v.loop = (st.mode === 'loop');
