@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('petHost', {
 
   /* ---- 详情卡实时硬件数据 ---- */
   sysInfoStart: () => ipcRenderer.invoke('sysinfo:start'),
+  sysInfoStartLight: () => ipcRenderer.invoke('sysinfo:startLight'),
   sysInfoStop:  () => ipcRenderer.invoke('sysinfo:stop'),
   sysInfoGet:   () => ipcRenderer.invoke('sysinfo:get'),
   onSysInfo: (cb) => {
@@ -88,6 +89,11 @@ contextBridge.exposeInMainWorld('petHost', {
   skin: {
     get:         () => ipcRenderer.invoke('skin:get'),
     openFolder:  () => ipcRenderer.invoke('skin:openFolder')
+  },
+
+  /* ---- 作息导演层配置（皮肤目录优先，其次 %APPDATA%\桌宠\director.json）---- */
+  director: {
+    get: () => ipcRenderer.invoke('director:get')
   },
 
   /* ---- 版本检测与更新 ---- */

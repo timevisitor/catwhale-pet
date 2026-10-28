@@ -22,10 +22,12 @@ const { spawn } = require('node:child_process');
 
 const TICK_MS = 1500;            // Node 侧采样间隔
 const REAP_MS = 30000;           // 菜单关掉后继续缓存这么久再收进程（优化：从60秒降至30秒）
+const LIGHT_TICK_MS = 5000;      // 导演层用的轻量常驻采样间隔（只采 CPU/内存，不起 PowerShell）
 
 let psChild = null;
 let psLatest = null;             // { cpuFreqMHz, cpuBaseMHz, ramSpeedMHz, gpu:{...} }
 let timer = null;
+let lightTimer = null;
 let reapTimer = null;
 let prevCpu = null;
 let last = null;
@@ -151,4 +153,27 @@ function dispose() {
 
 function latest() { return last; }
 
-module.exports = { start, stop, dispose, latest, sample };
+/* ---- 轻量常驻模式：只给「作息导演层」判断 CPU 热闹/安静用 ----
+   与 start() 的区别：不 spawn PowerShell（GPU 频率那套每次要起 powershell.exe，
+   常驻跑没必要），只做 os.cpus() 差值和内存，5 秒一次，几乎零成本。
+   两套定时器互不干扰：菜单打开时 start() 会接管高频采样，关闭后 stop() 不影响 lightTimer。 */
+function startLight(cb, logger) {
+  if (cb) onData = cb;
+  if (logger) log = logger;
+  if (lightTimer) return;
+  cpuUsagePct();                                  // 基线
+  const tickLight = () => {
+    const m = Object.assign({}, memInfo(), { cpuUsage: cpuUsagePct(), light: true });
+    last = m;
+    try { onData(m); } catch (e) { log('SYSINFO_LIGHT_CB_ERR ' + e.message); }
+  };
+  setTimeout(tickLight, 1500);                    // 第一次差分要等一会儿才有值
+  lightTimer = setInterval(tickLight, LIGHT_TICK_MS);
+  if (lightTimer.unref) lightTimer.unref();
+}
+
+function stopLight() {
+  if (lightTimer) { clearInterval(lightTimer); lightTimer = null; }
+}
+
+module.exports = { start, stop, startLight, stopLight, dispose, latest, sample };

@@ -17,6 +17,15 @@ from PIL import Image
 T0, T1 = 0.15, 0.55          # 绿度归一化阈值
 RING = 8                     # 背景采样边框宽度
 
+# ── 深色区绿染修正（2026-10 新素材实测出的问题）──────────────────────────────
+# H3 在 1024×1792 下重渲染时，角色最暗的部分（玛丽珍鞋、裙摆内侧、发尾）会被绿幕
+# 逐步染绿：实测「看书」末帧鞋区从 (53,57,93) 漂到 (16,81,56)，G 超过 B 还进了
+# alpha 过渡带（t≈0.24 → alpha 0.78），抠像后鞋子半透明、边缘发绿。
+# 角色身上不存在"深绿色"的部位（只有藏青/蓝/白），所以在深色区把 G、B 对调即可
+# 还原藏青，而且不影响任何真正的绿色（背景本身 G≈210，远在阈值之外）。
+SPILLFIX = os.environ.get("SPILLFIX", "1") != "0"
+SPILL_DARK = 110             # 三通道最大值低于它算"深色区"
+
 
 def probe_size(path):
     p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -47,6 +56,13 @@ def key_frame(rgb):
     """rgb uint8 HxWx3 -> rgba uint8 HxWx4"""
     f = rgb.astype(np.float32)
     R, G, B = f[:, :, 0], f[:, :, 1], f[:, :, 2]
+    if SPILLFIX:
+        v = np.maximum(np.maximum(R, G), B)
+        swap = (v < SPILL_DARK) & (G > B + 2)      # 深色且偏绿的像素：把 G/B 换回来
+        if swap.any():
+            G2 = np.where(swap, B, G)
+            B2 = np.where(swap, G, B)
+            G, B = G2, B2
     g = G - np.maximum(R, B)                                     # 绿度
     ring = np.concatenate([g[:RING].ravel(), g[-RING:].ravel(),
                            g[:, :RING].ravel(), g[:, -RING:].ravel()])

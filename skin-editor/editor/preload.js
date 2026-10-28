@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('api', {
   importBuiltinOrCopy: (slug, id, srcAbs) => invoke('builtin:import', { slug, id, srcAbs }),
   duplicateSkin: (from, to, name) => invoke('skins:duplicate', from, to, name),
   cleanSkin:    (slug, keep) => invoke('skins:clean', slug, keep),
+  /* ---- 作息导演层 ---- */
+  readDirector:  (slug) => invoke('director:read', slug),
+  writeDirector: (slug, cfg) => invoke('director:write', slug, cfg),
   probe:        (f) => invoke('video:probe', f),
   bbox:         (f) => invoke('video:bbox', f),
   pickVideo:    () => invoke('video:pick'),

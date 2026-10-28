@@ -49,6 +49,11 @@ STATE_MAP = {
     "坐地大盆吃饭": dict(id="big_bowl", name="坐地大盆吃饭", mode="once", role="idle_act", scale=1.00, rate=1.5),
     "站着打盹":   dict(id="doze",       name="站着打盹",    mode="loop", role="lounge",   scale=1.00, weight=20, react=30),
     "原地跳高":   dict(id="jump_high",  name="原地跳高",    mode="once", role="idle_act", scale=1.00, rate=1.0),
+    # ── 作息导演层新增（2026-10）：上午跑步/看书、CPU 高时晕菜、时段过渡伸懒腰 ──
+    "原地跑":     dict(id="run",       name="原地跑",     mode="loop", role="lounge",   scale=1.00, weight=25, react=20),
+    "看书":       dict(id="read",      name="看书",       mode="loop", role="lounge",   scale=1.00, weight=20, react=20),
+    "晕菜":       dict(id="dizzy",     name="晕菜",       mode="once", role="idle_act", scale=1.00, weight=30, react=10, rate=1.2),
+    "伸懒腰":     dict(id="stretch",   name="伸懒腰",     mode="once", role="idle_act", scale=1.00, weight=25, react=15),
 }
 
 

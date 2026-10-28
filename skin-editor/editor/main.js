@@ -331,6 +331,45 @@ handle('skins:delete', (slug) => {
 });
 handle('builtin:read', () => readBuiltin());
 
+/* ---------------- 作息导演层（director.json）----------------
+   读写规则与桌宠一致：<皮肤目录>/director.json 优先，其次 %APPDATA%\桌宠\director.json。
+   默认值直接从仓库的 web/director.js 取（同一份代码，不在这里复制一份常量，
+   否则以后改默认作息表两边会不一致）。 */
+function directorDefaults() {
+  try {
+    const p = path.join(cfg().projectRoot, 'web', 'director.js');
+    delete require.cache[require.resolve(p)];
+    return require(p).DEFAULT_CONFIG;
+  } catch (e) {
+    return null;
+  }
+}
+handle('director:read', (slug) => {
+  const s = slug || activeSlug();
+  const cands = [];
+  if (s) cands.push(path.join(skinRoot(), s, 'director.json'));
+  cands.push(path.join(cfg().petUserData, 'director.json'));
+  for (const f of cands) {
+    if (fs.existsSync(f)) {
+      const j = readJson(f, null);
+      if (j && typeof j === 'object') return { ok: true, file: f, source: 'file', cfg: j, defaults: directorDefaults() };
+      return { ok: false, file: f, error: 'director.json 不是合法 JSON' };
+    }
+  }
+  const d = directorDefaults();
+  if (!d) return { ok: false, error: '找不到 web/director.js，无法取默认作息表' };
+  return { ok: true, file: null, source: 'default', cfg: d, defaults: d };
+});
+handle('director:write', (slug, cfgObj) => {
+  const s = slug || activeSlug();
+  if (!s) return { ok: false, error: '没有选中皮肤（内置皮肤只读，请先新建/复制一个）' };
+  const dir = path.join(skinRoot(), s);
+  if (!fs.existsSync(dir)) return { ok: false, error: '皮肤目录不存在' };
+  const f = path.join(dir, 'director.json');
+  writeJsonAtomic(f, cfgObj);
+  return { ok: true, file: f, bytes: fs.statSync(f).size };
+});
+
 /** 删除皮肤 videos/ 里没被任何动作引用的 .webm */
 handle('skins:clean', (slug, keep) => {
   const dir = path.join(skinRoot(), slug, 'videos');
@@ -449,8 +488,16 @@ function createWindow() {
   if (process.argv.includes('--uitest')) { runUiTest(); }
   if (SHOT) {
     const shotSel = (process.argv.find((a) => a.startsWith('--shot-sel=')) || '').split('=').slice(1).join('=');
+    const shotTab = (process.argv.find((a) => a.startsWith('--shot-tab=')) || '').split('=').slice(1).join('=');
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
+        if (shotTab) {   // 截图前切到指定页签（dir = 作息页），给宣传片取真实界面
+          try {
+            await win.webContents.executeJavaScript(
+              `(function(){var b=document.getElementById(${JSON.stringify(shotTab === 'dir' ? 'navDirector' : 'navActions')});if(b)b.click();return !!b})()`);
+            await new Promise((r) => setTimeout(r, 2600));   // 等作息页把矩阵渲染完
+          } catch (e) {}
+        }
         if (shotSel) {   // 截图前先点开指定动作，用来验证参考线跟着动作走
           try {
             await win.webContents.executeJavaScript(`(function(){var t=${JSON.stringify(shotSel)};var li=[...document.querySelectorAll('#actionList li')].find(function(l){return (l.querySelector('.nm')||{}).textContent===t});if(li)li.click();return !!li})()`);
@@ -458,7 +505,10 @@ function createWindow() {
           } catch (e) {}
         }
         try {
-          const info = await win.webContents.executeJavaScript(`JSON.stringify({
+          const info = await win.webContents.executeJavaScript(`(async function(){
+            var b = { ok:false, error:'no api' };
+            try { b = await window.api.readBuiltin(); } catch (e) { b = { ok:false, error:String(e && e.message || e) }; }
+            return JSON.stringify({
             title: document.title,
             skins: [...document.querySelectorAll('#skinSel option')].map(o => o.value),
             sel: document.getElementById('selTitle').textContent,
@@ -470,8 +520,12 @@ function createWindow() {
                  box:(function(){var r=document.getElementById('petBox').getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)]})(),
                  vrect:(function(){var r=v.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)]})(),
                  tf:v.style.transform } : null; })(),
-            lines: [...document.querySelectorAll('.refline,.baseline')].map(e => ({id:e.id, top:e.style.top, disp:e.style.display, txt:(e.querySelector('.lbl')||{}).textContent}))
-          })`);
+            lines: [...document.querySelectorAll('.refline,.baseline')].map(e => ({id:e.id, top:e.style.top, disp:e.style.display, txt:(e.querySelector('.lbl')||{}).textContent})),
+            /* 内置基线清单：验证「从内置添加」对话框到底能列出哪些动作 */
+            builtin: b && b.ok ? Object.keys(b.actions).map(function(k){ return k + (b.actions[k].exists ? '' : '(缺文件)'); }) : ('ERR ' + (b && b.error)),
+            projectRoot: b && b.projectRoot
+            });
+          })()`);
           console.log('SHOT_STATE ' + info);
           let img = null, lastErr = null;
           for (let i = 0; i < 4 && !img; i++) {          // 切换动作后偶发 UnknownVizError，重试几次

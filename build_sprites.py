@@ -55,7 +55,16 @@ ANCHORS = {
     "荡秋千":       dict(mode="sole", scale=1.73, ref_frame=0),
     "坐地大盆吃饭": dict(mode="sole", scale="auto_head", ref_frame=0),
     "站着打盹":     dict(mode="sole", scale="auto_head", ref_frame=0),
-    "原地跳高":     dict(mode="sole", scale=1.40, ref_frame="lowest"),
+    "原地跳高":     dict(mode="sole", scale=0.70, ref_frame="lowest"),   # 同上（旧 1.40 是 512×896 时代的标定值）
+    # ── 作息导演层新增的 4 个动作（首帧=Qwen-Image 编辑，动画=H3 1024×1792）──
+    # 原地跑：抬腿/腾空，鞋底用"整段最低帧"量；头部无遮挡 → auto_head。
+    # 看书：书在胸口不挡头 → auto_head。书会撑宽包围盒，但归一用头宽，不受影响。
+    # 晕菜：双手举在头两侧，crown+20..+150 行可能量到手 → 先 auto_head，验收时按头宽实测校正。
+    # 伸懒腰：双臂高举过头，头顶测量必然失效（同原地跳高）→ 固定倍率，值见验收标定。
+    "原地跑":       dict(mode="sole", scale="auto_head", ref_frame="lowest"),
+    "看书":         dict(mode="sole", scale="auto_head", ref_frame=0),
+    "晕菜":         dict(mode="sole", scale="auto_head", ref_frame=0),
+    "伸懒腰":       dict(mode="sole", scale=0.70, ref_frame="lowest"),   # 源片从 512×896 提到 1024×1792，像素翻倍 → 倍率减半
 }
 
 
