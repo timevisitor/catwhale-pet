@@ -595,6 +595,7 @@
 </div>
 <div id="toast"></div>
 
+<script src="director.js"></script>
 <script>
 /* =====================================================================
    状态配置。role 决定它在状态机里的优先级角色：
@@ -620,7 +621,12 @@ const DEFAULT_STATES = {
   sit_chair:   { name:'坐椅摆腿',   file:'sit_chair.webm',   mode:'loop', role:'lounge',  weight:15, react:20, scale:1.0 },
   doze:        { name:'站着打盹',   file:'doze.webm',        mode:'loop', role:'lounge',  weight:20, react:30, scale:1.0 },
   big_bowl:    { name:'坐地大盆吃饭', file:'big_bowl.webm',  mode:'once', role:'idle_act', scale:1.00, rate:1.5 },
-  jump_high:   { name:'原地跳高',   file:'jump_high.webm',   mode:'once', role:'idle_act', scale:1.00, rate:1.0 }
+  jump_high:   { name:'原地跳高',   file:'jump_high.webm',   mode:'once', role:'idle_act', scale:1.00, rate:1.0 },
+  /* ↓ 作息导演层引入的 4 个动作（素材文件缺失时下面的 buildVideos 会跳过，不会报错） */
+  run:         { name:'原地跑',     file:'run.webm',         mode:'loop', role:'lounge',  weight:25, react:20, scale:1.0 },
+  read:        { name:'看书',       file:'read.webm',        mode:'loop', role:'lounge',  weight:20, react:20, scale:1.0 },
+  dizzy:       { name:'晕菜',       file:'dizzy.webm',       mode:'once', role:'idle_act', weight:30, react:10, scale:1.0, rate:1.2 },
+  stretch:     { name:'伸懒腰',     file:'stretch.webm',     mode:'once', role:'idle_act', weight:25, react:15, scale:1.0 }
 };
 const VIDEO_DIR = 'assets/video/';
 const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
@@ -694,7 +700,8 @@ function now(){ return performance.now(); }
    例如"松手落下"默认 2 倍速，落得利落一点。 */
 function stateRate(id){ return (states[id] && states[id].rate) ? states[id].rate : 1; }
 function applyRates(){
-  for (const id in videos) videos[id].playbackRate = baseRate * stateRate(id);
+  const dr = directorRate();
+  for (const id in videos) videos[id].playbackRate = baseRate * stateRate(id) * dr;
 }
 
 function pickWeighted(list){
@@ -717,28 +724,112 @@ function resolveState(){
   return M.lounge;                                          // 6 长时间空闲 → 摇尾/操作中随机
 }
 
-/* 空闲时段的小动作概率：按 states.json 里 role='idle_act' 的条目随机触发一次
-   （一次性播完就回待机，不进循环池——否则会定格在末帧）。 */
+/* 空闲时段小动作的基础概率（导演层关闭时的回落值） */
 const IDLE_ACT_CHANCE = 0.35;
 
-function rollLounge(){
-  // 先看要不要做"小动作"（吃米饭）：一次性动作由 playOnce 接管，靠 M.react 优先级播完自动结束
-  const acts = Object.keys(states).filter((id)=> states[id] && states[id].role === 'idle_act');
-  if (acts.length && Math.random() < IDLE_ACT_CHANCE){
-    const pick = pickWeighted(acts.map((id)=> ({ id, w: (states[id].weight ?? 20) }))) || acts[0];
-    M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
-    playOnce(pick);
-    return;
+/* ===================== 作息导演层（web/director.js）=====================
+   它只回答两个问题：「此刻每个动作该多大权重」「节奏多快」。
+   resolveState() 的优先级链（拖拽/菜单/chatBusy/长任务/一次性动作）**一行不动**，
+   导演层只在「第 6 步：长时间空闲随机」这一处替换掉原来的固定权重。
+   director 为 null 时（脚本没加载/配置禁用）自动回落到原始行为。 */
+let director = null;
+let directorFile = null;
+let dctx = null, dctxAt = -1e9, dctxFrozen = null;
+
+/* 上下文缓存 5 秒：ctxNow() 每次要算 7 个时段的隶属度，150ms 的 tick 不必重算 */
+function directorCtx(){
+  if (!director) return null;
+  const t = now();
+  if (t - dctxAt < 5000) return dctx;
+  dctxAt = t;
+  try { dctx = director.ctxNow(); } catch(e){ dctx = null; }
+  if (dctx){
+    // 深夜冻结状态变化 → 立刻把播放速率跟上去（否则要等到下次 play() 才生效）
+    if (dctxFrozen !== dctx.freeze){ dctxFrozen = dctx.freeze; try{ applyRates(); }catch(e){} }
   }
-  const pool = [];
+  return dctx;
+}
+function directorRate(){
+  const c = directorCtx();
+  if (!c || !c.freeze || !director) return 1;
+  return director.cfg.freezeRate || 0.35;
+}
+/* 基础权重：states.json 里的 weight，缺省 20（和原代码的 (weight ?? 20) 一致） */
+function baseWeightOf(id){ const st = states[id]; return (st && st.weight != null) ? st.weight : 20; }
+/* 可用候选：素材文件加载失败的（皮肤里删了视频/新增动作还没出片）一律不进池 */
+function usable(id){ return !!(states[id] && !states[id].__missing); }
+
+async function initDirector(){
+  if (!window.CatwhaleDirector){ console.warn('[director] director.js 未加载，回落到固定权重'); return; }
+  let raw = null;
+  try {
+    const r = window.petHost && window.petHost.director ? await window.petHost.director.get() : null;
+    if (r && r.cfg) { raw = r.cfg; directorFile = r.file; }
+    if (r && r.ok === false) console.warn('[director] 配置文件解析失败，用内置默认：', r.error, r.file);
+  } catch(e){ console.warn('[director] 读取配置失败，用内置默认：', e); }
+  try {
+    director = window.CatwhaleDirector.create(raw, { now: () => Date.now() });
+    dctxAt = -1e9; dctx = null;
+    console.log('[director] 启用 ' + (director.enabled() ? '是' : '否') +
+                ' | 预设 ' + director.cfg.preset + ' | 配置源 ' + (directorFile || '内置默认'));
+  } catch(e){ console.warn('[director] 初始化失败，回落固定权重：', e); director = null; }
+  // CPU 负载信号：轻量常驻（只 os.cpus 差值，不起 PowerShell）
+  if (director && director.cfg.cpu && director.cfg.cpu.enabled && window.petHost){
+    try {
+      if (window.petHost.onSysInfo){
+        window.petHost.onSysInfo((d)=>{
+          if (director && d && d.cpuUsage != null && isFinite(d.cpuUsage)) director.cpu.push(d.cpuUsage, Date.now());
+        });
+      }
+      if (window.petHost.sysInfoStartLight) window.petHost.sysInfoStartLight().catch?.(()=>{});
+    } catch(e){ console.warn('[director] CPU 采样启动失败：', e); }
+  }
+}
+
+function loungeSpan(ctx){
+  if (!ctx || !director) return LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
+  return director.loungeDelayMs(ctx);
+}
+
+/* 空闲时段的一次决策：先掷「要不要做一次性小动作」，否则在循环池里挑一个。
+   注意「倍率 0」的语义：该时段被禁用的动作不会被抽到；如果所有小动作都被禁用，
+   就老老实实不做（不能回落到第一个），否则深夜照样会吃米饭。 */
+function rollLounge(){
+  const ctx = directorCtx();
+  const acts = Object.keys(states).filter((id)=> usable(id) && states[id].role === 'idle_act');
+  const chance = ctx ? director.idleActChance(ctx) : IDLE_ACT_CHANCE;
+  if (acts.length && Math.random() < chance){
+    let pick = null;
+    if (ctx){
+      const bw = {}; for (const id of acts) bw[id] = baseWeightOf(id);
+      pick = director.pick(acts, ctx, bw);
+    } else {
+      pick = pickWeighted(acts.map((id)=> ({ id, w: baseWeightOf(id) })));
+    }
+    if (pick){
+      M.loungeUntil = now() + loungeSpan(ctx);
+      playOnce(pick);
+      return;
+    }
+  }
+  const pool = [], bw = {};
   for (const id in states){
     const st = states[id];
-    if (st.role === 'lounge') pool.push({ id, w: st.weight ?? 20 });
-    if (st.role === 'task')   pool.push({ id, w: (st.weight ?? 20) * 0.6 });   // 空闲也可能切到"操作中"
+    if (!usable(id)) continue;
+    if (st.role === 'lounge') { pool.push(id); bw[id] = baseWeightOf(id); }
+    if (st.role === 'task')   { pool.push(id); bw[id] = baseWeightOf(id) * 0.6; }   // 空闲也可能切到"操作中"
   }
-  M.lounge = pool.length ? (pickWeighted(pool) || 'idle') : 'idle';
+  let chosen;
+  if (ctx && pool.length){
+    // 'idle' 也进池：深夜它就是「什么都不做，安静待着」，这是最像活物的一种表现
+    pool.push('idle'); bw.idle = 25;
+    chosen = director.pick(pool, ctx, bw) || 'idle';
+  } else {
+    chosen = pickWeighted(pool.map((id)=> ({ id, w: bw[id] }))) || 'idle';
+  }
+  M.lounge = chosen;
   ensureVideoData(M.lounge);        // 预热下一个空闲状态，切换时不空帧
-  M.loungeUntil = now() + LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS);
+  M.loungeUntil = now() + loungeSpan(ctx);
 }
 
 function tick(){
@@ -778,7 +869,7 @@ function play(id){
   next.classList.add('active');
   next.style.transform = videoTransform(id);
   next.loop = (states[id].mode === 'loop');
-  next.playbackRate = baseRate * stateRate(id);
+  next.playbackRate = baseRate * stateRate(id) * directorRate();
   cur = id;
   try{
     next.currentTime = 0;
@@ -1988,6 +2079,7 @@ async function init(){
     if (r.ok) states = await r.json();
   }catch(e){ /* file:// 下 fetch 被禁，用默认配置 */ }
   await loadActiveSkin();
+  await initDirector();          // 作息导演层（读 director.json + 起轻量 CPU 采样）
 
   pet = document.getElementById('pet');
   els.shadow  = document.getElementById('shadow');
@@ -2041,6 +2133,7 @@ async function init(){
     v.loop = (st.mode === 'loop');
     v.disablePictureInPicture = true;
     v.addEventListener('ended', ()=>{ try{ v.pause(); }catch(e){} });   // 一次性动作播完别占着解码器
+    v.addEventListener('error', ()=>{ st.__missing = true; console.warn('[pet] 素材缺失，已跳过:', id, v.src); });
     pet.appendChild(v);
     videos[id] = v;
   }
@@ -2084,12 +2177,14 @@ function applySize(h){
   clampToScreen(false); updateShadow();
 }
 function place(x, y, animate){
+  if (!pet) return;        // 皮肤加载/热重载期间可能有定时器先触发，pet 还没赋值
   if (animate) pet.classList.add('moving');
   pet.style.left = x + 'px'; pet.style.top = y + 'px';
   if (animate) setTimeout(()=> pet.classList.remove('moving'), 520);
   updateShadow();
 }
 function clampToScreen(animate){
+  if (!pet) return;        // 同上：皮肤加载期的早调用
   const w = opt.size * CANVAS_ASPECT, h = opt.size;
   let x = parseFloat(pet.style.left) || 0, y = parseFloat(pet.style.top) || 0;
   x = Math.min(Math.max(x, 8 - w * 0.2), innerWidth - w * 0.8);
@@ -2097,6 +2192,7 @@ function clampToScreen(animate){
   place(x, y, animate);
 }
 function updateShadow(){
+  if (!pet || !els.shadow) return;
   const w = opt.size * CANVAS_ASPECT, h = opt.size;
   const x = parseFloat(pet.style.left) || 0, y = parseFloat(pet.style.top) || 0;
   const footY = y + h * FOOT_RATIO;
@@ -2858,8 +2954,50 @@ window.petAPI = {
   moveTo: (x, y)=> place(x, y, true),
   getState: ()=> cur,
   getMode: ()=>({ dragging:M.dragging, menuOpen:M.menuOpen, searchOpen:M.searchOpen, searchRows:S.rows.length, chatOpen:M.chatOpen, chatBusy:M.chatBusy, chatMsgs:C.msgs.length, taskCount:M.taskCount,
-                  react:M.react, idleMs: now() - M.lastInteract, lounge:M.lounge })
+                  react:M.react, idleMs: now() - M.lastInteract, lounge:M.lounge,
+                  director: directorDebug() }),
+  /* ---- 作息导演层的验证接口（tools/ 下的无头探针用，也可在 devtools 里手动调）---- */
+  director: {
+    info: ()=> directorDebug(),
+    /* 给某个时刻算一遍权重表：{ minute:600 } 或 { hhmm:'10:30' } */
+    weightsAt: (o)=>{
+      if (!director) return null;
+      const m = (o && o.hhmm) ? (parseInt(o.hhmm.slice(0,2),10)*60 + parseInt(o.hhmm.slice(3,5),10))
+                              : ((o && typeof o.minute === 'number') ? o.minute : director.minuteOfDayNow());
+      const ctx = director.at(m, Date.now());
+      const out = { minute: Math.round(m), phase: ctx.phase, phaseName: ctx.phaseName,
+                    mix: ctx.mix.map(x=>({ id:x.id, w:+x.w.toFixed(3) })), tempo: +ctx.tempo.toFixed(3),
+                    cpuBand: ctx.cpuBand, freeze: !!ctx.freeze, states: {} };
+      for (const id in states){
+        out.states[id] = { base: baseWeightOf(id), mul: +director.multiplierOf(id, ctx).toFixed(3),
+                           weight: +director.weightOf(id, ctx, baseWeightOf(id)).toFixed(2),
+                           role: states[id].role, missing: !!states[id].__missing };
+      }
+      return out;
+    },
+    /* 强行喂一个 CPU 百分比（会走 EMA + 滞回；连续喂几次才切档）*/
+    pushCpu: (pct)=>{
+      if (!director) return null;
+      for (let i = 0; i < 30; i++) director.cpu.push(pct, Date.now() - (30 - i) * 5000);
+      dctxAt = -1e9;
+      return directorDebug();
+    },
+    /* 重载 director.json（改完配置不用重启桌宠）*/
+    reload: async ()=>{ await initDirector(); dctxAt = -1e9; return directorDebug(); }
+  }
 };
+
+function directorDebug(){
+  if (!director) return { enabled: false, reason: 'director.js 未加载或初始化失败' };
+  const ctx = directorCtx();
+  return {
+    enabled: director.enabled(), preset: director.cfg.preset, file: directorFile,
+    phase: ctx && ctx.phase, phaseName: ctx && ctx.phaseName,
+    tempo: ctx && +ctx.tempo.toFixed(2),
+    cpuBand: ctx && ctx.cpuBand, cpuEma: ctx && Math.round(ctx.cpuEma), cpuRaw: ctx && +director.cpu.value().toFixed(1),
+    freeze: !!(ctx && ctx.freeze), lounge: M.lounge, loungeUntilInMs: Math.round(M.loungeUntil - now())
+  };
+}
 
 window.addEventListener('error', e=>{ window.__petError = (e.message || '') + ' @' + (e.lineno||''); });
 window.addEventListener('unhandledrejection', e=>{ window.__petError = 'Promise: ' + ((e.reason && (e.reason.stack||e.reason.message)) || e.reason); });

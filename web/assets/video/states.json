@@ -142,6 +142,59 @@
     "file": "jump_high.webm",
     "duration": 4.458,
     "frames": 107,
-    "bytes": 2674360
+    "bytes": 3412581
+  },
+  "stretch": {
+    "id": "stretch",
+    "name": "伸懒腰",
+    "mode": "once",
+    "role": "idle_act",
+    "scale": 1.0,
+    "weight": 25,
+    "react": 15,
+    "file": "stretch.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 3026371
+  },
+  "run": {
+    "id": "run",
+    "name": "原地跑",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 25,
+    "react": 20,
+    "file": "run.webm",
+    "duration": 4.208,
+    "frames": 101,
+    "bytes": 4333744
+  },
+  "dizzy": {
+    "id": "dizzy",
+    "name": "晕菜",
+    "mode": "once",
+    "role": "idle_act",
+    "scale": 1.0,
+    "weight": 30,
+    "react": 10,
+    "rate": 1.2,
+    "file": "dizzy.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 3830197
+  },
+  "read": {
+    "id": "read",
+    "name": "看书",
+    "mode": "loop",
+    "role": "lounge",
+    "scale": 1.0,
+    "weight": 20,
+    "react": 20,
+    "file": "read.webm",
+    "duration": 5.0,
+    "frames": 120,
+    "bytes": 2640166
   }
 }

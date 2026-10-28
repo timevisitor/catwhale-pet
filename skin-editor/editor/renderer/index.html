@@ -18,6 +18,11 @@
     <button id="btnDel" class="ghost danger" title="删除当前皮肤">删除</button>
   </div>
   <div class="spacer"></div>
+  <div class="navtabs">
+    <button id="navActions" class="tab on">动作</button>
+    <button id="navDirector" class="tab">作息</button>
+  </div>
+  <span id="dirDirty" style="display:none;color:var(--gold);font-size:11.5px">● 作息未保存</span>
   <span id="envChip" class="chip">初始化…</span>
   <button id="btnOpenFolder" class="ghost" title="打开皮肤目录">目录</button>
   <button id="btnSave" class="primary" title="Ctrl+S">保存</button>
@@ -61,6 +66,37 @@
   <aside class="right" id="props">
     <div class="empty">还没有选中动作。<br>点左侧的「＋ 导入动作」把自己做的视频加进来，<br>或「从内置添加」复制现有动作再调整。</div>
   </aside>
+</main>
+
+<!-- ============ 作息页（导演层：时段 × 动作 倍率 + CPU 档位） ============ -->
+<main id="dirMain" class="dirmain" style="display:none">
+  <div class="dirhead">
+    <label class="chk"><input id="dirEnabled" type="checkbox"> 启用作息导演层</label>
+    <label>预设 <select id="dirPreset">
+      <option value="standard">标准作息</option>
+      <option value="nightowl">夜猫</option>
+      <option value="always_day">一直白天</option>
+    </select></label>
+    <span class="chip" id="dirSrc">—</span>
+    <div class="spacer"></div>
+    <span class="hint">倍率：0 = 该时段不出，1 = 保持原始权重，&gt;1 = 更常出</span>
+    <button id="dirReset" class="ghost">恢复默认</button>
+    <button id="dirSave" class="primary">保存作息</button>
+  </div>
+  <div class="dirbarwrap">
+    <div class="dirbar" id="dirBar"></div>
+    <div class="dirtick" id="dirTick"></div>
+  </div>
+  <div class="dirbody">
+    <div class="dirmatrix"><table id="dirTable"></table></div>
+    <aside class="dirside">
+      <h3>时段边界</h3>
+      <div id="dirPhases"></div>
+      <h3>CPU 负载与节奏</h3>
+      <div id="dirCpu"></div>
+      <div class="note">改完点「保存作息」，桌宠 2.5 秒内自动热重载，不用重启。CPU 高时桌宠会演「晕菜」，同时会降低自己的开销。</div>
+    </aside>
+  </div>
 </main>
 
 <footer>
@@ -150,5 +186,6 @@
 </div>
 
 <script src="app.js"></script>
+<script src="director-pane.js"></script>
 </body>
 </html>

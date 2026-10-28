@@ -80,6 +80,28 @@ const STATE_FILE = path.join(app.getPath('userData'), 'pet-state.json');
 const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 与 harness 的聊天记录
 const ICON_FILE = path.join(__dirname, 'assets', 'tray.png');
 
+/* ---------- 作息导演层配置（director.json）-----------
+   读取优先级：当前皮肤目录里的 director.json → %APPDATA%\<app>\director.json → 内置默认。
+   皮肤自带的作息表优先，是为了让「每个皮肤可以有自己的作息」这件事在编辑器里一站完成。
+   文件不存在 = 用 web/director.js 的 DEFAULT_CONFIG（行为对旧皮肤等价）。 */
+const DIRECTOR_FILE = path.join(app.getPath('userData'), 'director.json');
+function readDirector() {
+  const list = [];
+  const dir = activeSkinDir();
+  if (dir) list.push(path.join(dir, 'director.json'));
+  list.push(DIRECTOR_FILE);
+  for (const f of list) {
+    try {
+      if (!fs.existsSync(f)) continue;
+      const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return { ok: true, file: f, cfg: raw };
+    } catch (e) {
+      return { ok: false, file: f, error: String((e && e.message) || e), cfg: null };
+    }
+  }
+  return { ok: true, file: null, cfg: null };
+}
+
 let win = null, tray = null, server = null, port = 0;
 let quitting = false;
 
@@ -261,6 +283,8 @@ async function createWindow() {
           videos: [...document.querySelectorAll('#pet video')].map(v => ({
                     f: v.currentSrc.split('/').pop(), src: v.currentSrc, rs: v.readyState, w: v.videoWidth, h: v.videoHeight,
                     tf: v.style.transform })),
+          director: (window.petAPI && petAPI.director) ? petAPI.director.info() : null,
+          weights: (window.petAPI && petAPI.director) ? petAPI.director.weightsAt({}) : null,
           err: window.__petError || null, initOK: !!window.__petInitOK })`);
         const b = win.getBounds();
         const al = autoLaunchInfo();
@@ -1339,6 +1363,12 @@ ipcMain.handle('chat:clear', () => { saveChatHistory([]); return { ok: true }; }
 
 /* 详情卡实时硬件数据（菜单打开时开始采样，关闭后缓存一分钟后自动收进程） */
 ipcMain.handle('sysinfo:start', () => { console.log('SYSINFO_IPC_START'); sysinfo.start((d) => send('sysinfo', d), (l) => console.log(l)); return { ok: true }; });
+/* 导演层常驻的轻量采样：只 CPU/内存，不 spawn PowerShell */
+ipcMain.handle('sysinfo:startLight', () => {
+  sysinfo.startLight((d) => send('sysinfo', d), (l) => console.log(l));
+  return { ok: true };
+});
+ipcMain.handle('director:get', () => readDirector());
 ipcMain.handle('sysinfo:stop', () => { sysinfo.stop(); return { ok: true }; });
 ipcMain.handle('sysinfo:get', () => sysinfo.latest() || sysinfo.sample());
 
