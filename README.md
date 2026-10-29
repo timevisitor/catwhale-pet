@@ -40,6 +40,14 @@
   触发角色、权重、播放模式与速率、缩放（整体 + 宽/高分开）和位移。桌宠每 2.5 秒比对 `skin.json` 的修改时间，
   变了就地重载页面——**换装不用重启桌宠**；皮肤被删掉会自动退回内置素材，**内置素材一个字节都没动**。
   配套的独立编辑器见 `skin-editor/`。
+- **Agent 看板**（v0.4.0）：本机正在跑的 AI Agent（Hermes / ChatGPT Codex / Claude Code / OpenClaw /
+  MiMoCode / WorkBuddy / DeepSeek Harness，或任何程序 `POST /state`）的实时状态会映射成桌宠的动作——
+  有 Agent 在干活就演「操作中」、等你确认就「举手」、结束「跳一下」、报错「晕菜」。
+  桌宠旁出现小胶囊（`● Hermes 3`），点开是会话卡片列表：**点卡片选中、再点展开详情**
+  （Agent / 会话 / 状态 / 当前工具 / 目录 / 来源 / 最后一句），头部一键静音。
+  状态入口是本地 `127.0.0.1:8770/state`（只绑本机、不开放局域网）；Hermes 一条命令接上
+  （`node tools/dock-install-hermes-hooks.js`，写前备份并自检），Codex / Claude Code 直接读会话日志跟随，
+  DeepSeek Harness 走桌宠内置通道，其余 Agent 用完 hooks 推同一个口即可。详见 `docs/Agent看板.md`。
 - **作息导演层**（v0.3.0）：空闲行为不再是一颗骰子，而是「时钟节律 × CPU 负载」两层的倍率。
   7 个时段（清晨/上午/中午/下午/下班/晚上/深夜）各自给每个动作一个倍率（0 = 不出，1 = 原权重，>1 = 更常出），
   时段边界前后各 10 分钟交叉渐变，**不会整点硬切**；CPU 走 EMA 平滑 + 三档滞回（安静/常态/热闹）+ 90 秒最短停留，
@@ -101,6 +109,20 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 ```
 
 ## 版本记录
+
+- **v0.4.0（Agent 看板）**
+  - **桌宠跟随本机 AI Agent**：新增 `app/agent-dock.js` 中枢，本地 `127.0.0.1:8770/state` 收状态推送，
+    归一成 7 个状态词（working / speaking / waiting_user / done / error / idle / sleeping），
+    优先级 `等你确认 > 报错 > 干活中 > 输出中 > 刚结束`；`resolveState()` 只加两行，原优先级链一行没动。
+  - **8 个通道**：Hermes（`hooks.outbound`，17 个事件）、ChatGPT Codex、Claude Code（会话日志跟随）、
+    OpenClaw / MiMoCode / WorkBuddy（hook 推 `/state`）、DeepSeek Harness（内置通道）、任意自建（通用通道）。
+    每个通道真实探测，没装就显示「未装 + 怎么接」，不假装有数。
+  - **只靠点**：桌宠旁小胶囊 → 会话卡片列表；点卡片＝选中，再点同一张＝展开/收起详情，头部喇叭＝静音。
+    早期原型照搬过实体小屏的「3 键 + 五向摇杆」虚拟按键台，被判定在鼠标场景下纯冗余而整体删除。
+  - **气泡生命周期**：`done/error` 留 60 秒、`working` 150 秒失联收、`waiting_user` 10 分钟收
+    （防止 Agent 进程已死还挂着）；会话只存内存，重启即清空，不做持久化。
+  - **自检**：`node tools/dock-selftest.js`（中枢 39 项）、`node tools/dock-cdp-test.js`（真窗口 38 项）、
+    `node tools/dock-demo.js`（14 秒剧本，肉眼验收）。
 
 - **v0.3.0（作息导演层 + 高清素材）**
   - **空闲行为接入作息导演层**：时段 × 动作的倍率表 + CPU 三档负载联动，见上文「作息导演层」。

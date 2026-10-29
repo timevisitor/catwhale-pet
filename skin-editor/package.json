@@ -1,7 +1,7 @@
 {
   "name": "catwhale-skin-editor",
   "productName": "猫鲸皮肤编辑器",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "猫鲸桌宠的独立皮肤编辑器：上传动作、自定义触发逻辑、自由调整大小与比例（本地实装）",
   "main": "editor/main.js",
   "author": "翻个的咸鱼",

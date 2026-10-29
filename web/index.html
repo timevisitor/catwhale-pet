@@ -429,6 +429,7 @@
 </style>
 <link rel="stylesheet" href="sao.css">
 <link rel="stylesheet" href="chat.css">
+<link rel="stylesheet" href="dock.css">
 </head>
 <body>
 <div id="desktop"></div>
@@ -685,6 +686,7 @@ const M = {                       // 各种锁，共同决定该演哪个状态
   envOpen: false,         // 环境自检向导打开
   chatOpen: false,        // 聊天面板打开（同上）
   chatBusy: false,        // harness 正在处理 → 演"操作中"，优先级高于菜单
+  dockState: '',          // Agent 看板报来的最紧急状态（working/speaking/waiting_user…）
   taskCount: 0,
   react: null,                    // 一次性动作(状态 id)
   reactUntil: 0,
@@ -716,6 +718,8 @@ function pickWeighted(list){
 function resolveState(){
   if (M.dragging) return 'grabbed';                        // 1 拖动中
   if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
+  if (M.dockState === 'working' || M.dockState === 'speaking') return 'working';   // 1.6 外部 Agent 在干活
+  if (M.dockState === 'waiting_user') return 'stand_arms';                        //     有 Agent 等你确认 → 举手
   if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen || M.envOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置/自检面板打开
   if (M.taskCount > 0) return 'working';                   // 3 长任务处理中
   if (M.react && now() < M.reactUntil) return M.react;     // 4 一次性动作(互动 / 松手落下)
@@ -905,7 +909,8 @@ let hostBridge = null;
 function uiHitAt(x, y){
   const el = document.elementFromPoint(x, y);
   if (!el || !el.closest) return false;
-  if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#envwiz') || el.closest('#sao')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单可交互
+  if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#envwiz') || el.closest('#sao')
+      || el.closest('#dockpan') || el.closest('#dockchip')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单/Agent看板可交互
   if (el.closest('#pet')){
     const r = pet.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
@@ -1786,7 +1791,8 @@ const C = { open:false, busy:false, msgs:[], t0:0, timer:0,
 function cHostOk(){ return !!(window.petHost && window.petHost.chat); }
 
 function syncPanelGuard(){        // 有任一面板打开 → 让主进程挂全局 Esc
-  try{ if (window.petHost && window.petHost.setPanelOpen) window.petHost.setPanelOpen(!!(SAO.open || S.open || C.open || SET.open || ENV.open)); }catch(e){}
+  const dockOpen = !!(window.DockUI && DockUI.isOpen());
+  try{ if (window.petHost && window.petHost.setPanelOpen) window.petHost.setPanelOpen(!!(SAO.open || S.open || C.open || SET.open || ENV.open || dockOpen)); }catch(e){}
 }
 
 /* ---------- harness 状态文案 ---------- */
@@ -2302,7 +2308,9 @@ function bindEvents(){
   //   这一下会落进页面里 → 角色被瞬移过去，误触率极高，用户已要求去掉）
   on(document, 'pointerdown', (e)=>{
     const t = e.target;
-    if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao'))) return;
+    if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao')
+        || t.closest('#dockpan') || t.closest('#dockchip'))) return;
+    if (window.DockUI && DockUI.isOpen()) DockUI.close();
     closeMenu();
     if (SET.open) closeSettings();
     if (S.open) closeSearch();
@@ -2372,7 +2380,8 @@ function bindEvents(){
     else if (S.open) closeSearch();
   });
   if (window.petHost && window.petHost.onEsc) window.petHost.onEsc(()=>{   // 窗口失焦时由全局 Esc 兜底
-    if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
+    if (window.DockUI && DockUI.isOpen()) DockUI.close();
+    else if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
   });
   bindEnvPanel();      // 环境自检向导：按钮 / 勾选 / 日志流
   /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
@@ -2556,6 +2565,7 @@ function setBg(mode){
 
 function updateStateLine(id){
   const st = states[id] || {};
+  if (!els || !els.stateLine) return;        // 页面还没 init 完（早期 applyState）时静默跳过
   let why;
   if (M.dragging) why = '拖动中';
   else if (M.menuOpen) why = '菜单打开';
@@ -2999,11 +3009,25 @@ function directorDebug(){
   };
 }
 
+/* Agent 看板 → 桌宠状态：只在"最紧急状态"变化时演一次一次性动作，
+   常态挂在 resolveState 里（见 1.6 两行）。看板自己不做优先级判定。 */
+window.addEventListener('dock:state', (e)=>{
+  const d = (e && e.detail) || {};
+  const prev = M.dockState || '';
+  M.dockState = (d.muted ? '' : (d.state || '')) || '';
+  try{
+    if (d.state === 'done' && prev !== 'done') playOnce('jump_high');
+    else if (d.state === 'error' && prev !== 'error') playOnce('dizzy');
+    applyState();
+  }catch(e){}   // 看板事件可能早于页面 init 完成，不能让它污染 __petError
+});
+
 window.addEventListener('error', e=>{ window.__petError = (e.message || '') + ' @' + (e.lineno||''); });
 window.addEventListener('unhandledrejection', e=>{ window.__petError = 'Promise: ' + ((e.reason && (e.reason.stack||e.reason.message)) || e.reason); });
 init().then(()=>{ window.__petInitOK = true; })
       .catch(e=>{ window.__petError = String((e && (e.stack || e.message)) || e); });
 </script>
+<script src="dock.js"></script>
 </body>
 </html>
 

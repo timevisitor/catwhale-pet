@@ -85,6 +85,22 @@ contextBridge.exposeInMainWorld('petHost', {
     return () => ipcRenderer.removeListener('env:log', h);
   },
 
+  /* ---- Agent 看板（虚拟按键台）：快照 / 选择 / 翻页 / 钉住 / 配置 ---- */
+  dock: {
+    get: () => ipcRenderer.invoke('dock:get'),
+    select: (id) => ipcRenderer.invoke('dock:select', id),
+    cycle: (dir) => ipcRenderer.invoke('dock:cycle', dir),
+    pin: (key) => ipcRenderer.invoke('dock:pin', key),
+    clearEnded: () => ipcRenderer.invoke('dock:clearEnded'),
+    probe: () => ipcRenderer.invoke('dock:probe'),
+    setConfig: (patch) => ipcRenderer.invoke('dock:config', patch),
+    onUpdate: (cb) => {
+      const h = (_e, snap) => { try { cb(snap); } catch (e) {} };
+      ipcRenderer.on('dock:update', h);
+      return () => ipcRenderer.removeListener('dock:update', h);
+    }
+  },
+
   /* ---- 外置皮肤包（独立皮肤编辑器生成，主进程只读）---- */
   skin: {
     get:         () => ipcRenderer.invoke('skin:get'),
