@@ -19,7 +19,9 @@ if (bootGuard.level >= 2) {
   app.commandLine.appendSwitch('disable-gpu-compositing');
 }
 if (bootGuard.level >= 3) app.commandLine.appendSwitch('disable-gpu');
-const sysinfo = require('./sysinfo.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
+const sysinfo = require('./sysinfo.js');
+/* Agent 看板：收各 AI Agent 的状态推送（本地 HTTP）并按会话日志跟随后台 Agent */
+const { createAgentDock } = require('./agent-dock.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 
 const SOLID = process.argv.includes('--solid');
 const BENCH = process.argv.includes('--bench');
@@ -78,6 +80,8 @@ function activeSkinDir(){
 }
 const STATE_FILE = path.join(app.getPath('userData'), 'pet-state.json');
 const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 与 harness 的聊天记录
+const DOCK_FILE = path.join(app.getPath('userData'), 'dock.json');           // Agent 看板配置
+const DOCK_DEFAULTS = { enabled: true, port: 8770, keepDoneSec: 60 };
 const ICON_FILE = path.join(__dirname, 'assets', 'tray.png');
 
 /* ---------- 作息导演层配置（director.json）-----------
@@ -1126,6 +1130,7 @@ function ensureHarness() {
     log: harnessLog,
     onStatus: (state, info) => {
       if (state === 'idle' && !harnessBootedAt) harnessBootedAt = Date.now();
+      try { if (agentDock) agentDock.feedHarness('status', { state, info: info || {} }); } catch (e) { /* 看板没起来不影响聊天 */ }
       send('harness:status', { state, info: info || {}, sessionId: harness && harness.sessionId,
                                provider: harness && harness.provider, model: harness && harness.model,
                                bootMs: harnessBootedAt ? Date.now() - harnessBootedAt : 0 });
@@ -1143,6 +1148,7 @@ function ensureHarness() {
           harnessTurnText = ''; harnessTurnUser = '';
         }
       } catch (e) { console.log('HARNESS_LOG_ERR ' + e.message); }
+      try { if (agentDock) agentDock.feedHarness('event', evt); } catch (e) { /* 同上 */ }
       send('harness:event', evt);
     },
   });
@@ -1335,6 +1341,81 @@ function buildTray() {
 
 
 /* ---------- 文件搜索相关 IPC ---------- */
+/* ===================== Agent 看板（agent-dock.js） =====================
+   收：本机程序 POST http://127.0.0.1:<port>/state（Hermes hooks.outbound / 各种 hook 都能推）；
+   采：没有 hook 的 Agent 按会话日志（codex / claude-code 的 jsonl）活跃度推断；
+   发：快照经 IPC 推给页面（web/dock.js），由页面演动作 + 显示气泡与虚拟按键台。
+   服务只绑 127.0.0.1；端口被占/启动失败都不阻塞桌宠本身。 */
+function readDockCfg() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(DOCK_FILE, 'utf8'));
+    return Object.assign({}, DOCK_DEFAULTS, {
+      enabled: raw.enabled !== false,
+      port: Number.isFinite(raw.port) && raw.port >= 1024 && raw.port <= 65535 ? raw.port : DOCK_DEFAULTS.port,
+      keepDoneSec: Number.isFinite(raw.keepDoneSec) && raw.keepDoneSec >= 5 && raw.keepDoneSec <= 3600
+        ? raw.keepDoneSec : DOCK_DEFAULTS.keepDoneSec,
+    });
+  } catch (e) { return Object.assign({}, DOCK_DEFAULTS); }
+}
+function writeDockCfg(patch) {
+  const next = Object.assign({}, readDockCfg(), patch || {});
+  try { fs.writeFileSync(DOCK_FILE, JSON.stringify(next, null, 2), 'utf8'); } catch (e) { /* 写不进去就用内存里的 */ }
+  return next;
+}
+let agentDock = null, agentDockErr = '';
+async function startAgentDock() {
+  if (!fs.existsSync(DOCK_FILE)) { try { writeDockCfg({}); } catch (e) { /* 写不了就用默认值 */ } }
+  const cfg = readDockCfg();
+  if (!cfg.enabled) { agentDockErr = '看板已关闭（dock.json 里 enabled=false）'; return null; }
+  if (agentDock) return agentDock;
+  try {
+    agentDock = createAgentDock({
+      port: cfg.port,
+      keepDoneMs: cfg.keepDoneSec * 1000,
+      harnessRepo: (() => { try { return effectiveHarnessRepo(loadCfg(), loadState()).repo; } catch (e) { return ''; } })(),
+      log: (line) => console.log(line),
+    });
+    agentDock.on('update', (snap) => { try { send('dock:update', snap); } catch (e) { /* 窗口还没建好 */ } });
+    await agentDock.start();
+    agentDockErr = '';
+    console.log('AGENT_DOCK ' + JSON.stringify(agentDock.info()));
+  } catch (e) {
+    agentDockErr = (e && e.message) || String(e);
+    agentDock = null;
+    console.log('AGENT_DOCK_FAIL ' + agentDockErr);
+  }
+  return agentDock;
+}
+function dockSnapshot() {
+  const cfg = readDockCfg();
+  if (!agentDock) {
+    return { ok: false, error: agentDockErr || '看板未启动', port: cfg.port, host: '127.0.0.1',
+             sessions: [], channels: [], state: 'idle', selected: null, pinned: null,
+             counters: { received: 0, dropped: 0, parseErrors: 0 }, config: cfg };
+  }
+  const snap = agentDock.snapshot();
+  snap.config = Object.assign({}, snap.config, cfg);
+  if (agentDockErr) snap.error = agentDockErr;
+  return snap;
+}
+ipcMain.handle('dock:get', async () => {
+  if (!agentDock) await startAgentDock();
+  return dockSnapshot();
+});
+ipcMain.handle('dock:select', (_e, id) => (agentDock ? agentDock.select(id === '' ? null : id) : null));
+ipcMain.handle('dock:cycle', (_e, dir) => (agentDock ? agentDock.cycleSession(Number(dir) < 0 ? -1 : 1) : null));
+ipcMain.handle('dock:pin', (_e, key) => (agentDock ? agentDock.pin(String(key || '')) : null));
+ipcMain.handle('dock:clearEnded', () => (agentDock ? agentDock.clearEnded() : 0));
+ipcMain.handle('dock:probe', () => { if (agentDock) agentDock.refreshChannels(true); return dockSnapshot(); });
+ipcMain.handle('dock:config', async (_e, patch) => {
+  const before = readDockCfg();
+  const cfg = writeDockCfg(patch || {});
+  const needRestart = !!agentDock && (cfg.port !== before.port || cfg.keepDoneSec !== before.keepDoneSec || !cfg.enabled);
+  if (needRestart) { try { await agentDock.stop(); } catch (e) { /* ignore */ } agentDock = null; }
+  if (cfg.enabled) await startAgentDock();
+  return { ok: true, config: cfg, snapshot: dockSnapshot() };
+});
+
 ipcMain.handle('everything:search', (_e, payload) => {
   const { query = '', limit = 30 } = payload || {};
   return searchEverything(query, limit);
@@ -1511,6 +1592,7 @@ if (!app.requestSingleInstanceLock()) {
     // 按等级延迟建窗：让输入法的注入/初始化先跑完，再建透明窗口（避开注入竞态）
     if (bootGuard.delayMs > 0) await new Promise((r) => setTimeout(r, bootGuard.delayMs));
     await createWindow();
+    startAgentDock();                              // Agent 看板：失败只记日志，不影响桌宠启动
     watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();

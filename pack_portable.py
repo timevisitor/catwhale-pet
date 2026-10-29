@@ -18,7 +18,7 @@ ELECTRON_DIST = os.path.join(APP, "node_modules", "electron", "dist")
 OUT_DIR = os.path.join(ROOT, "dist")
 OUT = os.path.join(OUT_DIR, "桌宠")
 EXE_NEW = "桌宠.exe"
-FILES = ["main.js", "preload.js", "harness-client.js", "package.json"]
+FILES = ["main.js", "preload.js", "harness-client.js", "agent-dock.js", "sysinfo.js", "package.json"]
 DIRS = ["renderer", "assets", "harness-sdk", "tools"]
 
 

@@ -1,0 +1,119 @@
+/* =====================================================================
+   dock.css — Agent 看板（虚拟按键台）样式
+   与聊天/设置面板同一套浅色纸感：底 #F9FAF6、强调 #F6C62E、文字 #49564E。
+   只影响 #dockchip / #dockpan 两个节点，不碰桌宠既有面板。
+   ===================================================================== */
+
+#dockchip {
+  position: fixed; z-index: 61;
+  display: none; align-items: center; gap: 7px;
+  height: 30px; padding: 0 11px 0 9px;
+  font: 600 12px/1 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color: #46524A; background: rgba(249, 250, 246, .94);
+  border: 1px solid rgba(114, 124, 111, .40); border-left: 3px solid #F6C62E;
+  border-radius: 3px; box-shadow: 0 3px 12px rgba(0, 0, 0, .16);
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  backdrop-filter: blur(2px);
+}
+#dockchip.show { display: flex; }
+#dockchip .dkc-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa79c; flex: none; }
+#dockchip .dkc-dot.working { background: #2E9E5B; box-shadow: 0 0 0 3px rgba(46, 158, 91, .18); }
+#dockchip .dkc-dot.speaking { background: #E7A100; box-shadow: 0 0 0 3px rgba(231, 161, 0, .18); }
+#dockchip .dkc-dot.waiting_user { background: #E2571E; box-shadow: 0 0 0 3px rgba(226, 87, 30, .20); animation: dkPulse 1.1s ease-in-out infinite; }
+#dockchip .dkc-dot.error { background: #C62828; box-shadow: 0 0 0 3px rgba(198, 40, 40, .18); }
+#dockchip .dkc-dot.done { background: #4D6BFE; }
+#dockchip .dkc-name { max-width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dockchip .dkc-n { color: #8A947F; font-weight: 600; }
+@keyframes dkPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.32); } }
+
+#dockpan {
+  position: fixed; z-index: 62;
+  display: none; flex-direction: column;
+  width: min(342px, calc(100vw - 16px));
+  max-height: min(560px, calc(100vh - 16px));
+  background: rgba(249, 250, 246, .975);
+  border: 1px solid rgba(114, 124, 111, .38); border-left: 3px solid #F6C62E;
+  border-radius: 2px; box-shadow: 0 10px 34px rgba(0, 0, 0, .22);
+  color: #49564E; font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+#dockpan.show { display: flex; }
+
+#dockpan .dk-head {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 11px 12px 9px; border-bottom: 1px solid rgba(110, 122, 110, .20);
+}
+#dockpan .dk-head b { font-size: 14px; font-weight: 600; }
+#dockpan .dk-head .dk-port { margin-left: auto; font-size: 10.5px; color: #8A947F; letter-spacing: .3px; }
+#dockpan .dk-head .dk-x {
+  width: 24px; height: 24px; padding: 0; font-size: 17px; line-height: 1;
+  background: transparent; border: 1px solid transparent; color: #748075; cursor: pointer; border-radius: 3px;
+}
+#dockpan .dk-head .dk-x:hover { background: #EFF1EA; }
+
+#dockpan .dk-sub {
+  flex: none; padding: 7px 12px 8px; font-size: 11px; line-height: 1.55; color: #7B857A;
+  background: rgba(241, 243, 236, .55); border-bottom: 1px solid rgba(110, 122, 110, .14);
+}
+#dockpan .dk-sub b { color: #5A675C; font-weight: 600; }
+
+#dockpan .dk-list { flex: 1 1 auto; min-height: 44px; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
+#dockpan.collapsed .dk-list { display: none; }
+
+#dockpan .dk-item {
+  display: grid; grid-template-columns: 8px 1fr auto; gap: 2px 8px;
+  padding: 8px 9px; margin-bottom: 6px; cursor: pointer;
+  background: #FFFFFF; border: 1px solid #E3E7DB; border-left: 3px solid #D7DCCB;
+  border-radius: 2px; align-items: start;
+}
+#dockpan .dk-item:hover { background: #FDFDF7; }
+#dockpan .dk-item.sel { border-left-color: #F6C62E; background: #FFFDF0; box-shadow: 0 0 0 1px rgba(246, 198, 46, .35); }
+#dockpan .dk-item .dki-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; background: #9aa79c; }
+#dockpan .dk-item .dki-dot.working { background: #2E9E5B; }
+#dockpan .dk-item .dki-dot.speaking { background: #E7A100; }
+#dockpan .dk-item .dki-dot.waiting_user { background: #E2571E; animation: dkPulse 1.1s ease-in-out infinite; }
+#dockpan .dk-item .dki-dot.error { background: #C62828; }
+#dockpan .dk-item .dki-dot.done { background: #4D6BFE; }
+#dockpan .dk-item .dki-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+#dockpan .dk-item .dki-agent { font-size: 11px; font-weight: 700; color: #6B7A6C; flex: none; letter-spacing: .2px; }
+#dockpan .dk-item .dki-title {
+  font-size: 12.5px; font-weight: 600; color: #3D4A41; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#dockpan .dk-item .dki-meta { font-size: 10.5px; color: #98A28F; white-space: nowrap; }
+#dockpan .dk-item .dki-line {
+  grid-column: 2 / 4; font-size: 11px; color: #7B857A; line-height: 1.5;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+#dockpan .dk-item .dki-line.tool { color: #9E7B1D; }
+#dockpan .dk-empty { padding: 14px 10px; font-size: 11.5px; line-height: 1.7; color: #98A28F; text-align: center; }
+
+#dockpan .dk-det {
+  /* 详情按内容自然高度撑开，列表让位（列表自己可滚），避免最后一行被切一半 */
+  flex: 0 1 auto; display: none; padding: 9px 12px 10px; font-size: 11px; line-height: 1.65;
+  background: #F3F5EC; border-top: 1px solid rgba(110, 122, 110, .16); color: #5C695E;
+  max-height: 300px; overflow: auto; user-select: text; -webkit-user-select: text;
+}
+#dockpan .dk-det.show { display: block; }
+#dockpan .dk-det dt { color: #8A947F; float: left; width: 46px; clear: left; }
+#dockpan .dk-det dd { margin: 0 0 2px 50px; overflow-wrap: anywhere; }
+
+/* 头部小图标（静音）：与 × 同高，靠 hover 才显出存在感 */
+#dockpan .dk-icon {
+  width: 24px; height: 24px; padding: 0; margin-left: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 3px;
+  color: #748075; cursor: pointer;
+}
+#dockpan .dk-icon svg { width: 15px; height: 15px; }
+#dockpan .dk-icon:hover { background: #EFF1EA; }
+#dockpan .dk-icon.muted { color: #C08A00; background: #FFF6D6; border-color: #EBDCA6; }
+
+#dockpan .dim { color: #98A28F; }
+#dockchip.muted { opacity: .72; }
+
+#dockpan .dk-foot { flex: none; padding: 0 12px 9px; font-size: 10px; color: #A3AB9A; line-height: 1.5; }
+#dockpan .dk-warn {
+  flex: none; margin: 0 10px 8px; padding: 6px 8px; font-size: 10.5px; line-height: 1.5;
+  color: #8A5A00; background: #FFF6D6; border: 1px solid #EBDCA6; border-radius: 2px;
+}
