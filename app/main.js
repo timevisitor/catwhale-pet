@@ -49,6 +49,8 @@ const MIRRORTEST = process.argv.includes('--mirrortest');
 const ENVCHECK = process.argv.includes('--envcheck');
 // --startuptest：跑一遍「开机自检 + 自动适配」同一条代码路径，量主线程最大卡顿（事件循环延迟）后打印 JSON
 const STARTUPTEST = process.argv.includes('--startuptest');
+// --gamemode=on|off：启动即切手动游戏模式（Frida/CDP 验收用）
+const GAMEMODE_ARG = (process.argv.find((a) => a.startsWith('--gamemode=')) || '').split('=')[1] || '';
 // --envdeploy=<everything|harness>:<目录>：非交互跑一次部署并打印结果 JSON（验收用；--no-mirror 关掉国内镜像）
 const ENVDEPLOY = (() => {
   const a = process.argv.find((x) => x.startsWith('--envdeploy='));
@@ -263,7 +265,7 @@ async function createWindow() {
     if (st.x !== undefined && st.y !== undefined) {
       win.webContents.executeJavaScript(`petAPI.setPos(${st.x}, ${st.y})`).catch(() => {});
     }
-    setTimeout(() => { if (win && !win.isDestroyed()) win.show(); }, 250);   // 等首帧出来再显示，避免闪一下
+    setTimeout(() => { if (win && !win.isDestroyed() && !gameMode.active) win.show(); }, 250);   // 等首帧出来再显示，避免闪一下
   });
 
   await startServer();
@@ -1438,6 +1440,13 @@ function buildTrayMenu() {
       { label: '超大 (620)', click: () => sendToPage('petAPI.setSize(620)') }
     ] },
     { type: 'separator' },
+    { label: '🎮 游戏模式' + (gameMode.active ? '（生效中：' + (gameMode.reason || '手动') + '）' : ''), submenu: [
+      { label: '自动（检测到 ACE / EAC / BattlEye / Vanguard 时自动隐藏）', type: 'radio', checked: !gameMode.manual && gameModeCfg().auto,
+        click: () => { saveGameModeAuto(true); setGameModeManual(''); } },
+      { label: '现在就进入游戏模式', type: 'radio', checked: gameMode.manual === 'on', click: () => setGameModeManual('on') },
+      { label: '关闭（不自动检测）', type: 'radio', checked: gameMode.manual === 'off' || (!gameMode.manual && !gameModeCfg().auto),
+        click: () => { saveGameModeAuto(false); setGameModeManual(''); } },
+    ] },
     { label: '开机自启' + (al.blocked ? '（当前从临时目录运行，不可用）' : ''), type: 'checkbox',
       checked: al.on, enabled: !al.blocked,
       click: (mi) => { if (!setAutoLaunch(mi.checked)) mi.checked = false; } },
@@ -1655,6 +1664,7 @@ ipcMain.handle('pet:autostart', (_e, on) => {
 let escGuard = false;
 function setEscGuard(on) {
   on = !!on;
+  if (gameMode.active) on = false;
   if (on === escGuard) return;
   escGuard = on;
   try {
@@ -1672,8 +1682,9 @@ let lastInteractive = null;
 function setMouseInteractive(on, force = false){
   if (!win || win.isDestroyed()) return;
   on=!!on;
+  if (gameMode.active) on = false;        // 游戏模式：完全穿透，且 forward:false → Electron 卸掉全局低级鼠标钩子
   if(!force && lastInteractive===on)return;
-  win.setIgnoreMouseEvents(!on, { forward: true });
+  win.setIgnoreMouseEvents(!on, { forward: !gameMode.active });
   lastInteractive=on;
 }
 ipcMain.on('pet:interactive', (_e, on) => setMouseInteractive(on));
@@ -1703,11 +1714,125 @@ ipcMain.on('pet:focus', (_e, on) => {
   else setTimeout(() => { if (win && !win.isDestroyed()) win.blur(); }, 60);
 });
 
+/* ---------- 全局热键（游戏模式时要整体释放，所以收成函数） ---------- */
+function registerHotkeys() {
+  if (searchHotkey || chatHotkey) return;
+  // 唤起文件搜索框的全局热键：按候选顺序试，第一个注册成功的就用（都已占用则只留托盘/菜单入口）
+  for (const hk of SEARCH_HOTKEYS) {
+    try {
+      if (globalShortcut.register(hk, () => {
+        if (win && !win.isDestroyed()) win.webContents.send('pet:open-search');
+      })) { searchHotkey = hk; break; }
+    } catch (e) { /* 试下一个 */ }
+  }
+  console.log('HOTKEY ' + (searchHotkey || '(无可用，已退化为托盘入口)'));
+  for (const hk of CHAT_HOTKEYS) {
+    try {
+      if (globalShortcut.register(hk, () => { if (win && !win.isDestroyed()) win.webContents.send('pet:open-chat'); })) { chatHotkey = hk; break; }
+    } catch (e) { /* 试下一个 */ }
+  }
+  console.log('CHAT_HOTKEY ' + (chatHotkey || '(无可用)'));
+}
+function unregisterHotkeys() {
+  try { globalShortcut.unregisterAll(); } catch (e) {}
+  searchHotkey = ''; chatHotkey = ''; escGuard = false;
+}
+
+/* ---------- 游戏模式（反作弊兼容） ----------
+   用户反馈：桌宠开着时，腾讯 ACE（三角洲/LOL/无畏契约/鸣潮/终末地…）报「检测到系统环境存在异常」。
+   本机用 Frida 实测桌宠运行期做的、反作弊最在意的几件事（交付目录 logs/audit_*.json）：
+     ① setIgnoreMouseEvents(true,{forward:true}) 让 Electron 装一个**全局低级鼠标钩子 WH_MOUSE_LL**
+        （electron v44 shell/browser/native_window_views_win.cc SetForwardMouseMessages），全系统鼠标移动都先过桌宠；
+     ② 4 个全局热键 RegisterHotKey（Ctrl+Alt+F/D 等）；
+     ③ 一个盖满全屏、置顶到 screen-saver 级别的透明层叠窗口（"透明覆盖层"正是透视外挂的典型形态）。
+   桌宠不注入任何进程、不读别的进程内存、没有驱动。上面三件都能撤：
+   检测到反作弊进程 → 卸钩子(forward:false) + 释放全部热键 + 隐藏窗口 + 停采样；它退出后自动恢复。
+   这不是"绕过/对抗"反作弊，而是游戏期间桌宠主动退成一个只剩托盘图标的空进程。 */
+const GAME_GUARD_PROCS = ['SGuard64.exe', 'SGuardSvc64.exe', 'ACE-Tray.exe',                // 腾讯 ACE
+  'EasyAntiCheat.exe', 'EasyAntiCheat_EOS.exe', 'BEService.exe', 'vgc.exe'];               // EAC / BattlEye / Vanguard
+const GAMEMODE_POLL_MS = parseInt(process.env.PET_GAMEMODE_POLL_MS || '', 10) || 8000;
+const gameMode = { active: false, reason: '', since: 0, manual: '', lastScan: 0, scans: 0, timer: null };
+function gameModeCfg() {
+  const raw = loadCfgRaw().gameMode || {};
+  return { auto: raw.auto !== false, extra: Array.isArray(raw.extraProcs) ? raw.extraProcs.filter((x) => typeof x === 'string') : [] };
+}
+/** 异步列进程名（tasklist 一次约 30ms CPU，8 秒一次）；只看名字，不打开别的进程 */
+function listProcNames() {
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, encoding: 'buffer', maxBuffer: 8 * 1024 * 1024, timeout: 8000 },
+      (err, out) => {
+        if (err || !out) return resolve(null);
+        let txt = '';
+        try { txt = new TextDecoder('gbk').decode(out); } catch (e) { txt = String(out); }
+        const set = new Set();
+        for (const line of txt.split(/\r?\n/)) { const m = /^"([^"]+)"/.exec(line); if (m) set.add(m[1].toLowerCase()); }
+        resolve(set);
+      });
+  });
+}
+async function scanGameGuard() {
+  const cfg = gameModeCfg();
+  const names = await listProcNames();
+  gameMode.lastScan = Date.now(); gameMode.scans++;
+  if (!names) return null;
+  return [...GAME_GUARD_PROCS, ...cfg.extra].find((p) => names.has(p.toLowerCase())) || '';
+}
+function applyGameMode(on, reason) {
+  on = !!on;
+  if (on === gameMode.active) { if (on) gameMode.reason = reason || gameMode.reason; return; }
+  gameMode.active = on; gameMode.reason = on ? (reason || '') : ''; gameMode.since = Date.now();
+  console.log('GAMEMODE ' + JSON.stringify({ on, reason: gameMode.reason }));
+  if (on) {
+    unregisterHotkeys();
+    try { sysinfo.stop(); sysinfo.stopLight(); } catch (e) {}
+    setMouseInteractive(false, true);                 // forward:false → 卸 WH_MOUSE_LL
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send('pet:gamemode', { on: true, reason: gameMode.reason }); } catch (e) {}
+      try { win.setAlwaysOnTop(false); win.hide(); } catch (e) {}
+    }
+  } else {
+    if (win && !win.isDestroyed()) {
+      try { win.setAlwaysOnTop(true, bootGuard.level >= 3 ? 'normal' : 'screen-saver'); win.showInactive(); } catch (e) {}
+      try { win.webContents.send('pet:gamemode', { on: false }); } catch (e) {}
+    }
+    setMouseInteractive(false, true);                 // 回到默认：穿透 + forward（页面按命中再打开交互）
+    registerHotkeys();
+  }
+  if (tray && !tray.isDestroyed()) {
+    try { tray.setToolTip(on ? 'DeepSeek-猫鲸（游戏模式：' + (gameMode.reason || '手动') + '）' : 'DeepSeek-猫鲸'); tray.setContextMenu(buildTrayMenu()); } catch (e) {}
+  }
+}
+async function gameModeTick() {
+  if (gameMode.manual === 'on') return applyGameMode(true, '手动开启');
+  if (gameMode.manual === 'off') return applyGameMode(false);
+  if (!gameModeCfg().auto) return applyGameMode(false);
+  const hit = await scanGameGuard();
+  if (hit === null) return;                          // tasklist 失败：保持现状，别抖
+  applyGameMode(!!hit, hit);
+}
+function startGameModeWatch() {
+  if (gameMode.timer) return;
+  const tick = () => { gameModeTick().catch((e) => console.log('GAMEMODE_ERR ' + ((e && e.message) || e))); };
+  tick();
+  gameMode.timer = setInterval(tick, GAMEMODE_POLL_MS);
+}
+function setGameModeManual(v) {                      // 'on' | 'off' | ''(自动)
+  gameMode.manual = v || '';
+  return gameModeTick();
+}
+function saveGameModeAuto(on) {
+  const cur = loadCfgRaw();
+  cur.gameMode = Object.assign({}, cur.gameMode || {}, { auto: !!on });
+  try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
+}
+ipcMain.handle('gamemode:get', () => ({ active: gameMode.active, reason: gameMode.reason, manual: gameMode.manual,
+  auto: gameModeCfg().auto, scans: gameMode.scans, procs: GAME_GUARD_PROCS.concat(gameModeCfg().extra) }));
+
 /* ---------- 生命周期 ---------- */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => { if (win) win.show(); });
+  app.on('second-instance', () => { if (win && !gameMode.active) win.show(); });
   // disable-features 只认最后一次 appendSwitch，必须拼成一份，不能各加各的
   app.commandLine.appendSwitch('disable-features',
     [...new Set(['CalculateNativeWinOcclusion', ...bootGuard.features])].join(','));
@@ -1730,22 +1855,10 @@ if (!app.requestSingleInstanceLock()) {
       const info = autoLaunchInfo();
       console.log('AUTOSTART_SET ' + JSON.stringify({ requested: AUTOSTART, applied, info }));
     }
-    // 唤起文件搜索框的全局热键：按候选顺序试，第一个注册成功的就用（都已占用则只留托盘/菜单入口）
-    for (const hk of SEARCH_HOTKEYS) {
-      try {
-        if (globalShortcut.register(hk, () => {
-          if (win && !win.isDestroyed()) win.webContents.send('pet:open-search');
-        })) { searchHotkey = hk; break; }
-      } catch (e) { /* 试下一个 */ }
-    }
-    console.log('HOTKEY ' + (searchHotkey || '(无可用，已退化为托盘入口)'));
-    for (const hk of CHAT_HOTKEYS) {
-      try {
-        if (globalShortcut.register(hk, () => { if (win && !win.isDestroyed()) win.webContents.send('pet:open-chat'); })) { chatHotkey = hk; break; }
-      } catch (e) { /* 试下一个 */ }
-    }
-    console.log('CHAT_HOTKEY ' + (chatHotkey || '(无可用)'));
+    if (GAMEMODE_ARG) gameMode.manual = GAMEMODE_ARG;
+    if (GAMEMODE_ARG !== 'on') registerHotkeys();
     if (tray) tray.setContextMenu(buildTrayMenu());     // 菜单里显示实际热键
+    startGameModeWatch();                               // 反作弊兼容：检测到 ACE 等就进游戏模式
     // --searchtest=<query>：命令行跑一次搜索并打印 JSON（后端自检用）
     if (SEARCHTEST !== undefined) {
       setTimeout(async () => {

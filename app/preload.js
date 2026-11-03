@@ -125,6 +125,12 @@ contextBridge.exposeInMainWorld('petHost', {
 
   /* ---- 面板打开状态 → 主进程据此临时注册全局 Esc ---- */
   setPanelOpen: (on) => ipcRenderer.send('pet:panel', !!on),
+  gameMode: () => ipcRenderer.invoke('gamemode:get'),
+  onGameMode: (cb) => {
+    const h = (_e, v) => { try { cb(v); } catch (e) {} };
+    ipcRenderer.on('pet:gamemode', h);
+    return () => ipcRenderer.removeListener('pet:gamemode', h);
+  },
   onEsc: (cb) => {
     const h = () => { try { cb(); } catch (e) {} };
     ipcRenderer.on('pet:esc', h);
