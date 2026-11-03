@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.2.0-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.4.1-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
@@ -54,6 +54,16 @@
   **只调权重和节奏、绝不直接抢状态**——所以负载抖动不会让桌宠抽搐；CPU 热闹时演「晕菜」，同时降低自己的开销。
   配置在 `%APPDATA%\桌宠\director.json`（皮肤目录里放一份可覆盖），`enabled:false` 一键回到老的固定权重。
   离线可复算：`node tools/simulate-day.js --hours 24` 把一天压成几十秒跑完并输出时间线 + 8 条断言。
+- **游戏模式**（v0.4.1）：检测到腾讯 ACE（`SGuard64.exe` / `SGuardSvc64.exe` / `ACE-Tray.exe`）、
+  EasyAntiCheat、BattlEye、Vanguard 在跑，桌宠自动进入游戏模式——卸掉全局鼠标钩子、释放全部热键、
+  取消置顶并隐藏窗口、暂停视频解码与光标轮询；进程消失后自动恢复。托盘「🎮 游戏模式」可选自动/立即进入/关闭，
+  `settings.json` 的 `gameMode.extraProcs` 可加自己的进程名。
+  只保证「游戏期间桌宠没有这些系统级行为」（实测 Electron 的 `setIgnoreMouseEvents(forward:true)`
+  会装 `WH_MOUSE_LL` 全局钩子，25 秒 1559 次回调），**不承诺反作弊一定不报**，也不做隐藏进程/伪装。
+- **开机不卡 + Everything 自动适配**（v0.4.1）：自检不再用 `spawnSync` 跑 12 个 `where.exe`，
+  改纯 JS 查 PATH + 异步并行 + 5 分钟缓存，开机主线程最长冻结从 **1184ms 降到 12~15ms**；
+  便携版 Everything 由桌宠用 `Everything.exe -startup` 后台拉起并等 IPC 就绪（实测 4~8 秒），
+  不用每次开机手点向导（`settings.json` → `everything.autoLaunch`，默认开）。
 
 ## 形象来源与致谢
 
@@ -110,6 +120,29 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.4.1（启动性能 + Everything 自动适配 + 游戏模式）**
+  - **开机不再卡主线程**：旧 `envTools()` 查 git/node/pnpm 每个工具先 `spawnSync` 4 次 `where.exe`
+    再跑 `--version`，一次约 1.3s 且自检里调两遍，主进程同步阻塞 → 开机桌宠拖动/点击穿透/动画全卡。
+    改成 `exeCandidates()` 纯 JS 遍历 PATH（顺序与原版一致：`.cmd → .exe → .bat`）、
+    `tryRun`/`toolVer`/`envTools` 异步并行 + 结果缓存 5 分钟，快检（开机）不查工具链。
+    实测主线程最长冻结 **1184~1218ms → 12~15ms**（新增 `--startuptest` 参数在固定 8 秒窗口量事件循环延迟）；
+    剩下约 100ms 经对照实验确认来自 Everything 冷启动载入 250MB 数据库抢资源，不是桌宠的阻塞调用。
+  - **Everything 开机自动适配**：新 `startupEnvRoutine()`：快检 → `missing` 就 `autoAdaptEverything()`
+    → 仍有缺项才弹向导。只拉起 `settings.json` 里 `everything.exe` 记录的那份（用户点过/部署过的）
+    `Everything.exe -startup`，异步轮询 IPC 就绪；偶发只建 `EVERYTHING_DUMMY` 窗口、
+    IPC 不出来的情况（8 次 1 次）只对自己刚拉起的 pid 重拉一次。
+    实例名从 exe 同目录的 `Everything-<inst>.ini` 推出（便携 1.5 alpha = `1.5a`），连上即写回 `pet-state.json`。
+    向导新增「开机自动适配」勾选框（IPC `env:everythingAuto`）；部署 Everything 时配置改为合并写，不再覆盖 `autoLaunch`。
+  - **游戏模式（反作弊兼容）**：每 8 秒异步 `tasklist` 只看进程名，命中
+    `SGuard64.exe / SGuardSvc64.exe / ACE-Tray.exe / EasyAntiCheat*.exe / BEService.exe / vgc.exe`
+    （或 `gameMode.extraProcs`）就：`setIgnoreMouseEvents(true,{forward:false})` 让 Electron 自己
+    `UnhookWindowsHookEx` 卸掉全局 `WH_MOUSE_LL`、`globalShortcut.unregisterAll()` 释放热键、
+    取消置顶并隐藏窗口、停 sysinfo 采样；页面侧关面板、暂停全部视频、`hostBridge.dispose()` 停 50ms 光标轮询，
+    `tick()` / `applyState()` 在游戏模式直接返回。进程消失后自动恢复。
+    `setMouseInteractive()` / `setEscGuard()` 开头判 `gameMode.active`，防止页面 IPC 把钩子/热键装回去。
+    验收（改名的 ping.exe 冒充反作弊进程 + Frida）：正常 3 秒 1214 次钩子回调 →
+    进入后存活全局钩子 0 / 回调 0 / 可见窗口 0 / 视频 2 秒增量 0 帧 → 退出后全部恢复、2 秒 48 帧。
+    测试参数 `--gamemode=on|off`、环境变量 `PET_GAMEMODE_POLL_MS`。
 - **v0.4.0（Agent 看板）**
   - **桌宠跟随本机 AI Agent**：新增 `app/agent-dock.js` 中枢，本地 `127.0.0.1:8770/state` 收状态推送，
     归一成 7 个状态词（working / speaking / waiting_user / done / error / idle / sleeping），
