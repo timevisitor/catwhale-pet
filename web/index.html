@@ -2726,6 +2726,8 @@ function renderEnv(r){
   else if (ev.deployedExe) evLines.push('已部署位置：' + envEsc(ev.deployedExe) + (ev.deployedOk ? '' : '（文件不在了）'));
   evLines.push('搜索组件 es.exe：' + (ev.esExeOk ? '已在程序内' : '缺失'));
   if (ev.status !== 'ok') evLines.push('<span class="hint">Everything 首次运行可能请求管理员权限（读 NTFS 索引）；不给也能用，只会退化成扫描模式。</span>');
+  if (ev.autoLaunchExe) evLines.push(`<label class="hint"><input type="checkbox" data-env-auto ${ev.autoLaunch ? 'checked' : ''}> 开机时自动在后台启动这份 Everything（${envEsc(ev.autoLaunchExe)}）</label>`);
+  else if (ev.foundExe && !ev.running) evLines.push('<span class="hint">点一次「用检测到的这份启动」后会记住它，以后开机自动在后台拉起，不用再点。</span>');
   envDesc('everything', evLines.join('<br>'));
   let ea = '';
   if (ev.running){
@@ -2811,6 +2813,12 @@ async function envDeploy(id, explicitDir){
   return r;
 }
 
+async function envAutoToggle(e){
+  const cb = e.target && e.target.matches && e.target.matches('[data-env-auto]') ? e.target : null;
+  if (!cb || !(window.petHost && window.petHost.envEverythingAuto)) return;
+  const r = await window.petHost.envEverythingAuto(cb.checked);
+  toast(r && r.ok ? (cb.checked ? '已开启：开机自动后台启动 Everything' : '已关闭开机自动启动 Everything') : '保存失败');
+}
 async function envClick(e){
   const btn = e.target.closest && e.target.closest('[data-env-act]');
   if (!btn || ENV.busy) return;
@@ -2856,6 +2864,7 @@ async function envClick(e){
 function bindEnvPanel(){
   if (!els.envwiz) return;
   els.envwiz.addEventListener('click', (e)=>envClick(e));
+  els.envwiz.addEventListener('change', (e)=>envAutoToggle(e));
   els.envwiz.addEventListener('keydown', (e)=>{ if (e.key === 'Escape'){ e.stopPropagation(); closeEnv(); } });
   const rc = document.getElementById('envRecheck');
   if (rc) rc.addEventListener('click', ()=>refreshEnv());

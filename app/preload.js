@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld('petHost', {
   envLaunchEverything:(exe) => ipcRenderer.invoke('env:launchEverything', exe),
   envCancel:  (id) => ipcRenderer.invoke('env:cancel', id),
   envDismiss: (on) => ipcRenderer.invoke('env:dismiss', !!on),
+  envEverythingAuto: (on) => ipcRenderer.invoke('env:everythingAuto', !!on),   // 开机自动后台拉起 Everything 的开关
   envOpenUrl: (u) => ipcRenderer.invoke('env:openUrl', u),
   onEnvLog: (cb) => {                                          // 部署日志/进度流
     const h = (_e, evt) => { try { cb(evt); } catch (e) {} };

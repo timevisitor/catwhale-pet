@@ -47,6 +47,8 @@ const REPOTEST = (() => {
 const MIRRORTEST = process.argv.includes('--mirrortest');
 // --envcheck：打印环境自检结果（harness / Everything / 工具链）JSON 后退出（发布验收用）
 const ENVCHECK = process.argv.includes('--envcheck');
+// --startuptest：跑一遍「开机自检 + 自动适配」同一条代码路径，量主线程最大卡顿（事件循环延迟）后打印 JSON
+const STARTUPTEST = process.argv.includes('--startuptest');
 // --envdeploy=<everything|harness>:<目录>：非交互跑一次部署并打印结果 JSON（验收用；--no-mirror 关掉国内镜像）
 const ENVDEPLOY = (() => {
   const a = process.argv.find((x) => x.startsWith('--envdeploy='));
@@ -57,7 +59,7 @@ const ENVDEPLOY = (() => {
 })();
 // 任何自检模式：跳过"启动弹向导"这类打扰用户的行为
 const TESTMODE = ['--envcheck', '--envdeploy=', '--detecttest', '--mirrortest', '--searchtest=',
-                  '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest'].some((p) => process.argv.some((a) => a.startsWith(p)));
+                  '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest', '--startuptest'].some((p) => process.argv.some((a) => a.startsWith(p)));
 const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
@@ -185,12 +187,14 @@ function send(channel, payload) {
 }
 
 /** 解析用哪个 node 跑 harness：优先 PATH 里的 node，没有就退回 Electron 自身（当 node 用） */
+let nodeResolved = '';                    // envTools() 查到合格的 node 时顺手填上，省掉这里的同步探测
 function resolveNode() {
+  if (nodeResolved) return nodeResolved;
   try {
     const r = require('node:child_process').spawnSync('node', ['-v'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
-    if (r && r.status === 0 && supportsHarnessNode((r.stdout || '').trim())) return 'node';
-  } catch (e) {}
-  return process.execPath;
+    nodeResolved = (r && r.status === 0 && supportsHarnessNode((r.stdout || '').trim())) ? 'node' : process.execPath;
+  } catch (e) { nodeResolved = process.execPath; }
+  return nodeResolved;                    // 结果进程内缓存：harness 闲置回收后重开不再同步起 node -v
 }
 
 /* ---------- 本地 http 服务 ----------
@@ -474,15 +478,10 @@ function parseCsv(text) {
 
 async function detectEsInstance(force) {
   if (esInstance !== undefined && !force) return esInstance;
-  const cands = [];
-  const saved = loadState().esInstance;
-  if (typeof saved === 'string') cands.push(saved);
-  for (const c of ES_INSTANCES) if (!cands.includes(c)) cands.push(c);
-  for (const c of cands) {
+  for (const c of esInstanceCands()) {
     const r = await runEs(instanceArgs(c).concat(['-n', '1', '*']), 6000);
     if (r.ok && r.stdout.trim() && !/^Error\s/i.test(r.stdout.trim())) {
-      esInstance = c;
-      saveState(Object.assign(loadState(), { esInstance: c }));
+      rememberEsInstance(c);
       return c;
     }
   }
@@ -539,33 +538,43 @@ const NPM_MIRROR = 'https://registry.npmmirror.com';
 const EVERYTHING_PAGE = 'https://www.voidtools.com/zh-cn/downloads/';
 const EVERYTHING_FALLBACK_ZIP = 'https://www.voidtools.com/Everything-1.5.0.1423b.x64.zip';
 
-function whereList(name) {
-  try {
-    const probe = process.platform === 'win32' ? 'where.exe' : 'which';
-    const r = require('node:child_process').spawnSync(probe, [name], { encoding: 'utf8', timeout: 5000, windowsHide: true });
-    return String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  } catch (e) { return []; }
-}
-/** PATH 上的同名候选（Windows 上 where 会把无扩展名的 sh 脚本排在 .cmd 前面——Node 不能直接跑它，故按扩展名排一遍） */
+/** PATH 上的同名候选：纯 JS 查文件，不起进程。
+    （旧版每次自检起 12 个 where.exe + 若干 `--version`，全是 spawnSync，实测主线程同步卡 ~1.3s，
+      且 envCheck 里跑两遍 → 开机桌宠冻住 ~1.25s。）
+    顺序与旧版一致：按扩展名 .cmd → .exe → .bat 排，同扩展名内按 PATH 顺序；
+    Windows 上无扩展名的 sh 脚本 Node 跑不了，直接不收。 */
 function exeCandidates(name) {
-  const out = [];
-  const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', ''] : [''];
-  for (const ext of exts) for (const p of whereList(name + ext)) if (!out.includes(p)) out.push(p);
+  const dirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter)
+    .map((s) => s.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
+  const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat'] : [''];
+  const out = [], seen = new Set();
+  for (const ext of exts) for (const d of dirs) {
+    const p = path.join(d, name + ext);
+    const k = p.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    try { if (fs.statSync(p).isFile()) out.push(p); } catch (e) { /* 不在这个目录 */ }
+  }
   return out;
 }
+/** 异步跑一次 `<exe> --version`（不阻塞主线程） */
 function tryRun(exe, args) {
-  try {
-    const r = require('node:child_process').spawnSync(exe, args, { encoding: 'utf8', timeout: 8000, windowsHide: true,
-                                                                   shell: /\.(cmd|bat)$/i.test(exe) });
-    const out = (String(r.stdout || '') + String(r.stderr || '')).trim().split(/\r?\n/)[0] || '';
-    return { ok: r.status === 0, out: out.trim() };
-  } catch (e) { return { ok: false, out: '' }; }
+  return new Promise((resolve) => {
+    const isShell = /\.(cmd|bat)$/i.test(exe);
+    try {
+      execFile(isShell ? '"' + exe + '"' : exe, args, { encoding: 'utf8', timeout: 8000, windowsHide: true, shell: isShell },
+        (err, so, se) => {
+          const out = (String(so || '') + String(se || '')).trim().split(/\r?\n/)[0] || '';
+          resolve({ ok: !err, out: out.trim() });
+        });
+    } catch (e) { resolve({ ok: false, out: '' }); }
+  });
 }
 /** 逐个候选真跑一次 --version，取第一个能跑通的（避免选到跑不起来的 shim） */
-function toolVer(name, args) {
+async function toolVer(name, args) {
   const a = args || ['--version'];
   for (const p of exeCandidates(name)) {
-    const r = tryRun(p, a);
+    const r = await tryRun(p, a);
     if (r.ok) return { ok: true, version: r.out, path: p };
   }
   return { ok: false, version: '', path: '' };
@@ -579,25 +588,36 @@ function semverCmp(a, b) {
   }
   return 0;
 }
-function envTools() {
-  const t = {};
-  const tidy = (v) => String(v || '').replace(/^git version\s*/i, '').replace(/^v(?=\d)/, '');
-  t.git = toolVer('git'); t.git.version = tidy(t.git.version);
-  t.node = toolVer('node');
-  t.pnpm = toolVer('pnpm');
-  // Electron 自带的 node 也能跑 harness（chat 用它兜底），但装依赖需要真正的 node/pnpm
-  t.electronNode = { ok: true, version: 'v' + process.versions.node, path: '(Electron 自带)' };
-  t.nodeOk = !!t.node.ok && supportsHarnessNode(t.node.version);
-  t.pnpmOk = !!t.pnpm.ok;
-  return t;
+/* 工具链版本：三个 `--version` 并行、异步，结果缓存 TOOLS_TTL_MS（打开向导/点重新检测不会每次都重起进程）。
+   部署前传 force=true 必须现查（用户可能刚装好 pnpm）。 */
+const TOOLS_TTL_MS = 5 * 60 * 1000;
+let toolsCache = null, toolsCacheAt = 0, toolsInflight = null;
+async function envTools(force) {
+  if (!force && toolsCache && Date.now() - toolsCacheAt < TOOLS_TTL_MS) return toolsCache;
+  if (toolsInflight) return toolsInflight;
+  toolsInflight = (async () => {
+    const tidy = (v) => String(v || '').replace(/^git version\s*/i, '').replace(/^v(?=\d)/, '');
+    const [git, node, pnpm] = await Promise.all([toolVer('git'), toolVer('node'), toolVer('pnpm')]);
+    git.version = tidy(git.version);
+    const t = { git, node, pnpm };
+    // Electron 自带的 node 也能跑 harness（chat 用它兜底），但装依赖需要真正的 node/pnpm
+    t.electronNode = { ok: true, version: 'v' + process.versions.node, path: '(Electron 自带)' };
+    t.nodeOk = !!t.node.ok && supportsHarnessNode(t.node.version);
+    t.pnpmOk = !!t.pnpm.ok;
+    if (t.nodeOk) nodeResolved = t.node.path;          // 顺手喂给 resolveNode()，聊天冷启动不用再同步探一次
+    toolsCache = t; toolsCacheAt = Date.now();
+    return t;
+  })();
+  try { return await toolsInflight; } finally { toolsInflight = null; }
 }
 function effectiveHarnessRepo(cfg = loadCfg(), state = loadState()) {
   return inspectRepo(cfg.harness.repo || state.harnessRepo || detectRepo());
 }
-function envHarnessStatus() {
+/** tools 由调用方传入：快检（开机）不需要工具链，传 null 就不起任何子进程 */
+function envHarnessStatus(tools) {
   const { loader, ...check } = effectiveHarnessRepo();
   return { id: 'harness', name: 'DeepSeek Harness（聊天用）', ...check,
-    tools: envTools(), fix: check.status === 'ok' ? '' : 'harness' };
+    tools: tools || null, fix: check.status === 'ok' ? '' : 'harness' };
 }
 /** 在常见位置找一份已经存在的 Everything.exe（用户自己下载/装过的都算） */
 function findExistingEverything() {
@@ -637,34 +657,134 @@ async function envEverythingStatus(quick) {
            esExe: es, esExeOk: !esMissing, instance: p.instance || '',
            deployedExe: deployed, deployedOk: !!deployed && fs.existsSync(deployed),
            foundExe: existing, foundIsDeployed: !!(existing && deployed && existing === deployed),
+           autoLaunch: everythingAutoLaunchOn(cfg), autoLaunchExe: autoLaunchExe(cfg),
            fix: (p.running && !esMissing) ? '' : 'everything' };
 }
-/** 快检 Everything：只试两个实例名（已记住的 + 默认），预算 ~2.5 秒/次 —— 启动时不要卡住 */
+/** 从 Everything.exe 同目录的配置文件名推实例名：便携 1.5 alpha 是 Everything-1.5a.ini → 实例「1.5a」。
+    这样不用挨个盲试，第一下就能连上。 */
+function instanceFromExe(exe) {
+  if (!exe) return null;
+  try {
+    for (const n of fs.readdirSync(path.dirname(exe))) {
+      const m = /^Everything-(.+?)\.ini$/i.exec(n);
+      if (m && !/backup/i.test(m[1])) return m[1];
+    }
+    if (fs.existsSync(path.join(path.dirname(exe), 'Everything.ini'))) return '';
+  } catch (e) { /* 目录读不了 */ }
+  return null;
+}
+/** 实例名候选顺序：上次连上的 → 已记住那份 exe 推出来的 → 默认 → 其余常见名 */
+function esInstanceCands() {
+  const cands = [];
+  const push = (c) => { if (typeof c === 'string' && !cands.includes(c)) cands.push(c); };
+  push(loadState().esInstance);
+  push(instanceFromExe(autoLaunchExe()));
+  for (const c of ES_INSTANCES) push(c);
+  return cands;
+}
+/** 快检 Everything：只试两个实例名（已记住的 + 推出来的/默认），预算 ~2.5 秒/次 —— 启动时不要卡住 */
 async function quickEsInstance() { return probeEsInstance(2, 2500); }
 async function probeEsInstance(maxTries, timeoutMs) {
-  const cands = [];
-  const saved = loadState().esInstance;
-  if (typeof saved === 'string') cands.push(saved);
-  for (const c of ES_INSTANCES) if (!cands.includes(c)) cands.push(c);
+  const cands = esInstanceCands();
   for (const c of cands.slice(0, maxTries || cands.length)) {
     if (!esPath()) break;
     const r = await runEs(instanceArgs(c).concat(['-n', '1', '*']), timeoutMs || 6000);
     const out = String(r.stdout || '').trim();
     const errLine = String(r.stderr || '').split(/\r?\n/).map((s) => s.trim()).find((l) => /^Error\s+\d+/i.test(l)) || '';
-    if (r.ok && out && !errLine && !/^Error\s+\d+/i.test(out)) return { running: true, instance: c };
+    if (r.ok && out && !errLine && !/^Error\s+\d+/i.test(out)) {
+      rememberEsInstance(c);                 // 连上了就记住（旧版只有搜索路径会记，自检连上也不记 → 每次都从头试）
+      return { running: true, instance: c };
+    }
   }
   return { running: false, instance: '' };
 }
+function rememberEsInstance(c) {
+  esInstance = c;
+  const st = loadState();
+  if (st.esInstance !== c) saveState(Object.assign(st, { esInstance: c }));
+}
+
+/* ---------- 开机自动适配 Everything ----------
+   现象（用户实测）：便携版 Everything 不随系统启动，桌宠开机自检发现它没在跑只会弹向导，
+   要手点「用检测到的这份启动」；第二天开机又得点一次。
+   做法：用户**点过一次启动/部署过**的那份 exe（记在 settings.json 的 everything.exe）视为已授权，
+   以后开机发现 Everything 没在跑就用 `-startup`（后台运行、不弹主窗口）自动拉起，再异步轮询直到 IPC 窗口就绪。
+   只会启动用户自己点过的那一份，不会去拉起扫描到的陌生 exe；可在自检向导里关掉。 */
+function everythingAutoLaunchOn(cfg = loadCfg()) { return cfg.everything.autoLaunch !== false; }
+function autoLaunchExe(cfg = loadCfg()) {
+  const exe = (cfg.everything && cfg.everything.exe) || '';
+  try { return exe && fs.statSync(exe).isFile() ? exe : ''; } catch (e) { return ''; }
+}
+function launchEverythingExe(exe, background) {
+  const args = background ? ['-startup'] : [];
+  const child = require('node:child_process').spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: !!background });
+  child.on('error', () => {});
+  child.unref();
+  return child;
+}
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+/** 等 Everything 的 IPC 窗口出现（数据库载入要几秒）；全程异步，每轮 ~1s */
+async function waitEverythingReady(maxMs) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < (maxMs || 20000)) {
+    const p = await probeEsInstance(3, 2000);
+    if (p.running) return Object.assign({ waitedMs: Date.now() - t0 }, p);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return { running: false, instance: '', waitedMs: Date.now() - t0 };
+}
+async function autoAdaptEverything() {
+  const cfg = loadCfg();
+  if (!everythingAutoLaunchOn(cfg)) return { tried: false, reason: 'disabled' };
+  const exe = autoLaunchExe(cfg);
+  if (!exe) return { tried: false, reason: 'no-remembered-exe' };
+  if (!esPath()) return { tried: false, reason: 'no-es' };
+  let child = null;
+  try { child = launchEverythingExe(exe, true); } catch (e) { return { tried: true, ok: false, exe, error: (e && e.message) || String(e) }; }
+  let r = await waitEverythingReady(25000);
+  let retried = false;
+  /* 偶发（实测 1/8）：新进程只建了 EVERYTHING_DUMMY 窗口、IPC 窗口一直不出来，停在 ~40MB 不动。
+     只处理**我们自己刚拉起的那个 pid**：还活着却没连上 → 结束它再拉一次。用户自己开的进程不碰。 */
+  if (!r.running && child && child.pid && pidAlive(child.pid)) {
+    retried = true;
+    try { require('node:child_process').execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch (e) {}
+    await new Promise((res) => setTimeout(res, 1500));
+    try { launchEverythingExe(exe, true); } catch (e) {}
+    r = await waitEverythingReady(30000);
+  }
+  return { tried: true, ok: r.running, exe, instance: r.instance, waitedMs: r.waitedMs, retried };
+}
 async function envCheck(opts) {
   const quick = !opts || opts.quick !== false;
-  const items = [envHarnessStatus(), await envEverythingStatus(quick)];
+  // 快检不查工具链（git/node/pnpm 版本只有向导里要显示，开机不需要）；全检时与 Everything 探测并行
+  const [tools, ev] = await Promise.all([quick ? null : envTools(!!(opts && opts.forceTools)), envEverythingStatus(quick)]);
+  const items = [envHarnessStatus(tools), ev];
   return {
     ok: true, version: APP_VERSION, quick,
     items,
-    tools: envTools(),
+    tools,
     noAsk: !!(loadCfgRaw().envNoAsk),
     allOk: items.every((i) => i.status === 'ok'),
   };
+}
+
+/** 开机自检 + 自动适配（全程异步，不碰工具链、不起同步子进程）：
+    快检 → Everything 没在跑且用户启动过某一份 → 后台自动拉起并等它就绪 → 仍有缺项才弹向导。
+    opts.openWizard(r)：要弹向导时调用（测试里换成记录，不真弹）。 */
+async function startupEnvRoutine(opts) {
+  const o = opts || {};
+  let r = await envCheck({ quick: true });
+  const out = { first: r.items.map((i) => [i.id, i.status]) };
+  const ev = r.items.find((i) => i.id === 'everything');
+  if (ev && ev.status === 'missing') {
+    out.autoEverything = await autoAdaptEverything();
+    if (out.autoEverything.ok) r = await envCheck({ quick: true });
+  }
+  out.final = r.items.map((i) => [i.id, i.status]);
+  out.allOk = r.allOk;
+  out.wizard = !r.allOk && !r.noAsk;
+  if (out.wizard && o.openWizard) o.openWizard(r);
+  return out;
 }
 
 /* ---------- 部署任务（长跑 + 进度 + 可取消）---------- */
@@ -793,13 +913,19 @@ ipcMain.handle('env:dismiss', (_e, on) => {
   return { ok: true, noAsk: !!on };
 });
 ipcMain.handle('env:cancel', (_e, id) => cancelEnvJob(id));
+ipcMain.handle('env:everythingAuto', (_e, on) => {
+  const cur = loadCfgRaw();
+  cur.everything = Object.assign({}, cur.everything || {}, { autoLaunch: !!on });
+  try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) { return { ok: false, error: e.message }; }
+  return { ok: true, autoLaunch: !!on };
+});
 ipcMain.handle('env:launchEverything', async (_e, explicitExe) => {
   let exe = typeof explicitExe === 'string' && explicitExe ? explicitExe : ((loadCfg().everything || {}).exe || '');
   if (!exe || !fs.existsSync(exe)) exe = findExistingEverything();
   if (!exe || !fs.existsSync(exe)) return { ok: false, error: '没有可启动的 Everything（先部署一份，或自己下载后告诉我路径）' };
-  try { require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); }
+  try { launchEverythingExe(exe, false); }
   catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
-  const cur = loadCfgRaw();                                   // 记住这份，下次直接用它
+  const cur = loadCfgRaw();                                   // 记住这份：以后开机自动用它后台拉起（autoAdaptEverything）
   if (!cur.everything || cur.everything.exe !== exe) {
     cur.everything = Object.assign({ dir: path.dirname(exe), ver: '' }, cur.everything || {}, { exe });
     try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
@@ -849,11 +975,11 @@ async function deployEverything(dir) {
     const exePath = findFile(dir, 'Everything.exe', 3);
     if (!exePath) { envLog(id, '解压完成但没找到 Everything.exe'); return { ok: false, error: '解压后没找到 Everything.exe' }; }
     const cur = loadCfgRaw();
-    cur.everything = { dir, exe: exePath, ver: pick.ver, at: new Date().toISOString() };
+    cur.everything = Object.assign({}, cur.everything || {}, { dir, exe: exePath, ver: pick.ver, at: new Date().toISOString() });
     try { fs.writeFileSync(CFG_FILE, JSON.stringify(cur, null, 2)); } catch (e) {}
     envLog(id, '已部署：' + exePath);
     envJobSend(id, 'phase', { phase: 'launch', text: '启动 Everything…' });
-    try { require('node:child_process').spawn(exePath, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); }
+    try { launchEverythingExe(exePath, false); }
     catch (e) { envLog(id, '启动失败：' + (e && e.message)); }
     try { fs.unlinkSync(zipPath); } catch (e) {}
     const st = await envEverythingStatus(false);
@@ -893,7 +1019,7 @@ async function deployHarness(dir, useMirror) {
   const id = 'harness';
   if (envJobs[id]) return { ok: false, error: '已有部署任务在进行' };
   if (!dir) return { ok: false, error: '没有指定部署目录' };
-  const t = envTools();
+  const t = await envTools(true);                  // 部署前必须现查：用户可能刚装好 pnpm/git
   envLog(id, '工具链：git ' + (t.git.version || '缺失') + ' / node ' + (t.node.version || '缺失') + ' / pnpm ' + (t.pnpm.version || '缺失'));
   if (!isRepoDir(dir) && !t.git.ok) return { ok: false, error: '本机没有 git：请先安装 Git（https://git-scm.com/download/win）或用「浏览…」指定已有的 harness 仓库' };
   if (!t.nodeOk || !t.pnpmOk) return { ok: false, error: '安装依赖需要 Node.js 22.19+（22.x）或 24+，以及可用的 pnpm；请安装后重试' };
@@ -1885,6 +2011,23 @@ if (!app.requestSingleInstanceLock()) {
       }, 1500);
     }
 
+    // --startuptest：量「启动自检」期间主进程事件循环的最大延迟（>100ms 用户就能感觉到桌宠卡一下）
+    if (STARTUPTEST) {
+      setTimeout(async () => {
+        let maxLag = 0, maxLagAt = 0, last = Date.now(), lags = [];
+        const t0 = Date.now();
+        const lagTimer = setInterval(() => { const n = Date.now(), d = n - last - 20; if (d > maxLag) { maxLag = d; maxLagAt = n - t0; } if (d > 50) lags.push([n - t0, d]); last = n; }, 20);
+        let r = null, err = '';
+        try { r = await startupEnvRoutine({ openWizard: (x) => { r && (r.__wouldOpen = true); } }); } catch (e) { err = (e && e.message) || String(e); }
+        const elapsedMs = Date.now() - t0;
+        // 固定观察窗口 8 秒（不随自检耗时变），不同场景/新旧版本的 maxLag 才可比
+        await new Promise((res) => setTimeout(res, Math.max(60, 8000 - elapsedMs)));
+        clearInterval(lagTimer);
+        console.log('STARTUPTEST ' + JSON.stringify({ maxLagMs: maxLag, maxLagAtMs: maxLagAt, lagsOver50: lags, elapsedMs, err, result: r }));
+        if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 400);
+      }, 1500);
+    }
+
     // --envdeploy=<everything|harness>:<目录>：非交互部署，打印结果 JSON（发布验收用）
     if (ENVDEPLOY) {
       setTimeout(async () => {
@@ -1902,10 +2045,8 @@ if (!app.requestSingleInstanceLock()) {
     if (!TESTMODE) {
       setTimeout(async () => {
         try {
-          const r = await envCheck({ quick: true });
-          console.log('ENVCHECK_STARTUP ' + JSON.stringify({ allOk: r.allOk, noAsk: r.noAsk,
-            items: r.items.map((i) => [i.id, i.status]) }));
-          if (!r.allOk && !r.noAsk) sendToPage('petAPI.openEnv && petAPI.openEnv()');
+          const r = await startupEnvRoutine({ openWizard: () => sendToPage('petAPI.openEnv && petAPI.openEnv()') });
+          console.log('ENVCHECK_STARTUP ' + JSON.stringify(r));
         } catch (e) { console.log('ENVCHECK_STARTUP_ERR ' + ((e && e.message) || e)); }
       }, 4500);
     }
