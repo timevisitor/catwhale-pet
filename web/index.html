@@ -837,6 +837,7 @@ function rollLounge(){
 }
 
 function tick(){
+  if (M.gameMode) return;                    // 游戏模式：窗口已隐藏，别再切状态/起播解码
   if (M.react && now() >= M.reactUntil) M.react = null;
   if (opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
@@ -846,6 +847,7 @@ function tick(){
 }
 
 function applyState(){
+  if (M.gameMode) return;
   const want = resolveState();
   if (want && want !== cur && states[want]) play(want);
   updateStateLine(want);
@@ -2449,6 +2451,22 @@ function bindEvents(){
   }catch(e){ console.warn('sysinfo 订阅失败', e); }
   on(document.getElementById('cClear'), 'click', ()=> clearChat());
 
+  /* 游戏模式（主进程检测到 ACE 等反作弊后下发）：关掉所有面板、暂停全部视频解码、停掉光标轮询；
+     窗口本身已被主进程隐藏。退出游戏模式时重新起轮询并回待机。 */
+  if (window.petHost && window.petHost.onGameMode) window.petHost.onGameMode((v)=>{
+    const on = !!(v && v.on);
+    M.gameMode = on;
+    if (on){
+      try{ closeMenu(); }catch(e){}
+      try{ if (S.open) closeSearch(); if (C.open) closeChat(); if (SET.open) closeSettings(); if (ENV.open) closeEnv(); }catch(e){}
+      try{ if (window.DockUI && DockUI.close) DockUI.close(); }catch(e){}
+      for (const id in videos){ try{ videos[id].pause(); }catch(e){} }
+      try{ if (hostBridge && hostBridge.dispose) hostBridge.dispose(); hostBridge = null; }catch(e){}
+    } else {
+      try{ initHostBridge(); }catch(e){}
+      cur = null; applyState();
+    }
+  });
   if (window.petHost && window.petHost.onOpenSearch) window.petHost.onOpenSearch(()=> openSearch());
   if (window.petHost && window.petHost.onOpenChat) window.petHost.onOpenChat(()=> openChat());
 
