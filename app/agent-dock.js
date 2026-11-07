@@ -80,6 +80,8 @@ const DEFAULTS = {
   host: '127.0.0.1',
   keepDoneMs: 60_000,      // done/error 在列表里停留多久
   staleWorkingMs: 150_000, // working 这么久没新推送 → 视为失联，收起
+  staleSpeakingMs: 180_000, // speaking（流式输出中）这么久没新 delta → Agent 已中断/进程没了，收起
+  staleIdleMs: 300_000,    // 只发过 on_session_start 就再没动静的空会话，5 分钟后收起
   staleWaitingMs: 600_000, // waiting_user 一直没有结果（Agent 已死没发事件）→ 10 分钟后收起，别永远挂着
   sleepingMs: 20_000,
   pollMs: 2000,            // 日志轮询
@@ -513,6 +515,8 @@ class AgentDock extends EventEmitter {
         if ((s.state === 'done' || s.state === 'error') && now - s.updatedAt > this.cfg.keepDoneMs) this.sessions.delete(key);
         else if (s.state === 'sleeping' && now - s.updatedAt > this.cfg.sleepingMs) this.sessions.delete(key);
         else if (s.state === 'working' && now - s.updatedAt > this.cfg.staleWorkingMs) this.sessions.delete(key);
+        else if (s.state === 'speaking' && now - s.updatedAt > this.cfg.staleSpeakingMs) this.sessions.delete(key);
+        else if (s.state === 'idle' && now - s.updatedAt > this.cfg.staleIdleMs) this.sessions.delete(key);
         else if (s.state === 'waiting_user' && now - s.updatedAt > this.cfg.staleWaitingMs) this.sessions.delete(key);
       } else if (s.source === 'log') {
         if (now - s.updatedAt > this.cfg.logLiveMs + 60_000) this.sessions.delete(key);

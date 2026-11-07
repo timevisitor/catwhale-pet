@@ -155,6 +155,25 @@ function get(port, p) {
   dock._expire(Date.now());
   ok('working 失联超时被移除', !dock.sessions.has('claude-code::cc2'));
 
+  /* 流式输出中（speaking）：Hermes 会话被中断/关窗时不会有收尾事件，最后一条往往是 on_stream_delta，
+     以前这类会话会永久挂在"输出中"（实测挂过 839 分钟）。必须和 working 一样有失联超时。 */
+  const mkPush = (key, state) => dock.sessions.set(key, {
+    key, agent: 'hermes', agentName: 'Hermes', accent: '#5b9dff', sessionId: key.split('::')[1],
+    state, event: 'on_stream_delta', title: 'x', cwd: '', tool: '', lastUser: '', lastAgent: '',
+    source: 'push', firstSeenAt: Date.now(), updatedAt: Date.now(), stateSince: Date.now(),
+  });
+  mkPush('hermes::speak-live', 'speaking');
+  dock._expire(Date.now());
+  ok('speaking 在 staleSpeakingMs 内保留', dock.sessions.has('hermes::speak-live'));
+  dock.sessions.get('hermes::speak-live').updatedAt = Date.now() - dock.cfg.staleSpeakingMs - 1000;
+  dock._expire(Date.now());
+  ok('speaking 超过 staleSpeakingMs 被收起', !dock.sessions.has('hermes::speak-live'));
+
+  mkPush('hermes::idle-stale', 'idle');
+  dock.sessions.get('hermes::idle-stale').updatedAt = Date.now() - dock.cfg.staleIdleMs - 1000;
+  dock._expire(Date.now());
+  ok('idle 超过 staleIdleMs 被收起', !dock.sessions.has('hermes::idle-stale'));
+
   /* ---------- 8. 日志适配器 ---------- */
   const claudeFile = path.join(claudeRoot, 'sess-log.jsonl');
   const lines = [

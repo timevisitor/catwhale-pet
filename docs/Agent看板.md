@@ -75,8 +75,13 @@ POST http://127.0.0.1:8770/state
 | `idle` | 不干预 | 交给原来的待机/作息导演层 |
 
 排序优先级：`waiting_user > error > working > speaking > done > idle`——"等你确认"永远压在最上面。
-`done/error` 只留 60 秒（可配置）；`working` 150 秒没新推送自动收掉；
+`done/error` 只留 60 秒（可配置）；`working` 150 秒、`speaking` 180 秒、`idle` 300 秒没新推送自动收掉；
 `waiting_user` 10 分钟没结果也收掉——防止 Agent 进程已经死了、"等确认"却在面板上挂一整天。
+
+> **`speaking` 必须有失联超时**：Hermes 会话被中断（Ctrl+C / `/stop`）、关窗或进程退出时，
+> 收尾事件（`on_stream_end` / `agent_loop_stopped`）不会发出，最后一条推送往往停在 `on_stream_delta`。
+> 早期版本只给 working 做过期，结果这类会话永久挂在"输出中"，实测攒到 32 条、最久 839 分钟。
+> 流式输出时 delta 间隔远小于 180 秒，所以这个超时不会误伤真在说话的会话。
 会话状态只存内存，桌宠重启即清空（不做持久化，避免陈旧状态被当成"还在干活"）。
 
 ## 5. 接 Hermes（一条命令）
