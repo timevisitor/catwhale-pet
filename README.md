@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.4.1-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.4.2-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
@@ -120,6 +120,15 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.4.2（Agent 看板：修「输出中」僵尸会话）**
+  - **现象**：看板会越堆越多，一度显示 33 个会话、其中 32 个停在「输出中」，最久一条挂着 839 分钟。
+  - **根因**：`agent-dock.js` 的 `_expire()` 只给 `done/error/sleeping/working/waiting_user` 做过期，漏了
+    `speaking` 与 `idle`。而 Hermes 会话被中断（`/stop`、Ctrl+C、关窗口、进程退出）时，收尾事件
+    （`on_stream_end` / `agent_loop_stopped`）不会发出，最后一条推送停在 `on_stream_delta` —— 状态就永久卡住，直到桌宠重启。
+  - **修**：新增 `staleSpeakingMs`（180 秒）与 `staleIdleMs`（300 秒）失联超时，与 `working`（150 秒）同一套判据。
+    流式输出时 delta 间隔是秒级，180 秒足够松，不会误伤真在说话的会话。
+  - **验收**：`dock-selftest.js` 42/42（新增 3 条断言）；拿当时真实的 33 条快照跑新规则 → 33 → 2（只剩真活跃的）；
+    重打包重启后 3 分钟稳定在 1 条当前会话。
 - **v0.4.1（启动性能 + Everything 自动适配 + 游戏模式）**
   - **开机不再卡主线程**：旧 `envTools()` 查 git/node/pnpm 每个工具先 `spawnSync` 4 次 `where.exe`
     再跑 `--version`，一次约 1.3s 且自检里调两遍，主进程同步阻塞 → 开机桌宠拖动/点击穿透/动画全卡。
