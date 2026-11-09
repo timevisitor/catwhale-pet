@@ -370,6 +370,35 @@
   #settings .sform .hint b{ color:#66521A; }
   #settings .sform .ok{ color:#3f8f5f; } #settings .sform .bad{ color:#b4453f; }
 
+  /* 设置面板 · 动画片段循环 */
+  #settings .sform .albox{ border:1px solid rgba(103,112,106,.28); border-radius:3px;
+    padding:7px 8px 8px; background:rgba(255,255,255,.42);
+    display:flex; flex-direction:column; gap:5px; }
+  #settings .sform .albox .alhead{ font-size:12px; font-weight:600; color:var(--ui-fg);
+    display:flex; align-items:center; gap:6px; }
+  #settings .sform .albox .alhead .albadge{ margin-left:auto; font-size:10.5px; font-weight:400;
+    padding:1px 6px; border-radius:2px; background:rgba(103,112,106,.14); color:var(--ui-dim); white-space:nowrap; }
+  #settings .sform .albox .alhead .albadge.on{ background:rgba(90,180,120,.22); color:#2f6b45; }
+  #settings .sform .albox .alhead .albadge.pv{ background:rgba(226,178,60,.24); color:#6b5312; }
+  #settings .sform .albox .hint{ margin:0; }
+  #settings .sform .albox > label{ color:var(--ui-dim); font-size:11.5px; }
+  #settings .sform select{ width:100%; background:rgba(255,255,255,.82);
+    border:1px solid rgba(90,100,92,.28); border-radius:2px; color:var(--ui-fg);
+    font:inherit; font-size:12px; padding:5px 6px; outline:none; }
+  #settings .sform select:focus{ border-color:var(--accent-hi); box-shadow:0 0 0 2px rgba(246,198,46,.35); }
+  #settings .sform input[type=number]{ flex:1 1 0; min-width:0;
+    background:rgba(255,255,255,.72)!important; border:1px solid rgba(90,100,92,.28)!important;
+    border-radius:2px; color:var(--ui-fg); font:inherit; font-size:12px; padding:5px 6px; outline:none; }
+  #settings .sform input[type=number]:focus{ border-color:var(--accent-hi)!important;
+    box-shadow:0 0 0 2px rgba(246,198,46,.35)!important; background:#fff!important; }
+  #settings .sform .alnums{ display:flex; align-items:center; gap:6px; }
+  #settings .sform .alnums span{ color:var(--ui-dim); font-size:11.5px; white-space:nowrap; }
+  #settings .sform .albtns{ display:flex; gap:6px; flex-wrap:wrap; }
+  #settings .sform .albtns button{ padding:5px 10px; font-size:12px; border-radius:2px; }
+  #settings .sform .albox .clink{ font-size:11.5px; color:#8a6a10; }
+  #settings .sform .albox .clink:hover{ text-decoration:underline; }
+  #settings .sform .albox .almode{ color:var(--ui-dim); font-size:11.5px; }
+
   /* 滚动条 */
   ::-webkit-scrollbar{ width:8px; height:8px; }
   ::-webkit-scrollbar-track{ background:rgba(255,255,255,.5); }
@@ -492,6 +521,32 @@
   <div class="sbox"><span>⚙</span><b style="font-size:13px">设置</b>
     <span class="scount" id="setStatus"></span></div>
   <div class="sform">
+    <div class="albox" id="alBox">
+      <div class="alhead"><span>⏱ 动画片段循环</span><span class="albadge" id="alBadge">未开启</span></div>
+      <label style="margin-top:0">循环动作（含一次性动作与皮肤动作）</label>
+      <select id="alAction" aria-label="循环动作"></select>
+      <div class="hint" id="alDur">选择动作后显示视频实际时长</div>
+      <div class="alnums">
+        <span>起点</span><input id="alStart" type="number" min="0" step="0.01" value="0" aria-label="片段起点（秒）">
+        <span>秒 → 终点</span><input id="alEnd" type="number" min="0" step="0.01" value="2" aria-label="片段终点（秒）">
+        <span>秒</span>
+      </div>
+      <div class="alnums">
+        <span class="clink" id="alMarkStart">取当前播放时间为起点</span>
+        <span class="clink" id="alMarkEnd">取当前为终点</span>
+      </div>
+      <div class="albtns">
+        <button id="alPreview" type="button">预览片段</button>
+        <button id="alApply" type="button">开启循环（保存）</button>
+        <button id="alStop" type="button">停止循环</button>
+      </div>
+      <div class="hint" id="alStatus"></div>
+      <div class="hint">
+        优先级：游戏模式最先暂停全部动画；拖动角色仍临时演「抓着」，松手落回。
+        开启后本片段会盖住<b>菜单抬手、Agent 看板、长任务与空闲随机</b>；点击互动/松手落下这类一次性动作只短暂插播，播完回到同一片段。
+        循环速度只跟随「速度」滑块（×动作自身速率），<b>不受深夜降速影响</b>；拖拽或游戏模式结束后会继续播放所选片段。
+      </div>
+    </div>
     <label>DeepSeek API Key</label>
     <div class="row">
       <input id="setKey" type="password" placeholder="sk-…（留空＝不修改已保存的）" spellcheck="false" autocomplete="off">
@@ -597,6 +652,7 @@
 <div id="toast"></div>
 
 <script src="director.js"></script>
+<script src="animation-loop.js"></script>
 <script>
 /* =====================================================================
    状态配置。role 决定它在状态机里的优先级角色：
@@ -690,6 +746,7 @@ const M = {                       // 各种锁，共同决定该演哪个状态
   taskCount: 0,
   react: null,                    // 一次性动作(状态 id)
   reactUntil: 0,
+  reactUser: false,               // 这次一次性动作是用户点的？固定片段只给用户互动让路
   lounge: 'idle',                 // 空闲时段当前选中的状态
   loungeUntil: 0,
   lastInteract: 0
@@ -703,7 +760,11 @@ function now(){ return performance.now(); }
 function stateRate(id){ return (states[id] && states[id].rate) ? states[id].rate : 1; }
 function applyRates(){
   const dr = directorRate();
-  for (const id in videos) videos[id].playbackRate = baseRate * stateRate(id) * dr;
+  // 固定片段只跟随速度滑块，不乘深夜降速（导演层改了 freeze 也不能把它拖慢）
+  const segId = (AL.run && AL.engine && AL.engine.isRunning()) ? AL.run.actionId : '';
+  for (const id in videos){
+    videos[id].playbackRate = (id === segId) ? alSegmentRate() : baseRate * stateRate(id) * dr;
+  }
 }
 
 function pickWeighted(list){
@@ -717,6 +778,14 @@ function pickWeighted(list){
 
 function resolveState(){
   if (M.dragging) return 'grabbed';                        // 1 拖动中
+  /* 1.4 用户开启的固定片段：盖住菜单抬手 / Agent 看板 / 长任务 / 空闲自动。
+     一次性动作（点击互动、松手落下）仍允许短暂插播，播完回同一片段。
+     普通模式（AL.run 为空）这条分支整段不生效，原有优先级一行未动。 */
+  if (AL.run && AL.run.actionId){
+    // 只有用户明确点的互动/松手落下才插播；Agent 看板、长任务、空闲随机一律被片段盖住
+    if (M.react && M.reactUser && now() < M.reactUntil) return M.react;
+    return AL.run.actionId;
+  }
   if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
   if (M.dockState === 'working' || M.dockState === 'speaking') return 'working';   // 1.6 外部 Agent 在干活
   if (M.dockState === 'waiting_user') return 'stand_arms';                        //     有 Agent 等你确认 → 举手
@@ -839,7 +908,7 @@ function rollLounge(){
 function tick(){
   if (M.gameMode) return;                    // 游戏模式：窗口已隐藏，别再切状态/起播解码
   if (M.react && now() >= M.reactUntil) M.react = null;
-  if (opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
+  if (!AL.run && opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
     rollLounge();
   }
@@ -851,6 +920,516 @@ function applyState(){
   const want = resolveState();
   if (want && want !== cur && states[want]) play(want);
   updateStateLine(want);
+}
+
+/* ===================== 动画片段循环（固定片段） =====================
+   用户点名「某个动作的第 start~end 秒」反复播放。三档来源：
+     cfg     已保存的配置（主进程 animation-loop.json，独立于 setConfig，改完不重启聊天）
+     run     此刻真正要演的片段（预览或已开启）
+     mode    off | enabled（已保存并开启）| preview（临时预览，不落盘）
+   优先级（resolveState 里只加一处，普通模式一行不动）：
+     游戏模式 → tick/applyState 直接返回，全部视频已暂停
+     M.dragging → 临时「抓着」
+     本循环 → 盖住菜单抬手 / Agent 看板 / 长任务 / 空闲随机
+     一次性动作（点击互动 / 松手落下）→ 短暂插播，播完回同一片段
+   速率：baseRate × stateRate(id)，**不乘 directorRate**（固定片段不该在深夜自己变慢）。
+   解码：只用桌宠现有 video，不再建第二个解码器；切走时 pauseOthers 会立刻暂停它。 */
+const ALLib = window.CatwhaleAnimationLoop || null;
+const AL = {
+  cfg: ALLib ? Object.assign({}, ALLib.DEFAULTS) : { enabled:false, actionId:'idle', start:0, end:2 },
+  run: null, mode: 'off',
+  status: '', kind: '',
+  formActionId: '', duration: 0, metaSeq: 0, metaBusy: false,
+  loaded: false, busy: false, opSeq: 0,
+  engine: ALLib ? ALLib.createPlayer({}) : null,
+  els: {}
+};
+
+function alEls(){
+  if (!AL.els.action){
+    const g = (s)=> document.getElementById('al' + s);
+    AL.els = { action:g('Action'), start:g('Start'), end:g('End'), dur:g('Dur'),
+               status:g('Status'), badge:g('Badge'), preview:g('Preview'), apply:g('Apply'),
+               stop:g('Stop'), markStart:g('MarkStart'), markEnd:g('MarkEnd') };
+  }
+  return AL.els;
+}
+function alBridge(){ return (window.petHost && window.petHost.animationLoop) || null; }
+/* 桥调用保险丝：主进程异常/未响应时不能让设置面板永远停在“正在保存…” */
+function alTimeout(p, ms, text){
+  let timer = 0;
+  const t = new Promise((res)=>{ timer = setTimeout(()=> res({ ok:false, error:text }), ms); });
+  return Promise.race([p, t]).then(
+    (v)=>{ clearTimeout(timer); return v; },
+    (e)=>{ clearTimeout(timer); throw e; }
+  );
+}
+function alUsable(id){ return !!(states[id] && !states[id].__missing); }
+function alName(id){ const st = states[id]; return st ? (st.name || id) : id; }
+function alNum(x){ const s = String(x == null ? '' : x).trim(); return s === '' ? NaN : Number(s); }
+function alFmt(n){ return ALLib ? ALLib.formatSeconds(n) : String(n); }
+function alRangeText(r){ return alName(r.actionId) + ' ' + alFmt(r.start) + '–' + alFmt(r.end) + ' 秒'; }
+
+/* 固定片段的速率：尊重「速度」滑块与动作自身 rate，故意不乘 director 的深夜降速 */
+function alSegmentRate(){
+  const id = (AL.run && AL.run.actionId) || 'idle';
+  return baseRate * stateRate(id);
+}
+
+function alInfo(){
+  const run = AL.run || AL.cfg || {};
+  const eng = AL.engine ? AL.engine.info() : { running:false, wraps:0 };
+  return {
+    enabled: !!(AL.cfg && AL.cfg.enabled),
+    preview: AL.mode === 'preview',
+    actionId: run.actionId || '',
+    start: run.start,
+    end: run.end,
+    status: AL.status || '',
+    mode: AL.mode,
+    running: !!eng.running,
+    wraps: eng.wraps || 0,
+    trigger: eng.trigger || '',
+    pausedReason: eng.pausedReason || '',          // seek-failed / video-paused 等，方便验收时区分
+    duration: AL.duration || 0
+  };
+}
+
+function alSetStatus(text, kind){ AL.status = text || ''; AL.kind = kind || ''; alRender(); }
+
+function alRender(){
+  const els = alEls();
+  if (!els.status) return;
+  if (els.dur){
+    els.dur.textContent = AL.duration > 0
+      ? ('视频实际时长：' + alFmt(AL.duration) + ' 秒 · 合法区间 0 – ' + alFmt(AL.duration) + ' 秒（0.01 秒精度）')
+      : (AL.metaBusy ? '正在读取视频实际时长…' : '选择动作后显示视频实际时长');
+  }
+  if (els.badge){
+    els.badge.textContent = AL.mode === 'enabled' ? '循环中' : AL.mode === 'preview' ? '预览中' : '未开启';
+    els.badge.className = 'albadge' + (AL.mode === 'enabled' ? ' on' : AL.mode === 'preview' ? ' pv' : '');
+  }
+  let text = AL.status;
+  let kind = AL.kind;
+  if (!text){
+    if (AL.mode === 'enabled'){ text = '循环中：' + alRangeText(AL.run); kind = 'ok'; }
+    else if (AL.mode === 'preview'){ text = '预览中（未保存）：' + alRangeText(AL.run); kind = 'ok'; }
+    else text = '未开启：选好动作与起止秒数，先「预览片段」确认，再「开启循环」保存。';
+  }
+  els.status.className = 'hint ' + (kind || '');
+  els.status.textContent = text;
+  const bridge = !!(alBridge() && typeof alBridge().set === 'function');
+  if (els.apply) els.apply.disabled = !bridge || AL.busy || AL.metaBusy;
+  if (els.preview) els.preview.disabled = AL.busy || AL.metaBusy || !(AL.duration > 0);
+  if (els.stop) els.stop.disabled = AL.busy || (AL.mode === 'off' && !AL.cfg.enabled);
+  if (els.action) els.action.disabled = AL.busy;
+  if (els.start) els.start.disabled = AL.busy || AL.metaBusy;
+  if (els.end) els.end.disabled = AL.busy || AL.metaBusy;
+  if (els.markStart) els.markStart.style.opacity = AL.busy || AL.metaBusy ? '.45' : '1';
+  if (els.markEnd) els.markEnd.style.opacity = AL.busy || AL.metaBusy ? '.45' : '1';
+}
+
+/* 动作下拉：只列当前合并 states 里素材可用的（含 once / 皮肤动作）；缺资源的不可选 */
+function alRenderActions(selected){
+  const els = alEls();
+  const sel = els.action;
+  if (!sel) return;
+  const keep = selected || sel.value || AL.cfg.actionId;
+  const ids = Object.keys(states).filter(alUsable);
+  sel.textContent = '';
+  for (const id of ids){
+    const st = states[id] || {};
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = (st.name || id) + '（' + id + (st.mode === 'once' ? ' · 一次性' : '') + '）';
+    sel.appendChild(o);
+  }
+  // 已保存/当前动作的素材没了 → 列一个禁用项，让用户看见“为什么它不见了”
+  if (keep && !alUsable(keep)){
+    const o = document.createElement('option');
+    o.value = keep;
+    o.disabled = true;
+    o.textContent = alName(keep) + '（' + keep + ' · 素材缺失，不可选）';
+    sel.appendChild(o);
+  }
+  if (keep && alUsable(keep)) sel.value = keep;
+}
+
+/* 等真实视频元数据。超时/加载失败都返回可读错误，绝不拿 states.json 的旧 duration 糊过去 */
+function alLoadMeta(id){
+  return new Promise((resolve)=>{
+    const v = videos[id];
+    if (!v) return resolve({ ok:false, error:'没有这个动作的播放器' });
+    if (states[id] && states[id].__missing) return resolve({ ok:false, error:'该动作素材缺失' });
+    let done = false, timer = 0;
+    const cleanup = ()=>{
+      done = true;
+      clearTimeout(timer);
+      try{
+        v.removeEventListener('loadedmetadata', onMeta);
+        v.removeEventListener('canplay', onMeta);
+        v.removeEventListener('error', onErr);
+      }catch(e){}
+    };
+    const finish = (r)=>{ if (done) return; cleanup(); resolve(r); };
+    const read = ()=>{
+      const d = Number(v.duration);
+      if (isFinite(d) && d > 0.05) finish({ ok:true, duration:d });
+      else finish({ ok:false, error:'视频时长不可用' });
+    };
+    const onMeta = ()=>{ if (!done) read(); };
+    const onErr = ()=>{ if (!done) finish({ ok:false, error:'视频加载失败' }); };
+    if (v.error) return resolve({ ok:false, error:'视频加载失败' });
+    if (v.readyState >= 1 && isFinite(Number(v.duration)) && Number(v.duration) > 0.05) return read();
+    try{
+      v.addEventListener('loadedmetadata', onMeta);
+      v.addEventListener('canplay', onMeta);
+      v.addEventListener('error', onErr);
+    }catch(e){}
+    timer = setTimeout(()=> finish({ ok:false, error:'读取视频时长超时' }), 3000);
+    try{
+      v.preload = 'auto';
+      if (v.readyState < 1) v.load();
+    }catch(e){}
+  });
+}
+
+function alFillForm(c){
+  const els = alEls();
+  if (!els.action) return;
+  AL.formActionId = c.actionId;
+  if (alUsable(c.actionId)) els.action.value = c.actionId;
+  els.start.value = alFmt(c.start);
+  els.end.value = alFmt(c.end);
+}
+
+/* 选动作：异步读元数据，序号丢弃过期响应（快速连点不会串动作） */
+async function alSelectAction(id, preset){
+  const els = alEls();
+  if (!ALLib) return { ok:false, error:'animation-loop.js 未加载' };
+  if (!id || !states[id]){ alSetStatus('动作不存在：' + id, 'bad'); return { ok:false, error:'动作不存在' }; }
+  const seq = ++AL.metaSeq;
+  AL.metaBusy = true; AL.formActionId = id; AL.duration = 0;
+  alRender();
+  const meta = await alLoadMeta(id);
+  if (seq !== AL.metaSeq) return { ok:false, stale:true };     // 用户已经切到别的动作
+  AL.metaBusy = false;
+  if (!meta.ok){
+    alSetStatus('不能选择「' + alName(id) + '」：' + meta.error + '（该动作不可用，已跳过）', 'bad');
+    return meta;
+  }
+  AL.duration = meta.duration;
+  let start = 0, end = Math.min(2, meta.duration);
+  if (preset === 'cfg' && AL.cfg.actionId === id){
+    start = AL.cfg.start; end = AL.cfg.end;
+  } else if (preset === 'keep'){
+    const s = alNum(els.start.value), e = alNum(els.end.value);
+    if (isFinite(s) && isFinite(e) && s >= 0 && s < e && e <= meta.duration + 1e-6 &&
+        e - s >= ALLib.MIN_LENGTH - 1e-9){ start = s; end = e; }
+  } else if (AL.cfg.actionId === id){
+    start = AL.cfg.start; end = AL.cfg.end;      // 切回已保存的动作 → 显示它的区间
+  }
+  els.start.value = alFmt(start);
+  els.end.value = alFmt(end);
+  if (AL.status.indexOf('不能选择') === 0 || AL.status.indexOf('无法') === 0){ AL.status = ''; AL.kind = ''; }
+  alRender();
+  return meta;
+}
+
+/* 起播片段：接管 pet 里已有的 video（不新建解码器），从 start 开始 */
+function alEnterSegment(){
+  if (!AL.run || !AL.engine || !ALLib) return false;
+  const id = AL.run.actionId;
+  const v = videos[id];
+  if (!v){
+    alSafetyDisable('片段动作「' + alName(id) + '」没有播放器，已安全停用。');
+    return false;
+  }
+  if (states[id] && states[id].__missing){
+    alSafetyDisable('片段动作「' + alName(id) + '」素材缺失，已安全停用。');
+    return false;
+  }
+  ensureVideoData(id);
+  for (const k in videos){ if (videos[k] !== v) videos[k].classList.remove('active'); }
+  pauseOthers(v);
+  v.classList.add('active');
+  v.style.transform = videoTransform(id);
+  v.loop = false;
+  v.playbackRate = alSegmentRate();
+  cur = id;
+  updateShadow();
+  const ok = AL.engine.start({ video:v, actionId:id, start:AL.run.start, end:AL.run.end, duration:AL.duration,
+    onError:function(e){
+      // 起点 seek 连续失败（本地服务不支持 Range / 视频不可 seek）→ 明确告诉用户，不从 0 播错区间
+      if (!e || e.reason !== 'seek-failed') return;
+      if (AL.mode !== 'preview' && AL.mode !== 'enabled') return;
+      alSetStatus('片段起点 ' + alFmt(e.start) + ' 秒无法定位，已暂停：当前视频暂时不能跳到该位置（不会从 0 秒播错区间）。请重试或换一个起点。', 'bad');
+    } });
+  if (!ok){ alSetStatus('片段无法起播（区间或素材异常）', 'bad'); return false; }
+  return true;
+}
+
+function alClearVideos(){
+  for (const id in videos){
+    const v = videos[id];
+    try{ v.classList.remove('active'); if (!v.paused) v.pause(); }catch(e){}
+  }
+}
+
+/* 安全停用：配置引用的动作没了/无效 → 内存里关掉 + 尽力持久化 disabled + 明确提示 */
+function alSafetyDisable(reason){
+  AL.opSeq++;                      // 作废在途的 Apply：迟到的保存结果不能再开启
+  AL.busy = false;
+  if (AL.engine) AL.engine.stop({ pause:true });
+  AL.mode = 'off'; AL.run = null;
+  if (AL.cfg) AL.cfg.enabled = false;
+  AL.status = reason; AL.kind = 'bad';
+  alClearVideos();
+  cur = null;
+  try{ applyState(); }catch(e){}
+  alRender();
+  alPersistDisabled(reason);
+}
+
+async function alPersistDisabled(reason){
+  const br = alBridge();
+  if (!br || typeof br.set !== 'function') return false;
+  const payload = {
+    enabled:false,
+    actionId:(AL.cfg && AL.cfg.actionId) || 'idle',
+    start:(AL.cfg && AL.cfg.start) || 0,
+    end:(AL.cfg && AL.cfg.end) || 2
+  };
+  try{
+    const r = await alTimeout(br.set(payload), 4000, '保存“关闭”超时');
+    if (!r || r.ok === false){
+      AL.status = (reason ? reason + ' ' : '') + '（保存“关闭”失败：' + ((r && r.error) || '未知错误') + '）';
+      AL.kind = 'bad'; alRender(); return false;
+    }
+    return true;
+  }catch(e){
+    AL.status = (reason ? reason + ' ' : '') + '（保存“关闭”失败：' + ((e && e.message) || e) + '）';
+    AL.kind = 'bad'; alRender(); return false;
+  }
+}
+
+function alValidate(){
+  const els = alEls();
+  if (!ALLib) return { ok:false, error:'片段循环脚本未加载（animation-loop.js）' };
+  if (AL.metaBusy) return { ok:false, error:'正在读取视频时长，请稍候' };
+  if (!(AL.duration > 0)) return { ok:false, error:'还没读到视频实际时长，请先选择一个可用动作' };
+  const actionId = els.action ? els.action.value : '';
+  const start = alNum(els.start && els.start.value);
+  const end = alNum(els.end && els.end.value);
+  const ids = Object.keys(states).filter(alUsable);
+  const res = ALLib.normalize({ enabled:true, actionId:actionId, start:start, end:end },
+    { duration:AL.duration, actionIds:ids });
+  if (!res.ok) return { ok:false, error:res.error, field:res.field };
+  return res;
+}
+
+function alPreview(){
+  const r = alValidate();
+  if (!r.ok){ alSetStatus('无法预览：' + r.error, 'bad'); return; }
+  AL.run = { actionId:r.config.actionId, start:r.config.start, end:r.config.end };
+  AL.mode = 'preview';
+  AL.status = '预览中（未保存）：' + alRangeText(AL.run) + '；关掉设置面板会退回先前状态。';
+  AL.kind = 'ok';
+  if (!alEnterSegment()) return;       // 失败时 alEnterSegment 已给原因
+  alRender();
+}
+
+async function alApply(){
+  if (AL.busy) return;
+  const r = alValidate();
+  if (!r.ok){ alSetStatus('无法开启：' + r.error, 'bad'); return; }
+  const br = alBridge();
+  if (!br || typeof br.set !== 'function'){
+    alSetStatus('开启循环需要桌面版主进程通道，当前不可用（浏览器 Demo 或后端未就绪）。可以先用「预览片段」看效果。', 'bad');
+    return;
+  }
+  const token = ++AL.opSeq;        // 操作令牌：等待主进程写盘期间被“回待机/停止/新操作”接管，本结果作废
+  AL.busy = true; AL.status = '正在保存…'; AL.kind = ''; alRender();
+  let res = null;
+  try{
+    res = await alTimeout(br.set({ enabled:true, actionId:r.config.actionId, start:r.config.start, end:r.config.end }),
+      5000, '保存超时（主进程未响应）');
+  }catch(e){ res = { ok:false, error:String((e && e.message) || e) }; }
+  if (token !== AL.opSeq){
+    // 迟到结果：绝不能把 Stop/回待机已经关掉的循环重新开启。
+    // 若已不在任何新操作里、且循环仍应为关，再补写一次 disabled，保证最后落盘的是“关闭”。
+    if (!AL.busy && AL.mode === 'off' && !AL.run && !(AL.cfg && AL.cfg.enabled)){
+      alPersistDisabled('已取消的保存结果已忽略');
+    }
+    return;
+  }
+  AL.busy = false;
+  if (!res || !res.ok){
+    alSetStatus('保存失败：' + ((res && res.error) || '未知错误') + '（循环未开启）', 'bad');
+    return;
+  }
+  let cfg = r.config;
+  if (res.config){
+    const n = ALLib.normalize(res.config, { duration:AL.duration, actionIds:Object.keys(states).filter(alUsable) });
+    if (n.ok) cfg = n.config;
+  }
+  AL.cfg = cfg;
+  AL.run = { actionId:cfg.actionId, start:cfg.start, end:cfg.end };
+  AL.mode = 'enabled';
+  AL.status = '已开启并保存：' + alRangeText(AL.run) + '（重启桌宠后自动恢复）';
+  AL.kind = 'ok';
+  if (!alEnterSegment()) return;
+  alRender();
+  toast('动画片段循环已开启');
+}
+
+/* 停止：先恢复原有自动状态，再把 disabled 持久化（失败会明确报出来） */
+async function alStop(o){
+  o = o || {};
+  AL.opSeq++;                       // 作废在途 Apply：迟到的保存结果不能把循环重新开启
+  AL.busy = false;
+  const had = AL.mode !== 'off' || !!AL.run || !!(AL.cfg && AL.cfg.enabled);
+  if (AL.engine) AL.engine.stop({ pause:true });
+  AL.mode = 'off'; AL.run = null;
+  if (AL.cfg) AL.cfg.enabled = false;
+  if (had){
+    AL.status = '已停止循环，恢复原有自动行为' + (o.why ? '（' + o.why + '）' : '') + '。';
+    AL.kind = 'ok';
+  }
+  alClearVideos();
+  cur = null;
+  try{ applyState(); }catch(e){}
+  alRender();
+  if (o.why) toast('已停止动画片段循环');
+  if (o.persist !== false && had) await alPersistDisabled('');
+  return true;
+}
+
+/* 预览是临时的：关设置面板 / 点回待机 时退回先前状态（已开启的循环不受影响） */
+function alEndPreview(){
+  if (AL.mode !== 'preview') return;
+  if (AL.cfg.enabled && alUsable(AL.cfg.actionId)){
+    AL.mode = 'enabled';
+    AL.run = { actionId:AL.cfg.actionId, start:AL.cfg.start, end:AL.cfg.end };
+    AL.status = '预览结束，回到已保存的循环：' + alRangeText(AL.run);
+    AL.kind = 'ok';
+    alEnterSegment();
+  } else {
+    if (AL.engine) AL.engine.stop({ pause:true });
+    AL.mode = 'off'; AL.run = null;
+    AL.status = '预览结束，恢复原有自动行为。'; AL.kind = '';
+    alClearVideos();
+    cur = null;
+  }
+  alRender();
+}
+
+function alMarkTime(which){
+  const els = alEls();
+  const v = videos[cur];
+  if (!v){ alSetStatus('当前没有在播放的视频：先「预览片段」（或选已开启的动作）再取时间。', 'bad'); return; }
+  if (AL.formActionId !== cur){
+    alSetStatus('当前播放的是「' + alName(cur) + '」，不是所选动作：先预览所选动作再取时间。', 'bad');
+    return;
+  }
+  const t = Number(v.currentTime) || 0;
+  const el = which === 'start' ? els.start : els.end;
+  if (!el) return;
+  el.value = alFmt(t);
+  alSetStatus('已把当前播放时间 ' + alFmt(t) + ' 秒填为' + (which === 'start' ? '起点' : '终点') + '（记得点保存/预览）', 'ok');
+}
+
+/* 面板打开时把表单同步回已保存配置，避免上次未保存的输入被误当成当前值 */
+function alEnsurePanel(){
+  const els = alEls();
+  if (!els.action) return;
+  alRenderActions(AL.formActionId || (AL.run && AL.run.actionId) || AL.cfg.actionId);
+  if (AL.loaded && !AL.busy && !AL.metaBusy){
+    const id = AL.cfg.actionId;
+    if (alUsable(id)) alSelectAction(id, 'cfg').catch(()=>{});
+    else if (!els.action.value && els.action.options.length) alSelectAction(els.action.options[0].value, 'default').catch(()=>{});
+  }
+  alRender();
+}
+
+/* 启动时恢复已保存配置。init 末尾 await 它 —— DOM/video 全部就绪后才读，
+   不会因为恢复过早拿不到元素而静默失败。 */
+async function alRestoreConfig(){
+  alRenderActions(AL.cfg.actionId);
+  if (!ALLib){ alSetStatus('animation-loop.js 未加载，片段循环不可用。', 'bad'); return; }
+  const br = alBridge();
+  if (!br || typeof br.get !== 'function'){
+    AL.loaded = true;
+    await alSelectAction('idle', 'default');
+    alSetStatus('片段循环需要桌面版主进程通道（当前是浏览器 Demo 或后端未就绪）：可以预览，开启不会保存。', '');
+    return;
+  }
+  let r = null;
+  try{ r = await alTimeout(br.get(), 3000, '读取配置超时（主进程未响应）'); }
+  catch(e){ r = { ok:false, error:String((e && e.message) || e) }; }
+  if (!r || !r.ok){
+    AL.loaded = true;
+    await alSelectAction('idle', 'default');
+    alSetStatus('读取已保存的片段配置失败：' + ((r && r.error) || '未知错误') + '（未启用）', 'bad');
+    return;
+  }
+  const raw = r.config || {};
+  // 后端约定：文件损坏/字段非法时仍返回 ok:true（安全缺省 enabled:false），
+  // 具体原因放在 error 里。UI 必须把这条原因显示出来，不能装作“未开启”糊过去。
+  const cfgError = (typeof r.error === 'string' && r.error.trim()) ? r.error.trim() : '';
+  const actionId = (typeof raw.actionId === 'string' && raw.actionId) ? raw.actionId : 'idle';
+  if (!states[actionId]){
+    // 持久化时落回合法缺省动作，避免每次启动都重复报同一个已消失的动作
+    AL.cfg = Object.assign({}, ALLib.DEFAULTS, { enabled:false });
+    AL.mode = 'off'; AL.run = null;
+    await alSelectAction('idle', 'default');
+    AL.loaded = true;
+    alSetStatus('已保存的片段引用了不存在的动作「' + actionId + '」（皮肤被删/改名？），已安全停用。', 'bad');
+    alPersistDisabled('引用的动作已不存在');
+    return;
+  }
+  const meta = await alLoadMeta(actionId);
+  if (!meta.ok){
+    AL.cfg = Object.assign({}, ALLib.DEFAULTS, { enabled:false });
+    AL.mode = 'off'; AL.run = null;
+    await alSelectAction('idle', 'default');
+    AL.loaded = true;
+    alSetStatus('已保存的片段动作「' + alName(actionId) + '」素材缺失（' + meta.error + '），已安全停用。', 'bad');
+    alPersistDisabled('片段动作素材缺失');
+    return;
+  }
+  AL.duration = meta.duration;
+  alRenderActions(actionId);
+  const n = ALLib.normalize(raw, { duration:meta.duration, actionIds:Object.keys(states).filter(alUsable) });
+  if (!n.ok){
+    AL.cfg = Object.assign({}, ALLib.DEFAULTS, { actionId:actionId, enabled:false });
+    AL.mode = 'off'; AL.run = null;
+    await alSelectAction(actionId, 'default');
+    AL.loaded = true;
+    alSetStatus('已保存的片段无效（' + n.error + '），已安全停用；请重新选择区间。', 'bad');
+    alPersistDisabled('已保存的片段无效');
+    return;
+  }
+  AL.cfg = n.config;
+  alFillForm(AL.cfg);
+  AL.duration = meta.duration;
+  AL.loaded = true;
+  if (AL.cfg.enabled){
+    AL.run = { actionId:AL.cfg.actionId, start:AL.cfg.start, end:AL.cfg.end };
+    AL.mode = 'enabled';
+    AL.status = '已恢复循环：' + alRangeText(AL.run);
+    AL.kind = 'ok';
+    alEnterSegment();
+  } else {
+    if (cfgError){
+      AL.status = '已保存的片段配置有问题：' + cfgError;
+      AL.kind = 'bad';
+    } else {
+      AL.status = '未开启（默认不循环）。选好区间后点「开启循环」保存。';
+      AL.kind = '';
+    }
+  }
+  alRender();
 }
 
 /* ===================== 播放 ===================== */
@@ -866,8 +1445,12 @@ function pauseOthers(keep){
   return n;
 }
 function play(id){
+  // 固定片段走自己的起播：从 start 开始、由引擎管边界（不是媒体 loop）
+  if (AL.run && AL.run.actionId === id && AL.engine){ alEnterSegment(); return; }
   const next = videos[id];
   if (!next) return;
+  // 离开片段（拖拽/一次性动作/其它状态）→ 先停边界调度；视频由 pauseOthers 暂停
+  if (AL.engine && AL.engine.isRunning()) AL.engine.pause('switch-away');
   ensureVideoData(id);            // 按需加载：第一次演到的状态，此时才把视频数据拉起来
   const prev = cur ? videos[cur] : null;
   if (prev && prev !== next) prev.classList.remove('active');
@@ -886,19 +1469,23 @@ function play(id){
 }
 
 /* 按需加载：非 eager 状态初始只有元数据，首次要演它（或空闲时段预选到它）时切成 auto。
-   本地文件，实测切过去到能播 <100ms；rollLounge 里还会提前 7~14 秒预热。 */
+   关键：已有元数据(readyState>=1) 时绝不 load() —— load() 会把 currentTime 重置为 0，
+   会把 alEnterSegment 刚设好的片段起点吞掉，真实预览就会从 0 秒起播。 */
 function ensureVideoData(id){
   const v = videos[id];
-  if (!v || v.preload === 'auto') return;
-  v.preload = 'auto';
-  try{ if (v.readyState < 2) v.load(); }catch(e){}
+  if (!v) return false;
+  if (ALLib && typeof ALLib.ensureVideoData === 'function') return ALLib.ensureVideoData(v);
+  try{ if (v.preload !== 'auto') v.preload = 'auto'; }catch(e){}
+  if (v.readyState < 1 && v.networkState !== 2){ try{ v.load(); return true; }catch(e){} }
+  return false;
 }
 
-function playOnce(id, ms){
+function playOnce(id, ms, user){
   if (window.__petDebug){ window.__petDebug.lastPlayOnce = { id, at: now(),
     stack: String((new Error()).stack || '').split('\n').slice(1, 5).join(' <- ') }; }
   if (!states[id]) return;
   M.react = id;
+  M.reactUser = !!user;                       // 固定片段只给用户点的动作插播
   M.reactUntil = now() + (ms ?? Math.round((states[id].duration || 4.04) * 1000 / stateRate(id)));
   applyState();
 }
@@ -971,7 +1558,7 @@ function doReact(){               // 单击角色 → 互动一下
   const pool = [];
   for (const id in states){ const st = states[id]; if (st.react) pool.push({ id, w: st.react }); }
   const id = pickWeighted(pool);
-  if (id) playOnce(id);
+  if (id) playOnce(id, undefined, true);
 }
 function startTask(){ M.taskCount++; touch(); applyState(); }
 function endTask(){ M.taskCount = Math.max(0, M.taskCount - 1); touch(); applyState(); }
@@ -1249,11 +1836,11 @@ function saoIcon(name){
 /* ---- 菜单数据：一级 = 分类（与圆钮一一对应），二级 = 该分类下的真实功能 ---- */
 const SAO_MENU = {
   interact: { label:'互动', icon:'hand', items: [
-    { icon:'wave',  label:'打个招呼',        run: ()=> playOnce('tail_open') },
-    { icon:'tail',  label:'摇摇尾巴',        run: ()=> playOnce('tail_closed') },
+    { icon:'wave',  label:'打个招呼',        run: ()=> playOnce('tail_open', undefined, true) },
+    { icon:'tail',  label:'摇摇尾巴',        run: ()=> playOnce('tail_closed', undefined, true) },
     { icon:'chat',  label:'和它说话',        run: ()=> openChat() },
     { icon:'spark', label:'随机动作',        run: ()=> doReact() },
-    { icon:'rice',  label:'吃点米饭',        run: ()=> playOnce('eat') },
+    { icon:'rice',  label:'吃点米饭',        run: ()=> playOnce('eat', undefined, true) },
   ]},
   look: { label:'外观', icon:'pic', items: [
     { icon:'ruler', label:'显示大小', state: ()=> String(opt.size) + 'px', sub: [
@@ -1267,7 +1854,7 @@ const SAO_MENU = {
   ]},
   action: { label:'动作', icon:'play', items: [
     { icon:'home', label:'回待机',     run: ()=> petAPI.setState('idle') },
-    { icon:'play', label:'再摇一次尾', run: ()=> playOnce('tail_open') },
+    { icon:'play', label:'再摇一次尾', run: ()=> playOnce('tail_open', undefined, true) },
     { keepOpen:true, icon:'task', label:'陪它忙起来', state:()=>SAO.demoTask?'进行中':'10秒', disabled:()=>!!SAO.demoTask, run: ()=>{ SAO.demoTask=true; startTask(); setTimeout(()=>{ SAO.demoTask=false; endTask(); if(SAO.open){renderSao();positionSao();} },10000); } },
   ]},
   tools: { label:'工具', icon:'search', items: [
@@ -1639,6 +2226,7 @@ function openSettings(){
   syncPanelGuard();
   els.settings.classList.add('show');
   placePanel(els.settings);
+  alEnsurePanel();                           // 片段循环区：列动作 + 同步已保存配置
   if (cHostOk() && window.petHost.getConfig){
     try{ window.petHost.focusWindow(true); }catch(e){}
     loadSettingsForm();
@@ -1652,6 +2240,7 @@ function closeSettings(){
   SET.open = false; M.settingsOpen = false;
   syncPanelGuard();
   els.settings.classList.remove('show');
+  alEndPreview();                            // 预览是临时的：关面板必须退回；已开启的循环不受影响
   try{ if (window.petHost && window.petHost.focusWindow) window.petHost.focusWindow(false); }catch(e){}
   syncMirrorFromPanels();                    // 面板关了 → 抬手方向复位
   touch(); applyState();
@@ -2163,11 +2752,14 @@ async function init(){
   initHostBridge();                 // 桌面版(Electron)才生效
   applyVideoMirror();               // 给所有 video 写上统一的 transform/origin（镜像开关都用这一处）
   applyState();                     // 先起状态机，再起播（起播失败也不影响交互）
-  play('idle');
+  play(cur || 'idle');              // 已开启的片段会在 alRestoreConfig 里接管
   if (opt.menu) openMenu();                 // ?menu=1
   setInterval(tick, 150);
   if (!window.petHost || opt.debug) requestAnimationFrame(fpsLoop);   // 桌面宿主里不跑调试FPS循环
   loadChatFromStorage();            // 本地聊天记录在 UI 就绪后恢复（否则 renderChat 拿不到 els）
+  /* 恢复片段循环：放在 init 末尾（DOM/video/状态机全部就绪），
+     失败会写到设置面板的状态行，不会因为恢复过早静默失败。 */
+  await alRestoreConfig();
   window.__petInitOK = true;
   toast('拖动我 · 单击互动 · 右键菜单');
 }
@@ -2295,7 +2887,7 @@ function bindEvents(){
     } else {                              // 拖到位松手 → 落下动作 → 接待机
       clampToScreen(false);
       replaceOpenPanels();
-      playOnce('drop');
+      playOnce('drop', undefined, true);
     }
     touch();
   });
@@ -2336,7 +2928,7 @@ function bindEvents(){
     if (act === 'settings'){ closeMenu(); openSettings(); return; }
     if (act === 'search'){ closeMenu(); openSearch(); return; }
     if (act === 'panel'){ closeMenu(); els.panel.classList.toggle('hidden'); return; }
-    if (states[act]){ playOnce(act); closeMenu(); }
+    if (states[act]){ playOnce(act, undefined, true); closeMenu(); }
   });
 
   /* ---- 文件搜索面板：输入 / 键盘 / 点击 ---- */
@@ -2438,6 +3030,34 @@ function bindEvents(){
     const k = document.getElementById('setKey');
     k.type = k.type === 'password' ? 'text' : 'password';
   });
+  /* ---- 设置面板 · 动画片段循环 ---- */
+  const _alAction = document.getElementById('alAction');
+  if (_alAction) on(_alAction, 'change', ()=>{
+    const id = _alAction.value;
+    AL.status = ''; AL.kind = '';
+    alSelectAction(id, 'auto').catch(()=>{});
+  });
+  const _alPreview = document.getElementById('alPreview');
+  if (_alPreview) on(_alPreview, 'click', ()=> alPreview());
+  const _alApply = document.getElementById('alApply');
+  if (_alApply) on(_alApply, 'click', ()=> alApply());
+  const _alStop = document.getElementById('alStop');
+  if (_alStop) on(_alStop, 'click', ()=> alStop({ persist:true }));
+  const _alMS = document.getElementById('alMarkStart');
+  if (_alMS) on(_alMS, 'click', ()=> alMarkTime('start'));
+  const _alME = document.getElementById('alMarkEnd');
+  if (_alME) on(_alME, 'click', ()=> alMarkTime('end'));
+  for (const _id of ['alStart','alEnd']){
+    const _el = document.getElementById(_id);
+    if (_el) on(_el, 'input', ()=>{ if (AL.kind === 'bad'){ AL.status = ''; AL.kind = ''; alRender(); } });
+  }
+  /* 窗口最小化/被隐藏时帧回调会停；回到可见且片段本该在演 → 从 start 重新接管 */
+  on(document, 'visibilitychange', ()=>{
+    if (document.hidden) return;
+    if (AL.run && AL.engine && !AL.engine.isRunning() && !M.gameMode && !M.dragging){
+      cur = null; applyState();
+    }
+  });
   // harness 事件流：流式文本 / 工具调用 / 状态 / 标题 / token
   try{
     if (window.petHost.onHarnessEvent) window.petHost.onHarnessEvent(onHarnessEvent);
@@ -2460,6 +3080,8 @@ function bindEvents(){
       try{ closeMenu(); }catch(e){}
       try{ if (S.open) closeSearch(); if (C.open) closeChat(); if (SET.open) closeSettings(); if (ENV.open) closeEnv(); }catch(e){}
       try{ if (window.DockUI && DockUI.close) DockUI.close(); }catch(e){}
+      // 固定片段的边界调度也要停：视频暂停后帧回调不再来，别让兜底定时器空转
+      try{ if (AL.engine && AL.engine.isRunning()) AL.engine.pause('game-mode'); }catch(e){}
       for (const id in videos){ try{ videos[id].pause(); }catch(e){} }
       try{ if (hostBridge && hostBridge.dispose) hostBridge.dispose(); hostBridge = null; }catch(e){}
     } else {
@@ -2586,6 +3208,7 @@ function updateStateLine(id){
   if (!els || !els.stateLine) return;        // 页面还没 init 完（早期 applyState）时静默跳过
   let why;
   if (M.dragging) why = '拖动中';
+  else if (AL.run) why = '固定片段循环';
   else if (M.menuOpen) why = '菜单打开';
   else if (M.searchOpen) why = '搜索文件';
   else if (M.chatBusy) why = 'DeepSeek 处理中';
@@ -2977,8 +3600,13 @@ window.petAPI = {
   setAuto: (v)=> setAuto(!!v),
   startTask: ()=> startTask(),
   endTask: ()=> endTask(),
-  react: (id)=> playOnce(id),
-  setState: (id)=>{ if (states[id]){ closeMenu(); M.react = null; M.dragging = false; M.menuOpen = false; play(id); } },
+  react: (id)=> playOnce(id, undefined, true),
+  setState: (id)=>{ if (states[id]){
+    closeMenu(); M.react = null; M.dragging = false; M.menuOpen = false;
+    // 回待机是用户的脱困入口：先停掉已开启/预览中的固定片段，再切状态（异步安全持久化 disabled）
+    if (AL.mode !== 'off' || AL.run || AL.cfg.enabled || AL.busy) alStop({ persist:true, why:'回待机' });
+    play(id);
+  } },
   openChat: ()=> openChat(),
   closeChat: ()=> closeChat(),
   toggleChat: ()=> toggleChat(),
@@ -2993,6 +3621,10 @@ window.petAPI = {
   getMode: ()=>({ dragging:M.dragging, menuOpen:M.menuOpen, searchOpen:M.searchOpen, searchRows:S.rows.length, chatOpen:M.chatOpen, chatBusy:M.chatBusy, chatMsgs:C.msgs.length, taskCount:M.taskCount,
                   react:M.react, idleMs: now() - M.lastInteract, lounge:M.lounge,
                   director: directorDebug() }),
+  /* ---- 固定片段循环：只读状态（主验收用；改配置一律走设置面板/主进程桥） ---- */
+  animationLoop: {
+    info: ()=> alInfo()
+  },
   /* ---- 作息导演层的验证接口（tools/ 下的无头探针用，也可在 devtools 里手动调）---- */
   director: {
     info: ()=> directorDebug(),
