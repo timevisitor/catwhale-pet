@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [Releases](../../releases) → `catwhale-pet-v0.4.2-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [v0.4.3 下载](https://github.com/timevisitor/catwhale-pet/releases/tag/v0.4.3) → `catwhale-pet-v0.4.3-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
