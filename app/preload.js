@@ -113,6 +113,12 @@ contextBridge.exposeInMainWorld('petHost', {
     get: () => ipcRenderer.invoke('director:get')
   },
 
+  /* ---- 动画片段循环（独立配置，写它不会重启 harness；主进程校验 + 原子落盘）---- */
+  animationLoop: {
+    get: () => ipcRenderer.invoke('animation-loop:get'),
+    set: (cfg) => ipcRenderer.invoke('animation-loop:set', cfg)
+  },
+
   /* ---- 版本检测与更新 ---- */
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   openUpdateUrl: (url) => ipcRenderer.invoke('update:openUrl', url),

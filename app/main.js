@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const urlmod = require('url');
+/* 本地 http 的静态文件响应：单 Range（视频 seeking 必需），见 media-response.js */
+const { resolveRequestPath, serveFile, mimeFor } = require('./media-response.js');
 const { execFile } = require('child_process');
 // harness 仓库探测结果的落盘位置（harness-client.js 不认识 Electron，由主进程告知）
 process.env.CATWHALE_REPO_CACHE = path.join(app.getPath('userData'), 'repo-cache.json');
@@ -22,6 +23,8 @@ if (bootGuard.level >= 3) app.commandLine.appendSwitch('disable-gpu');
 const sysinfo = require('./sysinfo.js');
 /* Agent 看板：收各 AI Agent 的状态推送（本地 HTTP）并按会话日志跟随后台 Agent */
 const { createAgentDock } = require('./agent-dock.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
+/* 动画片段循环配置：纯 Node 模块（不认 Electron），主进程只负责传 userData 路径 */
+const { createStore: createAnimationLoopStore } = require('./animation-loop-config.js');
 
 const SOLID = process.argv.includes('--solid');
 const BENCH = process.argv.includes('--bench');
@@ -201,31 +204,17 @@ function resolveNode() {
 
 /* ---------- 本地 http 服务 ----------
    必须走 http 而不是 file://：file:// 下 canvas 会被污染，
-   页面就读不到视频的 alpha，逐像素命中/穿透判定会退化成矩形。 */
+   页面就读不到视频的 alpha，逐像素命中/穿透判定会退化成矩形。
+   静态响应必须补 Content-Length 并支持单 Range：旧响应是 200 + 隐式 chunked
+   （无 Content-Length/Accept-Ranges），Chromium 因此把 <video> 标成不可 seek，
+   currentTime=0.6 会被拉回 0。Content-Length 是可 seek 的前提，Range/206
+   让播放器能按需取任意位置。 */
 function startServer() {
   return new Promise((resolve, reject) => {
-    const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
-                   '.json': 'application/json; charset=utf-8', '.webm': 'video/webm',
-                   '.png': 'image/png', '.ico': 'image/x-icon' };
     server = http.createServer((req, res) => {
-      let p = decodeURIComponent(urlmod.parse(req.url).pathname);
-      if (p === '/') p = '/index.html';
-      let file;
-      if (p.startsWith('/skin/')) {                     // 当前皮肤的视频资源
-        const dir = activeSkinDir();
-        if (!dir) { res.writeHead(404); return res.end('404'); }
-        file = path.join(dir, p.slice('/skin/'.length));
-        if (!file.startsWith(dir + path.sep)) { res.writeHead(403); return res.end('403'); }
-      } else {
-        file = path.join(WEB_ROOT, p);
-        if (!file.startsWith(WEB_ROOT)) { res.writeHead(403); return res.end('403'); }
-      }
-      fs.readFile(file, (err, data) => {
-        if (err) { res.writeHead(404); return res.end('404'); }
-        res.writeHead(200, { 'Content-Type': mime[path.extname(file).toLowerCase()] || 'application/octet-stream',
-                             'Cache-Control': 'no-store' });
-        res.end(data);
-      });
+      const r = resolveRequestPath(req.url, { webRoot: WEB_ROOT, getSkinDir: activeSkinDir });
+      if (!r.ok) { res.writeHead(r.status); return res.end(String(r.status)); }
+      serveFile(req, res, r.file, mimeFor(r.file));
     });
     server.on('error', reject);
     server.listen(0, '127.0.0.1', () => { port = server.address().port; resolve(port); });
@@ -1605,6 +1594,17 @@ ipcMain.handle('skin:openFolder', () => {
   try { fs.mkdirSync(dir, { recursive: true }); shell.openPath(dir); return { ok: true, dir }; }
   catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 });
+
+/* ---------- 动画片段循环配置（<userData>/animation-loop.json）----------
+   与聊天设置（settings.json / config:set）**完全独立**：写这份配置不碰 settings.json，
+   也不会重启或终止 harness 进程。页面通过 window.petHost.animationLoop.get()/set() 使用。
+   校验与原子落盘都在 animation-loop-config.js 里（有独立单测）；启动时只注册、不写文件。
+   片段上界（当前动作视频的真实 duration）由页面处理，主进程不裁剪。 */
+const animationLoop = createAnimationLoopStore({
+  file: path.join(app.getPath('userData'), 'animation-loop.json'),
+});
+ipcMain.handle('animation-loop:get', () => animationLoop.get());
+ipcMain.handle('animation-loop:set', (_e, cfg) => animationLoop.set(cfg));
 
 /* 皮肤文件变更 → 自动重载页面（编辑器点「应用到桌宠」后无需手动重启）。
    只比对 skin.json 的 mtime+size，2.5s 一次，开销可忽略；重载后位置由 pet-state.json 恢复。 */
