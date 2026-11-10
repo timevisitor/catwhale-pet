@@ -158,7 +158,12 @@
     for (const [k, label, kind, ph] of FIELDS) {
       formEl.append(el('label', '', label));
       const inp = kind === 'area' ? el('textarea') : el('input');
-      if (kind === 'area') inp.rows = (k === 'description' || k === 'mes_example') ? 4 : 2;
+      if (kind === 'area') {
+        const tall = k === 'description' || k === 'mes_example';
+        const mid = k === 'first_mes' || k === 'system_prompt' || k === 'scenario';
+        inp.rows = tall ? 5 : mid ? 3 : 2;
+        if (tall) inp.classList.add('tall'); else if (mid) inp.classList.add('mid');
+      }
       inp.dataset.k = k; inp.placeholder = ph; inp.spellcheck = false;
       inp.value = k === 'tags' ? (card.tags || []).join(', ') : (card[k] || '');
       formEl.append(inp);
