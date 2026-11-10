@@ -65,6 +65,18 @@ ANCHORS = {
     "看书":         dict(mode="sole", scale="auto_head", ref_frame=0),
     "晕菜":         dict(mode="sole", scale="auto_head", ref_frame=0),
     "伸懒腰":       dict(mode="sole", scale=0.70, ref_frame="lowest"),   # 源片从 512×896 提到 1024×1792，像素翻倍 → 倍率减半
+    # ── 人格化表情差分（2026-11，首帧=Qwen-Image 编辑，动画=H3 1024×1792 灰幕 + BiRefNet）──
+    # 都是原地站立的情绪小动作 → 头宽归一（auto_head）。打招呼的手举在头侧、惊讶的手在肩旁，
+    # 实测 auto_head 会量到手（难过揉眼 0.629 / 打招呼 0.645 / 得意 0.812，角色忽大忽小），而 8 段源片身高
+    # 一致（1528~1585px）→ 统一固定倍率 0.75（=头部无遮挡的 开心0.763/害羞0.734/思考0.755 均值）。
+    "开心":        dict(mode="sole", scale=0.915, ref_frame="lowest"),   # 加留白重出：首帧人物缩到 82% → 0.75/0.82
+    "害羞":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
+    "生气":        dict(mode="sole", scale=0.90, ref_frame="lowest", shift_x=-25),   # 加留白重出：首帧人物缩到 82% → 0.75/0.82
+    "难过":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
+    "惊讶":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
+    "思考":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
+    "得意":        dict(mode="sole", scale=0.90, ref_frame="lowest", shift_x=-25),   # 加留白重出：首帧人物缩到 82% → 0.75/0.82
+    "打招呼":      dict(mode="sole", scale=0.75, ref_frame="lowest"),
 }
 
 
@@ -214,7 +226,7 @@ def main(alpha_root, out_root, only=None):
         cfg = cfg or dict(mode="sole")
         scale, a = measure(os.path.join(alpha_root, clip), files_of[clip], cfg)
         plan[clip] = dict(scale=scale, **a,
-                          off_x=CENTER_X - int(round(a["cx"] * scale)),
+                          off_x=CENTER_X - int(round(a["cx"] * scale)) + int(cfg.get("shift_x", 0)),   # shift_x：尾巴伸向右侧出画时整体左移
                           off_y=BASE_Y - int(round(a["anchor_y"] * scale)))
         if clip == "待机":
             m0 = load_alpha(os.path.join(alpha_root, clip, files_of[clip][0])) > 127
@@ -244,6 +256,12 @@ def main(alpha_root, out_root, only=None):
         w, h = Image.open(os.path.join(src, files[0])).size
         nw, nh = int(round(w * p["scale"])), int(round(h * p["scale"]))
         outclip = os.path.join(out_root, clip)
+        # 先清掉旧帧：新片帧数变少时（如 124→71），残留的 f071..f123 会被 encode_webm 一起编进去，
+        # 变成「新片 + 旧片尾巴」的拼接视频（实测踩过）。
+        if os.path.isdir(outclip):
+            for _f in os.listdir(outclip):
+                if _f.endswith('.png'):
+                    os.remove(os.path.join(outclip, _f))
         os.makedirs(outclip, exist_ok=True)
         for f in files:
             rgba = np.asarray(Image.open(os.path.join(src, f)).convert("RGBA"))

@@ -686,6 +686,7 @@
 
 <script src="director.js"></script>
 <script src="animation-loop.js"></script>
+<script src="emotion.js"></script>
 <script>
 /* =====================================================================
    状态配置。role 决定它在状态机里的优先级角色：
@@ -716,7 +717,16 @@ const DEFAULT_STATES = {
   run:         { name:'原地跑',     file:'run.webm',         mode:'loop', role:'lounge',  weight:25, react:20, scale:1.0 },
   read:        { name:'看书',       file:'read.webm',        mode:'loop', role:'lounge',  weight:20, react:20, scale:1.0 },
   dizzy:       { name:'晕菜',       file:'dizzy.webm',       mode:'once', role:'idle_act', weight:30, react:10, scale:1.0, rate:1.2 },
-  stretch:     { name:'伸懒腰',     file:'stretch.webm',     mode:'once', role:'idle_act', weight:25, react:15, scale:1.0 }
+  stretch:     { name:'伸懒腰',     file:'stretch.webm',     mode:'once', role:'idle_act', weight:25, react:15, scale:1.0 },
+  /* ↓ 人格化表情差分（2026-11）：聊天回复按情绪自动演，点击互动也会小概率抽到 */
+  emo_happy:     { name:'开心',   file:'emo_happy.webm',     mode:'once', role:'interact', react:12, scale:1.0 },
+  emo_shy:       { name:'害羞',   file:'emo_shy.webm',       mode:'once', role:'interact', react:12, scale:1.0 },
+  emo_angry:     { name:'生气',   file:'emo_angry.webm',     mode:'once', role:'interact', react:6,  scale:1.0 },
+  emo_sad:       { name:'难过',   file:'emo_sad.webm',       mode:'once', role:'interact', react:4,  scale:1.0 },
+  emo_surprised: { name:'惊讶',   file:'emo_surprised.webm', mode:'once', role:'interact', react:10, scale:1.0 },
+  emo_think:     { name:'思考',   file:'emo_think.webm',     mode:'once', role:'interact', react:6,  scale:1.0 },
+  emo_proud:     { name:'得意',   file:'emo_proud.webm',     mode:'once', role:'interact', react:8,  scale:1.0 },
+  emo_wave:      { name:'打招呼', file:'emo_wave.webm',      mode:'once', role:'interact', react:12, scale:1.0 }
 };
 const VIDEO_DIR = 'assets/video/';
 const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
@@ -778,6 +788,8 @@ const M = {                       // 各种锁，共同决定该演哪个状态
   dockState: '',          // Agent 看板报来的最紧急状态（working/speaking/waiting_user…）
   taskCount: 0,
   react: null,                    // 一次性动作(状态 id)
+  emote: null,                    // 表情差分（状态 id，emo_*）：聊天回复后演，优先级高于「聊天面板打开」
+  emoteUntil: 0,
   reactUntil: 0,
   reactUser: false,               // 这次一次性动作是用户点的？固定片段只给用户互动让路
   lounge: 'idle',                 // 空闲时段当前选中的状态
@@ -796,7 +808,8 @@ function applyRates(){
   // 固定片段只跟随速度滑块，不乘深夜降速（导演层改了 freeze 也不能把它拖慢）
   const segId = (AL.run && AL.engine && AL.engine.isRunning()) ? AL.run.actionId : '';
   for (const id in videos){
-    videos[id].playbackRate = (id === segId) ? alSegmentRate() : baseRate * stateRate(id) * dr;
+    // 表情差分是用户互动的即时反馈，不跟深夜降速（0.35 倍速的「开心」看着像卡住）
+    videos[id].playbackRate = (id === segId) ? alSegmentRate() : baseRate * stateRate(id) * (id.startsWith('emo_') ? 1 : dr);
   }
 }
 
@@ -820,6 +833,7 @@ function resolveState(){
     return AL.run.actionId;
   }
   if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
+  if (M.emote && now() < M.emoteUntil) return M.emote;     // 1.55 表情差分：用户刚和它聊完，演几秒情绪（短、直接互动 → 盖住后台 Agent 看板与面板抬手）
   if (M.dockState === 'working' || M.dockState === 'speaking') return 'working';   // 1.6 外部 Agent 在干活
   if (M.dockState === 'waiting_user') return 'stand_arms';                        //     有 Agent 等你确认 → 举手
   if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen || M.envOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置/自检面板打开
@@ -941,7 +955,8 @@ function rollLounge(){
 function tick(){
   if (M.gameMode) return;                    // 游戏模式：窗口已隐藏，别再切状态/起播解码
   if (M.react && now() >= M.reactUntil) M.react = null;
-  if (!AL.run && opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
+  if (M.emote && now() >= M.emoteUntil) M.emote = null;
+  if (!AL.run && !M.emote && opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
     rollLounge();
   }
@@ -1491,7 +1506,7 @@ function play(id){
   next.classList.add('active');
   next.style.transform = videoTransform(id);
   next.loop = (states[id].mode === 'loop');
-  next.playbackRate = baseRate * stateRate(id) * directorRate();
+  next.playbackRate = baseRate * stateRate(id) * (id.startsWith('emo_') ? 1 : directorRate());
   cur = id;
   try{
     next.currentTime = 0;
@@ -1521,6 +1536,40 @@ function playOnce(id, ms, user){
   M.reactUser = !!user;                       // 固定片段只给用户点的动作插播
   M.reactUntil = now() + (ms ?? Math.round((states[id].duration || 4.04) * 1000 / stateRate(id)));
   applyState();
+}
+
+/* ===================== 人格化表情差分 =====================
+   web/emotion.js 把一段文本归到 8 种情绪之一（识别不到返回 null → 不演）。
+   触发点：聊天一轮结束（按助手回复）、首次打开聊天（打招呼）、SAO 菜单「表情」手动点播、petAPI.emote()。
+   优先级：拖拽 / 固定片段 / chatBusy > 表情（约 5 秒）> Agent 看板 > 面板打开 > 长任务 > 一次性动作 > 空闲。
+   开关：localStorage.petEmotion = '0' 关闭自动表情（手动点播不受影响）。 */
+const EMO = {
+  lib: window.CatwhaleEmotion || null,
+  enabled: (()=>{ try{ return localStorage.getItem('petEmotion') !== '0'; }catch(e){ return true; } })(),
+  last: null,            // { emotion, id, source, at, text }
+  greeted: false
+};
+function emoteId(emotion){ return emotion ? 'emo_' + emotion : ''; }
+function showEmotion(emotion, source, text){
+  const id = emoteId(emotion);
+  if (!id || !states[id] || states[id].__missing) return false;
+  M.emote = id;
+  M.emoteUntil = now() + Math.round((states[id].duration || 5.0) * 1000 / stateRate(id));
+  EMO.last = { emotion, id, source: source || '', at: Date.now(), text: String(text || '').slice(0, 80) };
+  ensureVideoData(id);
+  applyState();
+  return true;
+}
+function emoteFromText(text, source){
+  if (!EMO.enabled || !EMO.lib) return null;
+  const e = EMO.lib.detect(text);
+  if (e) showEmotion(e, source, text);
+  return e;
+}
+function setEmotionEnabled(on){
+  EMO.enabled = !!on;
+  try{ localStorage.setItem('petEmotion', on ? '1' : '0'); }catch(e){}
+  if (!on){ M.emote = null; applyState(); }
 }
 
 /* ===================== 桌面宿主桥（Electron） =====================
@@ -1888,6 +1937,10 @@ const SAO_MENU = {
   action: { label:'动作', icon:'play', items: [
     { icon:'home', label:'回待机',     run: ()=> petAPI.setState('idle') },
     { icon:'play', label:'再摇一次尾', run: ()=> playOnce('tail_open', undefined, true) },
+    { icon:'play', label:'表情', state: ()=> EMO.last ? (EMO.lib ? EMO.lib.LABEL[EMO.last.emotion] : '') : '',
+      sub: ()=> (EMO.lib ? EMO.lib.EMOTIONS : []).filter((e)=> states[emoteId(e)] && !states[emoteId(e)].__missing)
+                 .map((e)=> ({ icon:'play', label: EMO.lib.LABEL[e], run: ()=> showEmotion(e, 'menu') })) },
+    { keepOpen:true, icon:'chat', label:'聊天时演表情', state: ()=> EMO.enabled ? '开' : '关', run: ()=> setEmotionEnabled(!EMO.enabled) },
     { keepOpen:true, icon:'task', label:'陪它忙起来', state:()=>SAO.demoTask?'进行中':'10秒', disabled:()=>!!SAO.demoTask, run: ()=>{ SAO.demoTask=true; startTask(); setTimeout(()=>{ SAO.demoTask=false; endTask(); if(SAO.open){renderSao();positionSao();} },10000); } },
   ]},
   tools: { label:'工具', icon:'search', items: [
@@ -1965,7 +2018,7 @@ function stateCn(){
   const map = { idle:'待机', grabbed:'抓着', stand_arms:'站立抬胳膊', working:'操作中',
                 drop:'落下', tail_open:'摇尾巴', tail_closed:'闭眼摇尾', eat:'吃米饭',
                 sit_chair:'坐椅摆腿', doze:'站着打盹', big_bowl:'坐地大盆吃饭', jump_high:'原地跳高' };
-  return map[cur] || cur;
+  return map[cur] || (states[cur] && states[cur].name) || cur;
 }
 function cardInfoFor(cat){
   const rows = [];
@@ -2470,6 +2523,7 @@ function openChat(){
   closeMenu();
   if (hostBridge) hostBridge.evaluate();
   C.open = true; M.chatOpen = true;
+  if (!EMO.greeted && EMO.enabled){ EMO.greeted = true; showEmotion('wave', 'greet'); }
   syncPanelGuard();
   els.chat.classList.add('show');
   schedulePlaceChat();
@@ -2649,7 +2703,9 @@ function onHarnessEvent(evt){
       const r = evt.reason || {};
       if (r.kind === 'error') C.tail = (C.backend === 'api' ? 'API 出错：' : ERR_TEXT.harnessError) + ((r.error && r.error.message) || ERR_TEXT.unknown);
       else C.tail = '';
+      const replyText = C.stream;
       chatBusyEnd();
+      if (r.kind !== 'error') { try{ emoteFromText(replyText, 'chat'); }catch(e){} }
       C.stream = ''; C.reasoning = ''; C.tools = [];      // 本轮实时内容清空，改由落盘记录渲染
       setTimeout(()=> refreshChat(), 150);
       break;
@@ -3310,6 +3366,7 @@ function updateStateLine(id){
   else if (M.menuOpen) why = '菜单打开';
   else if (M.searchOpen) why = '搜索文件';
   else if (M.chatBusy) why = 'DeepSeek 处理中';
+  else if (M.emote && now() < M.emoteUntil) why = '表情：' + ((EMO.last && EMO.lib) ? EMO.lib.LABEL[EMO.last.emotion] : '');
   else if (M.chatOpen) why = '聊天打开';
   else if (M.taskCount > 0) why = '长任务进行中';
   else if (M.react) why = '一次性动作';
@@ -3699,6 +3756,16 @@ window.petAPI = {
   startTask: ()=> startTask(),
   endTask: ()=> endTask(),
   react: (id)=> playOnce(id, undefined, true),
+  /* ---- 人格化表情差分 ---- */
+  emote: (emotion)=> showEmotion(emotion, 'api'),
+  emotion: {
+    detect: (text)=> EMO.lib ? EMO.lib.analyze(text) : null,
+    fromText: (text)=> emoteFromText(text, 'api'),
+    setEnabled: (on)=> setEmotionEnabled(on),
+    info: ()=> ({ enabled: EMO.enabled, lib: !!EMO.lib, last: EMO.last, emote: M.emote,
+                  remainMs: M.emote ? Math.max(0, Math.round(M.emoteUntil - now())) : 0, cur,
+                  available: (EMO.lib ? EMO.lib.EMOTIONS : []).filter((e)=> states[emoteId(e)] && !states[emoteId(e)].__missing) })
+  },
   setState: (id)=>{ if (states[id]){
     closeMenu(); M.react = null; M.dragging = false; M.menuOpen = false;
     // 回待机是用户的脱困入口：先停掉已开启/预览中的固定片段，再切状态（异步安全持久化 disabled）
@@ -3717,7 +3784,7 @@ window.petAPI = {
   moveTo: (x, y)=> place(x, y, true),
   getState: ()=> cur,
   getMode: ()=>({ dragging:M.dragging, menuOpen:M.menuOpen, searchOpen:M.searchOpen, searchRows:S.rows.length, chatOpen:M.chatOpen, chatBusy:M.chatBusy, chatMsgs:C.msgs.length, taskCount:M.taskCount,
-                  react:M.react, idleMs: now() - M.lastInteract, lounge:M.lounge,
+                  react:M.react, emote:M.emote, idleMs: now() - M.lastInteract, lounge:M.lounge,
                   director: directorDebug() }),
   /* ---- 固定片段循环：只读状态（主验收用；改配置一律走设置面板/主进程桥） ---- */
   animationLoop: {

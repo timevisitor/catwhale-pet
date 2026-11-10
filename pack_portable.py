@@ -39,7 +39,7 @@ def copy_app_tree(app_dir, APP):
         else:
             shutil.copy2(src, dst)
     required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "boot-guard.js", "agent-dock.js", "media-response.js", "animation-loop-config.js", "llm-client.js", "character-card.js", "persona-store.js", "renderer/persona.js", "renderer/persona.css", "package.json",
-                "renderer/index.html", "renderer/animation-loop.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
+                "renderer/index.html", "renderer/animation-loop.js", "renderer/emotion.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:
         sys.exit("打包失败：应用缺少必需文件 " + ", ".join(missing))
