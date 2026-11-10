@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [v0.5.0 下载](https://github.com/timevisitor/catwhale-pet/releases/tag/v0.5.0) → `catwhale-pet-v0.5.0-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [v0.5.1 下载](https://github.com/timevisitor/catwhale-pet/releases/tag/v0.5.1) → `catwhale-pet-v0.5.1-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
@@ -121,6 +121,9 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.5.1（角色卡编辑表单排版修复）**
+  - 修复新建/编辑角色卡时多行输入框被压扁成不到一行（实测仅 13px 高）的问题：表单子项不再被压缩，多行框按用途给 2~5 行最小高度，可拖动拉高，内容超出时整个表单滚动。
+  - 端到端新增布局断言（多行框 ≥2 行高、滚到底保存按钮完整可见），旧版判失败、新版通过；发布包端到端 36/36。
 - **v0.5.0（直连 API + 角色卡）**
   - 设置新增「对话后端」：DeepSeek Harness（能用工具）或直连 API（OpenAI `/chat/completions` / Anthropic `/v1/messages` 两种格式，流式输出），key 用 Windows 凭据加密存本机。
   - 聊天窗口右上角「🎭 角色」：兼容 SillyTavern 角色卡（V1/V2/V3，PNG 与 JSON），支持拖拽导入、新建编辑、切换、导出 PNG/JSON；聊天记录按角色分开保存。
