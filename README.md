@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **安装包** | [v0.4.4 下载](https://github.com/timevisitor/catwhale-pet/releases/tag/v0.4.4) → `catwhale-pet-v0.4.4-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
+| **安装包** | [v0.5.0 下载](https://github.com/timevisitor/catwhale-pet/releases/tag/v0.5.0) → `catwhale-pet-v0.5.0-win-x64.zip`：解压后双击 `桌宠.exe`，免安装、免运行库 |
 | **皮肤编辑器** | `skin-editor/启动编辑器.bat`（独立窗口程序，不装也能不用）：导入自己的动作视频、改触发逻辑与权重、自由调大小与宽高比例，保存后桌宠 2~3 秒自动换装 |
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
@@ -121,6 +121,12 @@ python encode_webm.py build/sprite web/assets/video  # 编码透明 WebM + state
 
 ## 版本记录
 
+- **v0.5.0（直连 API + 角色卡）**
+  - 设置新增「对话后端」：DeepSeek Harness（能用工具）或直连 API（OpenAI `/chat/completions` / Anthropic `/v1/messages` 两种格式，流式输出），key 用 Windows 凭据加密存本机。
+  - 聊天窗口右上角「🎭 角色」：兼容 SillyTavern 角色卡（V1/V2/V3，PNG 与 JSON），支持拖拽导入、新建编辑、切换、导出 PNG/JSON；聊天记录按角色分开保存。
+  - 卡里只有人设：导出与导入都走字段白名单，记忆、聊天记录、世界书和扩展数据一律不带，适合直接发给别人交换设定。
+  - 人设按「身份 / 人设 / 场景 / 示例」分层拼进提示词（参考 Mieksido/surfcore），总预算 6000 字符，超出先砍示例、再砍场景。说明见 `docs/角色卡与直连API.md`。
+  - 新增离线单测 12/12；真实包端到端 35/35（模拟 OpenAI/Anthropic 服务 + 真拖拽导入）；真实服务冒烟 DeepSeek 官方（OpenAI 格式）与 claude-sonnet-5（Anthropic 格式）通过。
 - **v0.4.4（窗口恢复与多屏工作区校准）**
   - 修复透明窗口保留旧屏幕尺寸，导致拖动角色在屏幕内部被矩形边界裁掉的问题；显示器、缩放或任务栏工作区变化后自动重新校准，所选屏不可用时回退主屏。
   - 托盘新增「显示桌宠 / 恢复窗口」；再次启动、最小化恢复及退出游戏模式时恢复窗口并重新校准，游戏模式期间保持隐藏。
