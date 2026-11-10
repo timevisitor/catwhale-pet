@@ -164,6 +164,17 @@ def write_readme(path):
 """)
 
 
+def _kill_in_dir(d):
+    """结束可执行文件位于 d 之下的进程树（按完整路径确认，不按进程名）。"""
+    import subprocess
+    ps = ("Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('@DIR@', 'OrdinalIgnoreCase') } "
+          "| % { $_.ProcessId }").replace("@DIR@", os.path.abspath(d).replace("'", "''"))
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
+    for pid in r.stdout.decode("utf-8", "replace").split():
+        if pid.isdigit():
+            subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True)
+
+
 def copy_app_tree(app_dir, APP):
     """整目录拷贝 app/（排除 node_modules/diag 等），并**校验必需文件都在**。
     用黑名单而不是白名单：白名单会让"新加的文件忘了加进列表"变成静默崩溃
@@ -181,7 +192,7 @@ def copy_app_tree(app_dir, APP):
         else:
             shutil.copy2(src, dst)
     required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "agent-dock.js", "media-response.js", "animation-loop-config.js", "llm-client.js", "character-card.js", "persona-store.js", "renderer/persona.js", "renderer/persona.css",
-                "package.json", "renderer/index.html", "renderer/animation-loop.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
+                "package.json", "renderer/index.html", "renderer/animation-loop.js", "renderer/emotion.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:
         sys.exit("打包失败：应用缺少必需文件 " + ", ".join(missing))
@@ -204,8 +215,8 @@ def main():
     if not os.path.isdir(os.path.join(APP, "renderer")):
         sys.exit("app/renderer 不存在：先跑 node tools/sync-renderer.js")
 
-    for name in ("桌宠.exe", "electron.exe"):
-        os.system("taskkill /F /IM %s >nul 2>nul" % name)
+    # 只结束「本输出目录里的」桌宠进程：按名 /IM electron.exe 会误杀 Hermes 桌面端等其它 Electron 应用
+    _kill_in_dir(OUT)
 
     print("== 1/5 复制运行时 ==")
     shutil.rmtree(OUT, ignore_errors=True)

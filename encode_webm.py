@@ -54,6 +54,16 @@ STATE_MAP = {
     "看书":       dict(id="read",      name="看书",       mode="loop", role="lounge",   scale=1.00, weight=20, react=20),
     "晕菜":       dict(id="dizzy",     name="晕菜",       mode="once", role="idle_act", scale=1.00, weight=30, react=10, rate=1.2),
     "伸懒腰":     dict(id="stretch",   name="伸懒腰",     mode="once", role="idle_act", scale=1.00, weight=25, react=15),
+    # ── 人格化表情差分（2026-11）：聊天回复按情绪自动演（web/emotion.js），点击互动小概率抽到 ──
+    # role=interact：不进空闲随机池（情绪要有来由，不能凭空生气/难过）。
+    "开心": dict(id="emo_happy", name="开心", mode="once", role="interact", scale=1.00, react=12),
+    "害羞": dict(id="emo_shy", name="害羞", mode="once", role="interact", scale=1.00, react=12),
+    "生气": dict(id="emo_angry", name="生气", mode="once", role="interact", scale=1.00, react=6),
+    "难过": dict(id="emo_sad", name="难过", mode="once", role="interact", scale=1.00, react=4),
+    "惊讶": dict(id="emo_surprised", name="惊讶", mode="once", role="interact", scale=1.00, react=10),
+    "思考": dict(id="emo_think", name="思考", mode="once", role="interact", scale=1.00, react=6),
+    "得意": dict(id="emo_proud", name="得意", mode="once", role="interact", scale=1.00, react=8),
+    "打招呼": dict(id="emo_wave", name="打招呼", mode="once", role="interact", scale=1.00, react=12),
 }
 
 

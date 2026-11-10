@@ -196,5 +196,101 @@
     "duration": 5.0,
     "frames": 120,
     "bytes": 2640166
+  },
+  "emo_shy": {
+    "id": "emo_shy",
+    "name": "害羞",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 12,
+    "file": "emo_shy.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 2647622
+  },
+  "emo_happy": {
+    "id": "emo_happy",
+    "name": "开心",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 12,
+    "file": "emo_happy.webm",
+    "duration": 3.292,
+    "frames": 79,
+    "bytes": 3450334
+  },
+  "emo_proud": {
+    "id": "emo_proud",
+    "name": "得意",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 8,
+    "file": "emo_proud.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 4276916
+  },
+  "emo_think": {
+    "id": "emo_think",
+    "name": "思考",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 6,
+    "file": "emo_think.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 3732491
+  },
+  "emo_surprised": {
+    "id": "emo_surprised",
+    "name": "惊讶",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 10,
+    "file": "emo_surprised.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 3768474
+  },
+  "emo_wave": {
+    "id": "emo_wave",
+    "name": "打招呼",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 12,
+    "file": "emo_wave.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 3148232
+  },
+  "emo_angry": {
+    "id": "emo_angry",
+    "name": "生气",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 6,
+    "file": "emo_angry.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 4488634
+  },
+  "emo_sad": {
+    "id": "emo_sad",
+    "name": "难过",
+    "mode": "once",
+    "role": "interact",
+    "scale": 1.0,
+    "react": 4,
+    "file": "emo_sad.webm",
+    "duration": 5.167,
+    "frames": 124,
+    "bytes": 2766341
   }
 }
