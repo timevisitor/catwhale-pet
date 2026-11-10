@@ -22,7 +22,10 @@ if (bootGuard.level >= 2) {
 if (bootGuard.level >= 3) app.commandLine.appendSwitch('disable-gpu');
 const sysinfo = require('./sysinfo.js');
 /* Agent 看板：收各 AI Agent 的状态推送（本地 HTTP）并按会话日志跟随后台 Agent */
-const { createAgentDock } = require('./agent-dock.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
+const { createAgentDock } = require('./agent-dock.js');
+const llm = require('./llm-client.js');                    // 直连 OpenAI / Anthropic 兼容 API
+const CC = require('./character-card.js');                // 酒馆角色卡（V2/V3，JSON/PNG）
+const { createPersonaStore } = require('./persona-store.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 /* 动画片段循环配置：纯 Node 模块（不认 Electron），主进程只负责传 userData 路径 */
 const { createStore: createAnimationLoopStore } = require('./animation-loop-config.js');
 
@@ -86,7 +89,8 @@ function activeSkinDir(){
   return null;
 }
 const STATE_FILE = path.join(app.getPath('userData'), 'pet-state.json');
-const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 与 harness 的聊天记录
+const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 默认助手（未选角色）的聊天记录
+const personas = createPersonaStore(app.getPath('userData'));                  // 角色卡库；选了角色后聊天记录按角色分文件
 const DOCK_FILE = path.join(app.getPath('userData'), 'dock.json');           // Agent 看板配置
 const DOCK_DEFAULTS = { enabled: true, port: 8770, keepDoneSec: 60 };
 const ICON_FILE = path.join(__dirname, 'assets', 'tray.png');
@@ -1159,6 +1163,8 @@ const CFG_FILE = path.join(app.getPath('userData'), 'settings.json');
 const CFG_DEFAULTS = {
   deepseek: { baseUrl: 'https://api.deepseek.com', model: '', provider: '' },
   harness: { repo: '', profile: 'headless', cwd: '', maxTokens: 8192 },
+  // 对话后端：harness = DeepSeek Harness（能用工具）；api = 直连 OpenAI/Anthropic 兼容接口（纯聊天，适合角色扮演）
+  chat: { backend: 'harness', protocol: 'openai', baseUrl: '', model: '', temperature: '', maxTokens: 2048, historyTurns: 12, userName: '', personaMaxChars: 6000 },
   everything: { dir: '', exe: '', ver: '' },
 };
 
@@ -1170,6 +1176,9 @@ function loadCfg() {
   return {
     deepseek: Object.assign({}, CFG_DEFAULTS.deepseek, raw.deepseek || {}),
     harness: Object.assign({}, CFG_DEFAULTS.harness, raw.harness || {}),
+    chat: Object.assign({}, CFG_DEFAULTS.chat, raw.chat || {}),
+    _chatKeyEnc: (raw.chat && raw.chat.apiKeyEnc) || '',
+    _chatKeyPlain: (raw.chat && raw.chat.apiKey) || '',
     everything: Object.assign({}, CFG_DEFAULTS.everything, raw.everything || {}),
     envNoAsk: !!raw.envNoAsk,
     _keyEnc: (raw.deepseek && raw.deepseek.apiKeyEnc) || '',
@@ -1185,11 +1194,40 @@ function apiKeyPlain() {
   } catch (e) { console.log('KEY_DECRYPT_FAIL ' + e.message); }
   return '';
 }
+function chatKeyPlain() {
+  const c = loadCfg();
+  if (c._chatKeyPlain) return c._chatKeyPlain;
+  if (!c._chatKeyEnc) return '';
+  try {
+    if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(Buffer.from(c._chatKeyEnc, 'base64'));
+  } catch (e) { console.log('CHAT_KEY_DECRYPT_FAIL ' + e.message); }
+  return '';
+}
+function encKeyInto(obj, v) {             // 把明文 key 加密写进 obj.apiKeyEnc（系统不支持加密时退化为明文 apiKey）
+  delete obj.apiKeyEnc; delete obj.apiKey;
+  if (!v) return;
+  try {
+    if (safeStorage.isEncryptionAvailable()) { obj.apiKeyEnc = safeStorage.encryptString(v).toString('base64'); return; }
+  } catch (e) { console.log('KEY_ENCRYPT_FAIL ' + e.message); }
+  obj.apiKey = v;
+}
 function saveCfg(patch) {
   const cur = loadCfgRaw();
   const next = Object.assign({}, cur);
   next.deepseek = Object.assign({}, CFG_DEFAULTS.deepseek, cur.deepseek || {});
   next.harness = Object.assign({}, CFG_DEFAULTS.harness, cur.harness || {});
+  next.chat = Object.assign({}, CFG_DEFAULTS.chat, cur.chat || {});
+  if (patch && patch.chat) {
+    const pc = Object.assign({}, patch.chat); delete pc.apiKeyEnc; delete pc.apiKey;
+    if (pc.backend && !['harness', 'api'].includes(pc.backend)) return { ok: false, error: '未知的对话后端：' + pc.backend };
+    if (pc.protocol && !llm.PROTOCOLS.includes(pc.protocol)) return { ok: false, error: '未知的接口格式：' + pc.protocol };
+    if (typeof pc.baseUrl === 'string' && pc.baseUrl.trim()) {
+      try { llm.endpointFor(pc.protocol || next.chat.protocol, pc.baseUrl); } catch (e) { return { ok: false, error: e.message }; }
+    }
+    for (const k of ['maxTokens', 'historyTurns', 'personaMaxChars']) if (k in pc) pc[k] = Number(pc[k]) || CFG_DEFAULTS.chat[k];
+    Object.assign(next.chat, pc);
+  }
+  if (patch && typeof patch.chatApiKey === 'string') encKeyInto(next.chat, patch.chatApiKey.trim());
   if (patch && patch.deepseek) Object.assign(next.deepseek, patch.deepseek);
   if (patch && patch.harness) Object.assign(next.harness, patch.harness);
   if (patch && patch.harness && Object.prototype.hasOwnProperty.call(patch.harness, 'repo')) {
@@ -1232,6 +1270,10 @@ ipcMain.handle('config:get', () => {
                status: checked.status, detail: checked.detail, profile: c.harness.profile || 'headless',
                cwd: c.harness.cwd || '', maxTokens: c.harness.maxTokens || 8192 },
     everything: { esExe: fs.existsSync(esPath()), instance: (loadState().esInstance || '') },
+    chat: (() => { const ck = chatKeyPlain(); const o = Object.assign({}, c.chat); delete o.apiKeyEnc; delete o.apiKey;
+      return Object.assign(o, { keySet: !!ck, keyTail: ck ? ck.slice(-4) : '',
+        encrypted: !c._chatKeyPlain && !!c._chatKeyEnc && safeStorage.isEncryptionAvailable() }); })(),
+    persona: { activeId: personas.activeId() },
   };
 });
 
@@ -1264,6 +1306,11 @@ ipcMain.handle('config:set', (_e, patch) => {
   return Object.assign(r, { restarted: !!r.ok });
 });
 ipcMain.handle('config:test', async () => {
+  if (typeof loadCfg === 'function' && loadCfg().chat.backend === 'api') {
+    const r = await apiTurn([{ role: 'user', content: '只回答两个字：正常' }], () => {}).promise;
+    const c = loadCfg().chat;
+    return { ok: r.ok, text: r.text, error: r.error, ms: r.ms, model: c.model, backend: 'api' };
+  }
   try {
     if (harness) { harness.kill(); harness = null; }
     const h = ensureHarness();
@@ -1384,15 +1431,64 @@ function seedHistoryIfNeeded(prompt) {
   harnessHistorySeeded = true;
   const hist = loadChatHistory();
   const recent = hist.slice(-6).filter((m) => m && m.text);
+  // harness 的 system prompt 由它自己的 profile 决定、改不动：选了角色时把人设放进本次运行时的第一条消息
+  // （切角色会重启运行时，所以每个 harness 会话只对应一个角色）
+  const act = personas.active();
+  if (act) {
+    const cfg = loadCfg();
+    const p = CC.composeSystemPrompt(act.card, { userName: cfg.chat.userName, maxChars: cfg.chat.personaMaxChars, petScene: true });
+    const lines = recent.map((m) => (m.role === 'user' ? '用户：' : act.card.name + '：') + String(m.text).slice(0, 500));
+    return '【角色设定：接下来请始终以下面这个角色的身份与我对话，除非我明确要求执行任务】\n' + p.system +
+      (p.post ? '\n\n【补充要求】\n' + p.post : '') +
+      (lines.length ? '\n\n【之前的对话，仅供理解上下文】\n' + lines.join('\n') : '') +
+      '\n\n【现在请以角色身份回复这条消息】\n' + prompt;
+  }
   if (!recent.length) return prompt;
   const lines = recent.map((m) => (m.role === 'user' ? '用户：' : '助手：') + String(m.text).slice(0, 500));
   return '【以下是之前几轮的对话记录，仅供理解上下文；不要重复执行其中已经完成的请求】\n' +
          lines.join('\n') + '\n\n【现在请回答这条新消息】\n' + prompt;
 }
 
+/* ---------- 直连 API 后端（OpenAI / Anthropic 兼容）----------
+   事件与 harness 同形（delta / message / usage / turnEnd / route + harness:status），页面一套渲染。 */
+let apiJob = null;                        // 当前在跑的一轮 { abort }
+function apiTurn(messages, onEvent) {
+  const c = loadCfg().chat;
+  if (!c.baseUrl) return { promise: Promise.resolve({ ok: false, error: '还没填 API 网址（设置 → 对话后端）' }), abort() {} };
+  if (!c.model) return { promise: Promise.resolve({ ok: false, error: '还没填模型名（设置 → 对话后端）' }), abort() {} };
+  return llm.streamChat({ protocol: c.protocol, baseUrl: c.baseUrl, model: c.model, apiKey: chatKeyPlain(),
+    temperature: c.temperature, maxTokens: c.maxTokens, messages }, onEvent);
+}
+function apiChat(prompt) {
+  if (apiJob) return { ok: false, error: '上一条还在生成' };
+  const c = loadCfg().chat;
+  const act = personas.active();
+  const messages = CC.buildMessages(act ? act.card : null, loadChatHistory(), prompt, {
+    userName: c.userName, maxChars: c.personaMaxChars, historyTurns: c.historyTurns,
+    defaultSystem: '你是住在用户桌面上的桌宠「猫鲸」，说话简短、口语、友好。' });
+  const t0 = Date.now();
+  send('harness:status', { state: 'running', info: { provider: c.protocol, model: c.model } });
+  try { if (agentDock) agentDock.feedHarness('status', { state: 'running', info: {} }); } catch (e) {}
+  const job = apiTurn(messages, (evt) => {
+    if (evt.kind === 'turnEnd') return;   // 落盘之后再发 turnEnd，保证页面刷新记录时能读到这一轮
+    send('harness:event', evt);
+  });
+  apiJob = job;
+  job.promise.then((r) => {
+    apiJob = null;
+    if (r.ok) appendChat(prompt, r.text, { ms: Date.now() - t0 });
+    send('harness:event', { kind: 'turnEnd', reason: r.ok ? { kind: 'completed' } : { kind: 'error', error: { message: r.error } } });
+    send('harness:status', { state: 'idle', info: { provider: c.protocol, model: c.model } });
+    try { if (agentDock) agentDock.feedHarness('status', { state: 'idle', info: {} }); } catch (e) {}
+    console.log('API_CHAT ' + JSON.stringify({ ok: r.ok, ms: r.ms, chars: (r.text || '').length, error: r.error || '' }));
+  });
+  return { ok: true, streaming: true, backend: 'api' };
+}
+
 ipcMain.handle('harness:chat', async (_e, payload) => {
   const prompt = (payload && payload.prompt) || '';
   const t0 = Date.now();
+  if (loadCfg().chat.backend === 'api') return apiChat(prompt);
   try {
     const h = ensureHarness();
     harnessTurnUser = prompt; harnessTurnText = ''; harnessTurnT0 = Date.now();
@@ -1405,6 +1501,7 @@ ipcMain.handle('harness:chat', async (_e, payload) => {
 });
 
 ipcMain.handle('harness:cancel', () => {
+  if (apiJob) { apiJob.abort(); return { ok: true }; }
   if (!harness) return { ok: false, error: '当前没有在跑的 harness' };
   harness.kill();
   return { ok: true };
@@ -1420,17 +1517,20 @@ ipcMain.handle('harness:status', () => {
     profile: cfg.harness.profile || st.harnessProfile || 'headless',
     bootMs: harnessBootedAt ? Date.now() - harnessBootedAt : 0,
     dead: (harness && harness.deadReason) || null,
+    backend: cfg.chat.backend, apiModel: cfg.chat.model, apiProtocol: cfg.chat.protocol,
+    persona: (() => { const a = personas.active(); return a ? { id: a.id, name: a.card.name } : null; })(),
   };
 });
 
+function chatFile() { try { return personas.historyFile(CHAT_FILE); } catch (e) { return CHAT_FILE; } }
 function loadChatHistory() {
   try {
-    const d = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8'));
+    const d = JSON.parse(fs.readFileSync(chatFile(), 'utf8'));
     return Array.isArray(d) ? d.slice(-200) : [];
   } catch (e) { return []; }
 }
 function saveChatHistory(list) {
-  try { fs.writeFileSync(CHAT_FILE, JSON.stringify((list || []).slice(-200))); } catch (e) {}
+  try { const f = chatFile(); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify((list || []).slice(-200))); } catch (e) {}
 }
 function appendChat(userText, assistantText, meta) {
   const list = loadChatHistory();
@@ -1677,6 +1777,74 @@ ipcMain.handle('everything:copy', (_e, t) => {
 
 ipcMain.handle('chat:history', () => loadChatHistory());
 ipcMain.handle('chat:clear', () => { saveChatHistory([]); return { ok: true }; });
+
+/* ---------- 角色卡（兼容 SillyTavern V2/V3；卡里只有人设，不含记忆/聊天记录）---------- */
+function personaResetRuntime() {          // 切角色：harness 会话里残留旧人设 → 重启运行时；API 后端无状态
+  if (harness) { try { harness.kill(); } catch (e) {} harness = null; }
+}
+function personaInfo() {
+  const a = personas.active();
+  return { ok: true, list: personas.list(), activeId: a ? a.id : '', active: a ? a.card : null };
+}
+ipcMain.handle('persona:list', () => personaInfo());
+ipcMain.handle('persona:get', (_e, id) => { try { return Object.assign({ ok: true }, personas.get(id)); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('persona:save', (_e, p) => {
+  try { const r = personas.save(p && p.card, p && p.id); if (personas.activeId() === r.id) personaResetRuntime(); return Object.assign(personaInfo(), { saved: r.id }); }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('persona:delete', (_e, id) => {
+  try { const wasActive = personas.activeId() === id; personas.remove(id); if (wasActive) personaResetRuntime(); return personaInfo(); }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('persona:setActive', (_e, id) => {
+  try {
+    personas.setActive(id || '');
+    personaResetRuntime();
+    const a = personas.active();
+    // 新角色、还没聊过 → 把开场白写进该角色的聊天记录
+    if (a && !loadChatHistory().length) {
+      const g = CC.composeSystemPrompt(a.card, { userName: loadCfg().chat.userName }).greeting;
+      if (g) saveChatHistory([{ role: 'assistant', text: g, at: Date.now(), greeting: true }]);
+    }
+    console.log('PERSONA_ACTIVE ' + (a ? a.id : '(none)'));
+    return personaInfo();
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('persona:importBuffer', (_e, p) => {       // 拖拽导入：页面把文件字节传过来
+  try {
+    const r = personas.importBuffer(Buffer.from(p && p.data ? p.data : []));
+    console.log('PERSONA_IMPORT ' + r.id + ' ' + r.format);
+    return Object.assign(personaInfo(), { imported: r.id, format: r.format });
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('persona:importFile', async () => {
+  const opts = { title: '导入角色卡（SillyTavern PNG / JSON）', properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '角色卡', extensions: ['png', 'json'] }] };
+  const r = (win && !win.isDestroyed()) ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  if (!r || r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  const done = [], failed = [];
+  for (const f of r.filePaths) {
+    try { done.push(personas.importBuffer(fs.readFileSync(f)).id); }
+    catch (e) { failed.push(path.basename(f) + '：' + e.message); }
+  }
+  return Object.assign(personaInfo(), { ok: done.length > 0, imported: done[0] || '', count: done.length, failed, error: failed.join('\n') });
+});
+ipcMain.handle('persona:export', async (_e, p) => {
+  try {
+    const id = p && p.id, format = (p && p.format) === 'json' ? 'json' : 'png';
+    const { card } = personas.get(id);
+    const safe = card.name.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'character';
+    const opts = { title: '导出角色卡（只含人设，不含记忆与聊天记录）', defaultPath: path.join(app.getPath('desktop'), safe + '.' + format),
+      filters: [format === 'json' ? { name: 'JSON 角色卡', extensions: ['json'] } : { name: 'PNG 角色卡（酒馆通用）', extensions: ['png'] }] };
+    const r = (p && p.path) ? { canceled: false, filePath: p.path }
+      : ((win && !win.isDestroyed()) ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts));
+    if (!r || r.canceled || !r.filePath) return { ok: false, canceled: true };
+    const fallback = fs.readFileSync(path.join(__dirname, 'assets', 'icon.png'));
+    fs.writeFileSync(r.filePath, personas.exportBuffer(id, format, fallback));
+    return { ok: true, path: r.filePath };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('persona:reveal', () => { fs.mkdirSync(personas.dir, { recursive: true }); shell.openPath(personas.dir); return { ok: true }; });
 
 /* 详情卡实时硬件数据（菜单打开时开始采样，关闭后缓存一分钟后自动收进程） */
 ipcMain.handle('sysinfo:start', () => { console.log('SYSINFO_IPC_START'); sysinfo.start((d) => send('sysinfo', d), (l) => console.log(l)); return { ok: true }; });

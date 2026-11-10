@@ -459,6 +459,7 @@
 <link rel="stylesheet" href="sao.css">
 <link rel="stylesheet" href="chat.css">
 <link rel="stylesheet" href="dock.css">
+<link rel="stylesheet" href="persona.css">
 </head>
 <body>
 <div id="desktop"></div>
@@ -547,6 +548,37 @@
         循环速度只跟随「速度」滑块（×动作自身速率），<b>不受深夜降速影响</b>；拖拽或游戏模式结束后会继续播放所选片段。
       </div>
     </div>
+    <div class="chatbox api-off" id="chatBox">
+      <div class="alhead">💬 对话后端</div>
+      <select id="setBackend" aria-label="对话后端">
+        <option value="harness">DeepSeek Harness（能调用工具）</option>
+        <option value="api">直连 API（OpenAI / Anthropic 兼容）</option>
+      </select>
+      <div class="hint harnessonly">下方的 DeepSeek Key / 网址 / harness 仓库只对这一项生效。</div>
+      <div class="apionly two">
+        <div><label>接口格式</label>
+          <select id="setProto" aria-label="接口格式"><option value="openai">OpenAI 格式</option><option value="anthropic">Anthropic 格式</option></select></div>
+        <div><label>模型名</label><input id="setApiModel" type="text" placeholder="gpt-4o-mini / deepseek-chat / claude-…" spellcheck="false"></div>
+      </div>
+      <label class="apionly">API 网址（base URL）</label>
+      <input class="apionly" id="setApiBase" type="text" placeholder="https://api.openai.com/v1" spellcheck="false">
+      <div class="hint apionly">OpenAI 格式填到 /v1 为止（会自动补 /chat/completions）；Anthropic 格式填域名或 …/v1 都行。本地 llama.cpp / Ollama 填 http://127.0.0.1:端口/v1。</div>
+      <label class="apionly">API Key</label>
+      <div class="row apionly">
+        <input id="setApiKey" type="password" placeholder="留空＝不修改已保存的（本地模型可不填）" spellcheck="false" autocomplete="off">
+        <span class="clink" id="setApiKeyClear">清除</span>
+      </div>
+      <div class="hint apionly" id="setApiKeyHint">未设置</div>
+      <div class="apionly two">
+        <div><label>温度（留空＝服务端默认）</label><input id="setTemp" type="text" placeholder="0.8" spellcheck="false"></div>
+        <div><label>单次最多输出 tokens</label><input id="setMaxTok" type="text" placeholder="2048" spellcheck="false"></div>
+      </div>
+      <div class="two">
+        <div><label>你的称呼（替换角色卡里的 {{user}}）</label><input id="setUserName" type="text" placeholder="用户" spellcheck="false"></div>
+        <div class="apionly"><label>带上最近几轮对话</label><input id="setHistTurns" type="text" placeholder="12" spellcheck="false"></div>
+      </div>
+      <div class="hint">角色卡在聊天窗口右上角「🎭 角色」里切换 / 导入 / 导出；两种后端都会套用当前角色的人设。</div>
+    </div>
     <label>DeepSeek API Key</label>
     <div class="row">
       <input id="setKey" type="password" placeholder="sk-…（留空＝不修改已保存的）" spellcheck="false" autocomplete="off">
@@ -610,7 +642,8 @@
 <div id="chat" role="region" aria-label="DeepSeek 聊天">
   <div class="chat-head">
     <div class="chat-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v11H10l-5 4v-4H4z"/></svg><span>DeepSeek 聊天</span></div>
-    <button id="cClose" type="button" aria-label="关闭聊天" title="关闭聊天（Esc）">×</button>
+    <div class="chat-actions"><button id="cPersona" type="button" title="角色卡：切换 / 导入 / 导出（只含人设）">🎭 角色</button>
+    <button id="cClose" type="button" aria-label="关闭聊天" title="关闭聊天（Esc）">×</button></div>
   </div>
   <div id="cstatus" class="scount"></div>
   <div id="cmsg" role="log" aria-label="聊天记录" aria-live="off" tabindex="0"></div>
@@ -2258,6 +2291,18 @@ async function loadSettingsForm(){
   document.getElementById('setModel').value = d.model || '';
   document.getElementById('setProvider').value = d.provider || '';
   document.getElementById('setRepo').value = h.repo || '';
+  const ch = c.chat || {};
+  document.getElementById('setBackend').value = ch.backend || 'harness';
+  document.getElementById('setProto').value = ch.protocol || 'openai';
+  document.getElementById('setApiModel').value = ch.model || '';
+  document.getElementById('setApiBase').value = ch.baseUrl || '';
+  document.getElementById('setApiKey').value = '';
+  document.getElementById('setTemp').value = ch.temperature == null ? '' : String(ch.temperature);
+  document.getElementById('setMaxTok').value = ch.maxTokens || '';
+  document.getElementById('setUserName').value = ch.userName || '';
+  document.getElementById('setHistTurns').value = ch.historyTurns || '';
+  setMsg('setApiKeyHint', ch.keySet ? ('已保存：····' + (ch.keyTail || '????') + (ch.encrypted ? '（Windows 凭据加密存储，只在本机）' : '（明文存储）')) : '未设置', ch.keySet ? 'ok' : '');
+  if (typeof syncBackendBox === 'function') syncBackendBox();
   SET.keySet = !!d.keySet; SET.encrypted = !!d.encrypted; SET.detected = h.detected || '';
   setMsg('setKeyHint', d.keySet
     ? ('已保存：····' + (d.keyTail || '????') + (d.encrypted ? '（Windows 凭据加密存储，只在本机）' : '（明文存储：系统未提供加密能力）'))
@@ -2285,18 +2330,40 @@ async function saveSettings(){
       provider: document.getElementById('setProvider').value.trim(),
     },
     harness: { repo: document.getElementById('setRepo').value.trim() },
+    chat: {
+      backend: document.getElementById('setBackend').value,
+      protocol: document.getElementById('setProto').value,
+      model: document.getElementById('setApiModel').value.trim(),
+      baseUrl: document.getElementById('setApiBase').value.trim(),
+      temperature: document.getElementById('setTemp').value.trim(),
+      maxTokens: document.getElementById('setMaxTok').value.trim(),
+      userName: document.getElementById('setUserName').value.trim(),
+      historyTurns: document.getElementById('setHistTurns').value.trim(),
+    },
   };
+  const akv = document.getElementById('setApiKey').value.trim();
+  if (akv) patch.chatApiKey = akv;
   const kv = document.getElementById('setKey').value.trim();
   if (kv) patch.apiKey = kv;                     // 只在填了东西时才改 key（留空＝不动）
   let r = null;
   try{ r = await window.petHost.setConfig(patch); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
   SET.busy = false;
   if (r && r.ok){
-    document.getElementById('setKey').value = '';
+    document.getElementById('setKey').value = ''; document.getElementById('setApiKey').value = '';
     setMsg('setResult', '已保存' + (kv ? '（key 已加密存储）' : '') + '，harness 运行时会按新设置重启', 'ok');
     await loadSettingsForm();
   } else setMsg('setResult', '保存失败：' + ((r && r.error) || '未知错误'), 'bad');
   return !!(r && r.ok);
+}
+function syncBackendBox(){
+  const box = document.getElementById('chatBox'); if (!box) return;
+  const api = document.getElementById('setBackend').value === 'api';
+  box.classList.toggle('api-on', api); box.classList.toggle('api-off', !api);
+}
+async function clearChatKeySettings(){
+  const r = await window.petHost.setConfig({ chatApiKey: '' });
+  setMsg('setResult', r && r.ok ? '已清除直连 API 的 key' : '清除失败', r && r.ok ? 'ok' : 'bad');
+  loadSettingsForm();
 }
 async function clearKeySettings(){
   let r = await window.petHost.setConfig({ apiKey: '' });
@@ -2307,7 +2374,8 @@ async function testSettings(){
   if (SET.busy) return;
   if (!await saveSettings()) return;
   SET.busy = true;
-  setMsg('setResult', '正在启动 harness 并试一句（首次约 5~10 秒）…');
+  const beEl = (typeof document !== 'undefined') && document.getElementById('setBackend');
+  setMsg('setResult', beEl && beEl.value === 'api' ? '正在请求 API 试一句…' : '正在启动 harness 并试一句（首次约 5~10 秒）…');
   let r = null;
   try{ r = await window.petHost.testConfig(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
   SET.busy = false;
@@ -2375,7 +2443,7 @@ window.onNewVersionAvailable = onNewVersionAvailable;
      turn/end reason.kind=error   → 明确报错（不会再"等 30 秒没动静也不说"）
    对话记录由主进程落盘（chat-history.json），这里每次从宿主重读，避免两份真相。 */
 
-const C = { open:false, busy:false, msgs:[], t0:0, timer:0,
+const C = { open:false, busy:false, msgs:[], t0:0, timer:0, backend:'harness', persona:'',
             state:'', title:'', route:'', model:'',
             stream:'', reasoning:'', tools:[], usage:null, tail:'' };
 
@@ -2388,6 +2456,10 @@ function syncPanelGuard(){        // 有任一面板打开 → 让主进程挂�
 
 /* ---------- harness 状态文案 ---------- */
 function harnessStateText(){
+  if (C.backend === 'api'){
+    const m = { running:'API 生成中…', idle:'直连 API 就绪', dead:'API 出错' };
+    return (C.persona ? '「' + C.persona + '」 · ' : '') + (m[C.state] || '直连 API（发消息即请求）');
+  }
   const map = { 'starting':'harness 启动中（首次约 7 秒）…', 'running':'harness 正在处理…',
                 'idle':'已连接 harness', 'dead':'harness 已停止' };
   return map[C.state] || '未连接（发消息即启动）';
@@ -2408,8 +2480,14 @@ function openChat(){
     try{
       window.petHost.harnessStatus().then((st)=>{
         if (!st) return;
+        C.backend = st.backend || 'harness';
+        C.persona = (st.persona && st.persona.name) || '';
+        if (C.backend === 'api'){ C.state = C.busy ? 'running' : 'idle'; C.route = (st.apiProtocol || '') + ' / ' + (st.apiModel || '未填模型'); }
+        else {
         C.state = st.ready ? 'idle' : (st.alive ? 'starting' : '');
         C.route = st.provider ? (st.provider + ' / ' + st.model) : '';
+        }
+        updatePersonaButton();
         renderChat();
       }).catch(()=>{});
     }catch(e){}
@@ -2431,6 +2509,21 @@ function closeChat(){
 }
 function toggleChat(){ C.open ? closeChat() : openChat(); }
 
+function updatePersonaButton(){
+  const b = document.getElementById('cPersona'); if (!b) return;
+  b.textContent = '🎭 ' + (C.persona || '角色');
+  const t = document.querySelector('#chat .chat-title span');
+  if (t) t.textContent = C.persona ? C.persona : (C.backend === 'api' ? 'API 聊天' : 'DeepSeek 聊天');
+  if (els.chat) els.chat.classList.toggle('api-mode', C.backend === 'api');
+}
+window.onPersonaChanged = function(info){
+  C.persona = (info && info.active && info.active.name) || '';
+  updatePersonaButton();
+  if (info && info.silent) return;
+  C.tail = ''; C.stream = ''; C.tools = [];
+  if (C.open) refreshChat();
+  toast(C.persona ? '已切换角色：' + C.persona : '已回到默认助手');
+};
 async function refreshChat(){
   try{ C.msgs = await window.petHost.chatHistory(); }catch(e){ C.msgs = []; }
   renderChat();
@@ -2477,21 +2570,22 @@ function renderChat(){
   const items = C.msgs.map((m)=> m.role === 'user'
     ? '<div class="cline user">' + mdLite(m.text) + '</div>'
     : (m.role === 'err' ? '<div class="cline err">' + mdLite(m.text) + '</div>'
-                        : '<div class="cline assistant">' + mdLite(m.text) + '</div>'));
+                        : '<div class="cline assistant"' + (C.persona ? ' data-who="' + esc(C.persona) + '"' : '') + '>' + mdLite(m.text) + '</div>'));
   // 工具卡片 + 流式气泡（都是"本轮尚未落盘"的实时内容）
   for (const t of C.tools) items.push(toolLine(t));
   if (C.stream) items.push('<div class="cline assistant stream">' + mdLite(C.stream) + '<span class="caret"></span></div>');
   if (C.reasoning) items.push('<div class="creason"><details><summary>思考过程（' + C.reasoning.length + ' 字）</summary>'
                               + '<div>' + mdLite(C.reasoning) + '</div></details></div>');
-  if (C.state === 'starting') items.push('<div class="thinking"><span class="spinner"></span>正在启动 harness 运行时…</div>');
+  if (C.state === 'starting' && C.backend !== 'api') items.push('<div class="thinking"><span class="spinner"></span>正在启动 harness 运行时…</div>');
   else if (C.busy){
     const secs = C.t0 ? Math.round((now() - C.t0) / 1000) : 0;
-    items.push('<div class="thinking"><span class="spinner"></span>harness 正在处理… ' + secs + ' 秒'
+    items.push('<div class="thinking"><span class="spinner"></span>' + (C.backend === 'api' ? (C.persona || '模型') + ' 正在输入… ' : 'harness 正在处理… ') + secs + ' 秒'
              + (secs > 25 ? '（带工具的任务会久一些；可点下方“停止生成”）' : '') + '</div>');
   }
   if (C.tail) items.push('<div class="cline err">' + mdLite(C.tail) + '</div>');
   if (!items.length) items.push('<div class="cline assistant" style="color:var(--ui-dim);background:transparent;border:none">'
-    + '和 DeepSeek 聊天（走你本机的 DeepSeek Harness，带工具与记忆能力）。<br>'
+    + (C.backend === 'api' ? '直连 API 聊天（OpenAI / Anthropic 兼容接口）。' : '和 DeepSeek 聊天（走你本机的 DeepSeek Harness，带工具与记忆能力）。')
+    + (C.persona ? '<br>当前角色：' + esc(C.persona) : '<br>右上角「🎭 角色」可切换 / 导入酒馆角色卡。') + '<br>'
     + '</div>');
   box.innerHTML = items.join('');
   box.querySelectorAll('details').forEach((el,i)=>{el.open=!!expanded[i];});
@@ -2553,7 +2647,7 @@ function onHarnessEvent(evt){
     case 'route':     C.route = (evt.provider || '') + ' / ' + (evt.model || ''); break;
     case 'turnEnd': {
       const r = evt.reason || {};
-      if (r.kind === 'error') C.tail = ERR_TEXT.harnessError + ((r.error && r.error.message) || ERR_TEXT.unknown);
+      if (r.kind === 'error') C.tail = (C.backend === 'api' ? 'API 出错：' : ERR_TEXT.harnessError) + ((r.error && r.error.message) || ERR_TEXT.unknown);
       else C.tail = '';
       chatBusyEnd();
       C.stream = ''; C.reasoning = ''; C.tools = [];      // 本轮实时内容清空，改由落盘记录渲染
@@ -2970,19 +3064,20 @@ function bindEvents(){
   on(document, 'keydown', (e)=>{         // 面板开着但焦点不在输入框时，Esc 也要能关
     if (e.key !== 'Escape') return;
     if (SET.open) closeSettings();
+    else if (window.PersonaUI && PersonaUI.isOpen()) PersonaUI.close();
     else if (C.open) closeChat();
     else if (S.open) closeSearch();
   });
   if (window.petHost && window.petHost.onEsc) window.petHost.onEsc(()=>{   // 窗口失焦时由全局 Esc 兜底
     if (window.DockUI && DockUI.isOpen()) DockUI.close();
-    else if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
+    else if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (window.PersonaUI && PersonaUI.isOpen()) PersonaUI.close(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
   });
   bindEnvPanel();      // 环境自检向导：按钮 / 勾选 / 日志流
   /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
   on(els.cinput, 'keydown', (e)=>{
     if (e.isComposing || e.keyCode===229) return;
     if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); return; }
-    if (e.key === 'Escape'){ e.preventDefault(); closeChat(); return; }
+    if (e.key === 'Escape'){ e.preventDefault(); if (window.PersonaUI && PersonaUI.isOpen()) PersonaUI.close(); else closeChat(); return; }
   });
   on(els.cinput, 'input', updateChatControls);
   on(document.getElementById('cSend'), 'click', ()=>sendChat());
@@ -2990,6 +3085,9 @@ function bindEvents(){
   on(document.getElementById('cCancel'), 'click', ()=> cancelChat());
   // 设置面板
   on(document.getElementById('setSave'), 'click', ()=> saveSettings());
+  on(document.getElementById('setBackend'), 'change', ()=> syncBackendBox());
+  on(document.getElementById('setApiKeyClear'), 'click', ()=> clearChatKeySettings());
+  on(document.getElementById('cPersona'), 'click', ()=> { if (window.PersonaUI) PersonaUI.toggle(); });
   on(document.getElementById('setTest'), 'click', ()=> testSettings());
   on(document.getElementById('setKeyClear'), 'click', ()=> clearKeySettings());
   const _chkUpd = document.getElementById('setCheckUpdate');
@@ -3687,6 +3785,7 @@ init().then(()=>{ window.__petInitOK = true; })
       .catch(e=>{ window.__petError = String((e && (e.stack || e.message)) || e); });
 </script>
 <script src="dock.js"></script>
+<script src="persona.js"></script>
 </body>
 </html>
 

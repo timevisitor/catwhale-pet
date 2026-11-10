@@ -180,7 +180,7 @@ def copy_app_tree(app_dir, APP):
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
-    required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "agent-dock.js", "media-response.js", "animation-loop-config.js",
+    required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "agent-dock.js", "media-response.js", "animation-loop-config.js", "llm-client.js", "character-card.js", "persona-store.js", "renderer/persona.js", "renderer/persona.css",
                 "package.json", "renderer/index.html", "renderer/animation-loop.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:

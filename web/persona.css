@@ -1,0 +1,48 @@
+/* 角色卡浮层：铺满聊天面板内部，沿用聊天面板的浅色 SAO 材质 */
+#chat.pdrop { outline:2px dashed #E7C351; outline-offset:-6px; }
+#chat .chat-head .chat-actions { display:flex; align-items:center; gap:6px; }
+#chat #cPersona { height:26px; padding:0 9px; font-size:12px; max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#personaPane { position:absolute; inset:0; display:none; flex-direction:column; background:rgba(249,250,246,.99); z-index:5; }
+#personaPane.show { display:flex; }
+#personaPane .phead { display:flex; align-items:baseline; gap:10px; padding:12px 14px 8px; border-bottom:1px solid rgba(110,122,110,.2); }
+#personaPane .phead b { font-size:15px; }
+#personaPane .psub { flex:1; color:#839079; font-size:11px; }
+#personaPane .pclose { width:28px; height:28px; padding:0; font-size:20px; background:transparent!important; border-color:transparent!important; }
+#personaPane .pbar { display:flex; gap:6px; align-items:center; padding:9px 14px; flex-wrap:wrap; }
+#personaPane button { padding:4px 10px; font-size:12px; cursor:pointer; }
+#personaPane button.primary { background:#FFF2BE; border-color:#E8D387; }
+#personaPane button.danger { color:#a3423c; }
+#personaPane .plink { color:#8a6a10; cursor:pointer; font-size:11.5px; margin-left:auto; }
+#personaPane .pmsg { padding:0 14px; font-size:11.5px; min-height:16px; color:#839079; overflow-wrap:anywhere; }
+#personaPane .pmsg.ok { color:#3f8f5f; } #personaPane .pmsg.bad { color:#b4453f; }
+#personaPane .plist { flex:1 1 0; min-height:0; overflow:auto; padding:6px 14px; display:flex; flex-direction:column; gap:7px; }
+#personaPane .prow { display:flex; gap:8px; align-items:center; padding:8px 10px; background:#fff; border:1px solid #E0E4D9; }
+#personaPane .prow.on { border-left:3px solid #E7C351; background:#FFFBEA; }
+#personaPane .prow.broken { opacity:.7; }
+#personaPane .pinfo { flex:1; min-width:0; }
+#personaPane .pname { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#personaPane .pmeta { font-size:11px; color:#839079; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#personaPane .pops { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; max-width:74%; align-items:center; }
+#personaPane .prow .pops button { padding:3px 7px; }
+#personaPane .pbadge { font-size:11px; color:#8a6a10; padding:2px 7px; border:1px solid #E8D387; background:#FFF2BE; }
+#personaPane button:focus:not(:focus-visible) { box-shadow:none!important; }
+#personaPane .pempty { color:#839079; font-size:12px; padding:16px 4px; line-height:1.7; }
+#personaPane .pform { flex:1 1 0; min-height:0; overflow:auto; padding:6px 14px 12px; flex-direction:column; gap:4px; }
+#personaPane .ptitle { font-weight:600; font-size:13px; margin:2px 0 4px; }
+#personaPane .pform label { font-size:11.5px; color:#748075; margin-top:4px; }
+#personaPane .pform input, #personaPane .pform textarea { width:100%; box-sizing:border-box; font:inherit; font-size:12.5px;
+  padding:6px 8px; background:rgba(255,255,255,.85); border:1px solid rgba(90,100,92,.28); border-radius:2px; color:#49564E; resize:vertical; }
+#personaPane .pform input:focus, #personaPane .pform textarea:focus { outline:none; border-color:#F6C62E; box-shadow:0 0 0 2px rgba(246,198,46,.3); }
+#personaPane .pbtns { display:flex; gap:8px; margin-top:10px; }
+#personaPane .phint { padding:7px 14px 10px; font-size:11px; color:#97a094; border-top:1px solid rgba(110,122,110,.15); }
+#chat #cmsg .assistant[data-who]::before { content:attr(data-who); }
+#chat.api-mode #cmsg .assistant:not([data-who])::before { content:'助手'; }
+/* 设置面板里的「对话后端」分组 */
+#settings .sform select { width:100%; box-sizing:border-box; font:inherit; font-size:12.5px; padding:5px 7px;
+  background:rgba(255,255,255,.72); border:1px solid rgba(90,100,92,.28); border-radius:2px; color:var(--ui-fg); }
+#settings .chatbox { border:1px solid rgba(90,100,92,.22); padding:8px 10px 10px; display:flex; flex-direction:column; gap:5px; background:rgba(255,255,255,.35); }
+#settings .chatbox .alhead { font-weight:600; font-size:12.5px; }
+#settings .chatbox .two { display:flex; gap:8px; } #settings .chatbox .two > div { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+#settings .chatbox label { font-size:11.5px; color:var(--ui-dim); }
+#settings .chatbox.api-off .apionly { display:none; }
+#settings .chatbox.api-on .harnessonly { display:none; }

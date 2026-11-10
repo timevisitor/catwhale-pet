@@ -102,6 +102,19 @@ contextBridge.exposeInMainWorld('petHost', {
     }
   },
 
+  /* ---- 角色卡（SillyTavern V2/V3 兼容；只含人设，不含记忆）---- */
+  persona: {
+    list:        () => ipcRenderer.invoke('persona:list'),
+    get:         (id) => ipcRenderer.invoke('persona:get', id),
+    save:        (card, id) => ipcRenderer.invoke('persona:save', { card, id }),
+    remove:      (id) => ipcRenderer.invoke('persona:delete', id),
+    setActive:   (id) => ipcRenderer.invoke('persona:setActive', id || ''),
+    importFile:  () => ipcRenderer.invoke('persona:importFile'),
+    importBytes: (bytes) => ipcRenderer.invoke('persona:importBuffer', { data: bytes }),
+    exportCard:  (id, format, path) => ipcRenderer.invoke('persona:export', { id, format, path }),
+    reveal:      () => ipcRenderer.invoke('persona:reveal')
+  },
+
   /* ---- 外置皮肤包（独立皮肤编辑器生成，主进程只读）---- */
   skin: {
     get:         () => ipcRenderer.invoke('skin:get'),
