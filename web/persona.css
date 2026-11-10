@@ -30,6 +30,12 @@
 #personaPane .pform { flex:1 1 0; min-height:0; overflow:auto; padding:6px 14px 12px; flex-direction:column; gap:4px; }
 #personaPane .ptitle { font-weight:600; font-size:13px; margin:2px 0 4px; }
 #personaPane .pform label { font-size:11.5px; color:#748075; margin-top:4px; }
+/* 表单是纵向 flex：子项默认 flex-shrink:1，textarea 会被压到不足一行 → 一律不收缩，由 .pform 自己滚动 */
+#personaPane .pform > * { flex-shrink:0; }
+#personaPane .pform textarea { min-height:52px; line-height:1.5; }
+#personaPane .pform textarea.tall { min-height:108px; }
+#personaPane .pform textarea.mid { min-height:72px; }
+#personaPane .pform input { height:32px; }
 #personaPane .pform input, #personaPane .pform textarea { width:100%; box-sizing:border-box; font:inherit; font-size:12.5px;
   padding:6px 8px; background:rgba(255,255,255,.85); border:1px solid rgba(90,100,92,.28); border-radius:2px; color:#49564E; resize:vertical; }
 #personaPane .pform input:focus, #personaPane .pform textarea:focus { outline:none; border-color:#F6C62E; box-shadow:0 0 0 2px rgba(246,198,46,.3); }
