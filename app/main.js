@@ -151,6 +151,78 @@ function displayWorkAreaById(id) {
   }
   return d;
 }
+
+/* ---------- 透明窗工作区校准 ----------
+   窗口必须铺满"选定屏的最新 workArea"：开机时显示器可能还没唤醒，之后分辨率/缩放/
+   任务栏/屏的增减都会变。窗口是 resizable:false，建错尺寸后用户也拉不回来
+   （桌宠拖到窗口边界外会被 body{overflow:hidden} 裁掉）。以下 pure helper 把
+   "选哪块屏 / 目标几何 / 该不该 setBounds" 从 Electron 事件里拆出来，tests 可直接调用。 */
+function parseWinSize(spec) {
+  if (!spec) return null;
+  const m = /^(\d+)x(\d+)$/.exec(String(spec).trim());
+  if (!m) return null;
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
+function pickWindowDisplay(displays, displayId) {
+  const list = Array.isArray(displays) ? displays : [];
+  const wanted = (displayId === undefined || displayId === null)
+    ? null
+    : list.find((d) => d && d.id === displayId);
+  if (wanted) return { display: wanted, fallback: false };
+  const primary = list.find((d) => d && d.primary) || list[0] || null;
+  return { display: primary, fallback: !!primary && displayId !== undefined && displayId !== null };
+}
+function windowBoundsForWorkArea(workArea, winSize) {
+  if (!workArea) return null;
+  if (winSize) {                                    // --winsize：受控测量窗口，保持调试尺寸
+    return { x: workArea.x + 200, y: workArea.y + 200, width: winSize.width, height: winSize.height };
+  }
+  return { x: workArea.x, y: workArea.y, width: workArea.width, height: workArea.height };
+}
+function sameWindowBounds(a, b) {
+  if (!a || !b) return false;
+  return ['x', 'y', 'width', 'height'].every((k) => Math.abs(Number(a[k]) - Number(b[k])) < 1);
+}
+function planWindowDisplaySync(opts) {
+  const o = opts || {};
+  const picked = pickWindowDisplay(o.displays, o.displayId);
+  const target = windowBoundsForWorkArea(picked.display && picked.display.workArea, o.winSize || null);
+  const base = { displayId: picked.display ? picked.display.id : null, fallback: picked.fallback, target };
+  if (!target) return Object.assign(base, { action: 'none', reason: 'no-display' });
+  if (o.minimized) return Object.assign(base, { action: 'defer', reason: 'minimized' });   // 等 restore 再校准
+  if (sameWindowBounds(o.currentBounds, target)) return Object.assign(base, { action: 'none', reason: 'unchanged' });
+  return Object.assign(base, { action: 'set', reason: 'display-changed' });
+}
+/* 真正把计划落到窗口。独立成函数是为了 tests 能用假窗口验证 setBounds 调用次数与参数。
+   注意：这里只 setBounds，绝不 show/hide——游戏模式隐藏期间显示拓扑变化不能把桌宠拉出来。 */
+function runWindowDisplaySync(winObj, ctx) {
+  const o = ctx || {};
+  if (!winObj || (typeof winObj.isDestroyed === 'function' && winObj.isDestroyed())) {
+    return { ok: false, error: '窗口不可用', changed: false, action: 'none' };
+  }
+  let current = null;
+  try { current = winObj.getBounds(); }
+  catch (e) { return { ok: false, error: String((e && e.message) || e), changed: false, action: 'none' }; }
+  const plan = planWindowDisplaySync({
+    displays: o.displays,
+    displayId: o.displayId,
+    currentBounds: current,
+    winSize: o.winSize || null,
+    minimized: typeof winObj.isMinimized === 'function' && winObj.isMinimized(),
+  });
+  if (plan.action !== 'set') {
+    return { ok: true, changed: false, action: plan.action, reason: plan.reason,
+             displayId: plan.displayId, fallback: plan.fallback, target: plan.target };
+  }
+  try { winObj.setBounds(plan.target); }
+  catch (e) {
+    return { ok: false, error: String((e && e.message) || e), changed: false, action: 'set',
+             displayId: plan.displayId, fallback: plan.fallback, target: plan.target };
+  }
+  return { ok: true, changed: true, action: 'set', reason: plan.reason,
+           displayId: plan.displayId, fallback: plan.fallback, target: plan.target };
+}
+
 function applyPetBottomRight() {
   if (!win || win.isDestroyed()) return;
   const js = `(()=>{try{
@@ -164,9 +236,9 @@ function applyPetBottomRight() {
 function moveToDisplay(displayId) {
   if (!win || win.isDestroyed()) return { ok: false, error: '窗口不可用' };
   const d = displayWorkAreaById(displayId);
-  const wa = d.workArea;
+  const target = windowBoundsForWorkArea(d.workArea, parseWinSize(WINSIZE));
   try {
-    win.setBounds({ x: wa.x, y: wa.y, width: wa.width, height: wa.height });
+    win.setBounds(target);
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -179,11 +251,43 @@ function moveToDisplay(displayId) {
 }
 function resolveStartupDisplay() {
   const st = loadState();
-  if (st.displayId != null && st.displayId !== undefined) {
-    const hit = screen.getAllDisplays().find((d) => d.id === st.displayId);
-    if (hit) return hit.workArea;
-  }
+  const picked = pickWindowDisplay(sortedDisplays(), st.displayId);
+  if (picked.display) return picked.display.workArea;
   return screen.getPrimaryDisplay().workArea;
+}
+
+/* 显示拓扑/恢复时的重校准入口：先 debounce 合并同一次系统事件里的多次通知，
+   再按"选定屏（保存的 displayId，失效则主屏）的最新 workArea"比较并 setBounds。
+   已在目标几何时只返回 unchanged，不重复 resize；最小化时 defer，等 restore 事件再做。 */
+let displaySyncTimer = null;
+function syncWindowToDisplay(reason) {
+  if (!win || win.isDestroyed()) return { ok: false, error: '窗口不可用', changed: false };
+  const st = loadState();
+  const r = runWindowDisplaySync(win, {
+    displays: sortedDisplays(),
+    displayId: st.displayId,
+    winSize: parseWinSize(WINSIZE),
+  });
+  const out = Object.assign({ reason: reason || '', at: Date.now() }, r);
+  if (out.ok && out.changed) console.log('WINDOW_SYNC ' + JSON.stringify(out));
+  return out;
+}
+function scheduleWindowDisplaySync(reason) {
+  if (!win || win.isDestroyed()) return;
+  if (displaySyncTimer) clearTimeout(displaySyncTimer);
+  displaySyncTimer = setTimeout(() => {
+    displaySyncTimer = null;
+    try { syncWindowToDisplay(reason); } catch (e) { /* 不能影响主循环 */ }
+  }, 120);
+}
+function cancelWindowDisplaySync() {
+  if (displaySyncTimer) { clearTimeout(displaySyncTimer); displaySyncTimer = null; }
+}
+/* show/restore 事件里先立即校准一次（有的验收会在恢复后马上读几何），
+   再排一次 debounce：显示器的 workArea 有时比窗口恢复晚几十毫秒才更新。 */
+function syncWindowDisplayNowAndLater(reason) {
+  try { syncWindowToDisplay(reason); } catch (e) { /* 不能影响主循环 */ }
+  scheduleWindowDisplaySync(reason + '-debounce');
 }
 
 /** 给渲染进程发消息（窗口可能已销毁，统一兜一层） */
@@ -226,10 +330,10 @@ async function createWindow() {
   bootGuard.phase('window-created');
   const wa = resolveStartupDisplay();                   // 优先恢复上次所在屏幕，否则主屏
   const st = loadState();
-  const ws = WINSIZE ? WINSIZE.split('x').map(Number) : null;
+  const ws = parseWinSize(WINSIZE);
+  const initial = windowBoundsForWorkArea(wa, ws) || { x: 0, y: 0, width: 1280, height: 720 };
   win = new BrowserWindow({
-    x: ws ? wa.x + 200 : wa.x, y: ws ? wa.y + 200 : wa.y,
-    width: ws ? ws[0] : wa.width, height: ws ? ws[1] : wa.height,
+    x: initial.x, y: initial.y, width: initial.width, height: initial.height,
     transparent: !SOLID, frame: false, resizable: false, movable: false,
     hasShadow: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false,
     backgroundColor: SOLID ? '#ff0000' : '#00000000', show: false,
@@ -254,7 +358,7 @@ async function createWindow() {
     if (st.x !== undefined && st.y !== undefined) {
       win.webContents.executeJavaScript(`petAPI.setPos(${st.x}, ${st.y})`).catch(() => {});
     }
-    setTimeout(() => { if (win && !win.isDestroyed() && !gameMode.active) win.show(); }, 250);   // 等首帧出来再显示，避免闪一下
+    setTimeout(() => { showPetWindow('startup'); }, 250);   // 等首帧出来再显示，避免闪一下；顺带校准工作区
   });
 
   await startServer();
@@ -268,7 +372,9 @@ async function createWindow() {
     setInterval(pin, 2000);
   }
 
-  win.on('closed', () => { win = null; });
+  win.on('restore', () => syncWindowDisplayNowAndLater('restore'));
+  win.on('show', () => syncWindowDisplayNowAndLater('show'));
+  win.on('closed', () => { cancelWindowDisplaySync(); win = null; });
 
   // --diag：启动后把"页面渲染结果(含alpha)"和窗口几何/页面状态落盘，用于无头验证
   if (BENCH) setTimeout(() => { if (win && !win.isDestroyed()) runBench(win); }, 4000);
@@ -1393,6 +1499,9 @@ function buildTrayMenu() {
   }
 
   items.push(
+    { label: '👀 显示桌宠 / 恢复窗口', enabled: !gameMode.active,
+      click: () => { showPetWindow('tray-restore'); } },
+    { type: 'separator' },
     { label: '💬 和 DeepSeek 聊天…' + chatHk, click: () => sendToPage('petAPI.openChat()') },
     { label: '⚙ 设置（DeepSeek API / 网址）…', click: () => sendToPage('petAPI.openSettings()') },
     { label: '🩺 环境自检（harness / Everything）…', click: () => sendToPage('petAPI.openEnv()') },
@@ -1454,8 +1563,11 @@ function buildTray() {
   sendToPage = (js) => { if (win && !win.isDestroyed()) win.webContents.executeJavaScript(js).catch(() => {}); };
   tray.setContextMenu(buildTrayMenu());
   tray.on('double-click', () => sendToPage('petAPI.openSearch()'));   // 双击托盘=搜索，比面板更常用
-  // 显示器插拔/分辨率变化后，刷新「所在屏幕」子菜单
-  const rebuild = () => { try { if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu()); } catch (e) {} };
+  // 显示器插拔/分辨率变化后：刷新「所在屏幕」子菜单 + 让透明窗重新贴合选定屏的最新 workArea
+  const rebuild = () => {
+    try { if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu()); } catch (e) {}
+    scheduleWindowDisplaySync('display-change');
+  };
   try {
     screen.on('display-added', rebuild);
     screen.on('display-removed', rebuild);
@@ -1752,6 +1864,28 @@ const GAME_GUARD_PROCS = ['SGuard64.exe', 'SGuardSvc64.exe', 'ACE-Tray.exe',    
   'EasyAntiCheat.exe', 'EasyAntiCheat_EOS.exe', 'BEService.exe', 'vgc.exe'];               // EAC / BattlEye / Vanguard
 const GAMEMODE_POLL_MS = parseInt(process.env.PET_GAMEMODE_POLL_MS || '', 10) || 8000;
 const gameMode = { active: false, reason: '', since: 0, manual: '', lastScan: 0, scans: 0, timer: null };
+
+/* 显示桌宠的统一入口：最小化态先 restore 再 show（show 本身不保证解除最小化）。
+   游戏模式 active 时保持隐藏——游戏期间桌宠不应因 second-instance / 其它入口弹出来。
+   几何校准由 win 的 show/restore 事件负责，这里只负责把窗口恢复到可见态。 */
+function showPetWindow(reason) {
+  if (!win || win.isDestroyed() || gameMode.active) return false;
+  try {
+    if (win.isMinimized()) win.restore();
+    win.show();
+  } catch (e) { return false; }
+  syncWindowDisplayNowAndLater(reason || 'show');
+  return true;
+}
+function showPetWindowInactive(reason) {
+  if (!win || win.isDestroyed() || gameMode.active) return false;
+  try {
+    if (win.isMinimized()) win.restore();
+    win.showInactive();
+  } catch (e) { return false; }
+  syncWindowDisplayNowAndLater(reason || 'show-inactive');
+  return true;
+}
 function gameModeCfg() {
   const raw = loadCfgRaw().gameMode || {};
   return { auto: raw.auto !== false, extra: Array.isArray(raw.extraProcs) ? raw.extraProcs.filter((x) => typeof x === 'string') : [] };
@@ -1792,7 +1926,8 @@ function applyGameMode(on, reason) {
     }
   } else {
     if (win && !win.isDestroyed()) {
-      try { win.setAlwaysOnTop(true, bootGuard.level >= 3 ? 'normal' : 'screen-saver'); win.showInactive(); } catch (e) {}
+      try { win.setAlwaysOnTop(true, bootGuard.level >= 3 ? 'normal' : 'screen-saver'); } catch (e) {}
+      showPetWindowInactive('gamemode-off');
       try { win.webContents.send('pet:gamemode', { on: false }); } catch (e) {}
     }
     setMouseInteractive(false, true);                 // 回到默认：穿透 + forward（页面按命中再打开交互）
@@ -1832,7 +1967,7 @@ ipcMain.handle('gamemode:get', () => ({ active: gameMode.active, reason: gameMod
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => { if (win && !gameMode.active) win.show(); });
+  app.on('second-instance', () => { showPetWindow('second-instance'); });
   // disable-features 只认最后一次 appendSwitch，必须拼成一份，不能各加各的
   app.commandLine.appendSwitch('disable-features',
     [...new Set(['CalculateNativeWinOcclusion', ...bootGuard.features])].join(','));
@@ -2448,5 +2583,12 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('window-all-closed', () => { if (quitting || process.platform !== 'darwin') app.quit(); });
   app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
-  app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch (e) {} });
+  app.on('will-quit', () => { cancelWindowDisplaySync(); try { globalShortcut.unregisterAll(); } catch (e) {} });
 }
+
+/* 供 tests 直接 require（electron 用桩替换、requestSingleInstanceLock 返回 false）：
+   暴露纯几何 helper，验证"旧尺寸 → 最新 workArea"的校准行为。Electron 运行期无副作用。 */
+module.exports = {
+  parseWinSize, pickWindowDisplay, windowBoundsForWorkArea, sameWindowBounds,
+  planWindowDisplaySync, runWindowDisplaySync,
+};
