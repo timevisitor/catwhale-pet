@@ -77,6 +77,12 @@ ANCHORS = {
     "思考":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
     "得意":        dict(mode="sole", scale=0.90, ref_frame="lowest", shift_x=-25),   # 加留白重出：首帧人物缩到 82% → 0.75/0.82
     "打招呼":      dict(mode="sole", scale=0.75, ref_frame="lowest"),
+    # ── 本地媒体演出（2026-11，首帧=Qwen-Image 编辑，动画=H3 1024×1792 灰幕 + BiRefNet）──
+    # 看电视：侧坐在地、手撑地/搭膝，头部无遮挡 → auto_head 可靠。
+    # 唱歌：举麦克风的手贴到脸侧嘴唇处，auto_head 量"头顶下 20~150 行"会把小臂和麦克风算进来
+    #       → 改用固定倍率（与表情差分同源分辨率，取 0.75 一档；实际大小以验收图核对）。
+    "看电视":      dict(mode="sole", scale="auto_head", ref_frame="lowest"),
+    "唱歌":        dict(mode="sole", scale=0.75, ref_frame="lowest"),
 }
 
 

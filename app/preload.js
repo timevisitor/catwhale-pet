@@ -132,6 +132,20 @@ contextBridge.exposeInMainWorld('petHost', {
     set: (cfg) => ipcRenderer.invoke('animation-loop:set', cfg)
   },
 
+  /* ---- 本地媒体演出：看视频/听音乐时自动演 ----
+     开关落在 settings.json 的 media.show；探测进程由主进程按开关起停。 */
+  media: {
+    get:       () => ipcRenderer.invoke('media:get'),
+    set:       (patch) => ipcRenderer.invoke('media:set', patch),
+    probeOnce: () => ipcRenderer.invoke('media:probeOnce'),   // 设置面板「现在试试」
+    diag:      () => ipcRenderer.invoke('media:diag'),
+    onState: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('media:state', h);
+      return () => ipcRenderer.removeListener('media:state', h);
+    },
+  },
+
   /* ---- 版本检测与更新 ---- */
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   openUpdateUrl: (url) => ipcRenderer.invoke('update:openUrl', url),

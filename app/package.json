@@ -1,55 +1,58 @@
 {
-  "name": "pet-girl",
+ "name": "pet-girl",
+ "productName": "桌宠",
+ "version": "0.6.1",
+ "description": "DeepSeek-猫鲸（透明桌面宠物：SAO 风格菜单 + DeepSeek 聊天 + Everything 搜索）",
+ "main": "main.js",
+ "scripts": {
+  "sync": "node tools/sync-renderer.js",
+  "start": "node tools/sync-renderer.js && electron .",
+  "dist": "node tools/sync-renderer.js && electron-builder --win portable --x64"
+ },
+ "author": "",
+ "license": "MIT",
+ "devDependencies": {
+  "electron": "^44.4.2",
+  "electron-builder": "^25.1.8"
+ },
+ "build": {
+  "appId": "com.hermes.petgirl",
   "productName": "桌宠",
-  "version": "0.6.0",
-  "description": "DeepSeek-猫鲸（透明桌面宠物：SAO 风格菜单 + DeepSeek 聊天 + Everything 搜索）",
-  "main": "main.js",
-  "scripts": {
-    "sync": "node tools/sync-renderer.js",
-    "start": "node tools/sync-renderer.js && electron .",
-    "dist": "node tools/sync-renderer.js && electron-builder --win portable --x64"
+  "asarUnpack": [
+   "harness-sdk/**"
+  ],
+  "files": [
+   "main.js",
+   "preload.js",
+   "media-response.js",
+   "media-detect.js",
+   "media-show.js",
+   "media-probe/**",
+   "animation-loop-config.js",
+   "llm-client.js",
+   "character-card.js",
+   "persona-store.js",
+   "agent-dock.js",
+   "harness-client.js",
+   "updater.js",
+   "boot-guard.js",
+   "sysinfo.js",
+   "tools/**",
+   "harness-sdk/**",
+   "renderer/**",
+   "assets/**"
+  ],
+  "directories": {
+   "output": "../dist"
   },
-  "author": "",
-  "license": "MIT",
-  "devDependencies": {
-    "electron": "^44.4.2",
-    "electron-builder": "^25.1.8"
+  "win": {
+   "target": [
+    "portable"
+   ],
+   "icon": "assets/icon.ico"
   },
-  "build": {
-    "appId": "com.hermes.petgirl",
-    "productName": "桌宠",
-    "asarUnpack": [
-      "harness-sdk/**"
-    ],
-    "files": [
-      "main.js",
-      "preload.js",
-      "media-response.js",
-      "animation-loop-config.js",
-      "llm-client.js",
-      "character-card.js",
-      "persona-store.js",
-      "agent-dock.js",
-      "harness-client.js",
-      "updater.js",
-      "boot-guard.js",
-      "sysinfo.js",
-      "tools/**",
-      "harness-sdk/**",
-      "renderer/**",
-      "assets/**"
-    ],
-    "directories": {
-      "output": "../dist"
-    },
-    "win": {
-      "target": [
-        "portable"
-      ],
-      "icon": "assets/icon.ico"
-    },
-    "portable": {
-      "artifactName": "桌宠.exe"
-    }
+  "portable": {
+   "artifactName": "桌宠.exe"
   }
+ }
 }

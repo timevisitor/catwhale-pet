@@ -292,5 +292,27 @@
     "duration": 5.167,
     "frames": 124,
     "bytes": 2766341
+  },
+  "sing_mic": {
+    "id": "sing_mic",
+    "name": "唱歌",
+    "mode": "loop",
+    "role": "media",
+    "scale": 1.0,
+    "file": "sing_mic.webm",
+    "duration": 4.625,
+    "frames": 111,
+    "bytes": 4235804
+  },
+  "watch_tv": {
+    "id": "watch_tv",
+    "name": "看电视",
+    "mode": "loop",
+    "role": "media",
+    "scale": 1.0,
+    "file": "watch_tv.webm",
+    "duration": 5.0,
+    "frames": 120,
+    "bytes": 2244440
   }
 }
