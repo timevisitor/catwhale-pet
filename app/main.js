@@ -28,6 +28,8 @@ const CC = require('./character-card.js');                // 酒馆角色卡（V
 const { createPersonaStore } = require('./persona-store.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 /* 动画片段循环配置：纯 Node 模块（不认 Electron），主进程只负责传 userData 路径 */
 const { createStore: createAnimationLoopStore } = require('./animation-loop-config.js');
+/* 本地媒体演出：SMTC 元数据 + WASAPI 出声进程 → 「在看视频 / 在听音乐」 */
+const { createMediaShow, probeScript, probeCs } = require('./media-show.js');
 
 const SOLID = process.argv.includes('--solid');
 const BENCH = process.argv.includes('--bench');
@@ -1886,6 +1888,62 @@ const animationLoop = createAnimationLoopStore({
 ipcMain.handle('animation-loop:get', () => animationLoop.get());
 ipcMain.handle('animation-loop:set', (_e, cfg) => animationLoop.set(cfg));
 
+/* ---------- 本地媒体演出（听音乐 / 看视频时自动演一段） ----------
+   探测进程默认**不启动**：只有用户在设置里打开开关（settings.json 的 media.show.enabled）
+   才会起那个常驻 PowerShell。默认关 = 默认零开销、零额外进程。
+   推送用 media:state，页面侧逻辑在 web/media-show-page.js。 */
+const mediaShow = createMediaShow({});
+mediaShow.setEmitter((ch, payload) => send(ch, payload));
+
+function mediaCfgFromDisk() {
+  const raw = loadCfgRaw().media || {};
+  const show = raw.show || {};
+  return {
+    enabled: !!show.enabled,
+    pollMs: Number(show.pollMs) || 2000,
+    startMs: Number(show.startMs) || 1200,
+    stopMs: Number(show.stopMs) || 2500,
+  };
+}
+/* 开机按保存的开关恢复；游戏模式生效期间不启动 */
+function bootMediaShow() {
+  const c = mediaCfgFromDisk();
+  mediaShow.apply(c);
+  if (c.enabled) console.log('MEDIA_SHOW ' + JSON.stringify(mediaShow.get()));
+  return c;
+}
+ipcMain.handle('media:get', () => ({ ok: true, state: mediaShow.get(), cfg: mediaCfgFromDisk() }));
+ipcMain.handle('media:set', (_e, patch) => {
+  const cur = loadCfgRaw();
+  const next = Object.assign({}, cur);
+  const media = Object.assign({}, cur.media || {});
+  const show = Object.assign({ enabled: false, pollMs: 2000, startMs: 1200, stopMs: 2500 },
+                             media.show || {}, (patch && patch.show) || {});
+  show.enabled = !!show.enabled;
+  for (const k of ['pollMs', 'startMs', 'stopMs']) {
+    const n = Number(show[k]);
+    if (!Number.isFinite(n) || n <= 0) return { ok: false, error: '参数必须是正数：' + k };
+  }
+  if (show.pollMs < 500) return { ok: false, error: '采样间隔不能小于 500ms' };
+  media.show = show;
+  next.media = media;
+  try {
+    const tmp = CFG_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, CFG_FILE);
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  /* 游戏模式生效时不真的起探测进程，直接把开关记下来，等退出游戏模式再起 */
+  const r = gameMode.active ? { ok: true, state: mediaShow.get() } : mediaShow.apply(show);
+  return Object.assign({ ok: true, cfg: mediaCfgFromDisk() }, r);
+});
+/* 设置面板的「现在试试」：跑一次采样，立刻告诉用户系统认到了什么 */
+ipcMain.handle('media:probeOnce', () => mediaShow.probeOnce());
+ipcMain.handle('media:diag', () => ({
+  ok: true, state: mediaShow.get(), cfg: mediaCfgFromDisk(),
+  script: probeScript(), exists: fs.existsSync(probeScript()), cs: fs.existsSync(probeCs()),
+  selfPid: process.pid,
+}));
+
 /* 皮肤文件变更 → 自动重载页面（编辑器点「应用到桌宠」后无需手动重启）。
    只比对 skin.json 的 mtime+size，2.5s 一次，开销可忽略；重载后位置由 pet-state.json 恢复。 */
 let skinSig = '';
@@ -2087,6 +2145,8 @@ function applyGameMode(on, reason) {
   if (on) {
     unregisterHotkeys();
     try { sysinfo.stop(); sysinfo.stopLight(); } catch (e) {}
+    /* 媒体演出：游戏期间绝不留常驻 PowerShell，也不让页面继续演（反作弊场景要求最少钩子/进程） */
+    try { mediaShow.suspend('gamemode'); } catch (e) {}
     setMouseInteractive(false, true);                 // forward:false → 卸 WH_MOUSE_LL
     if (win && !win.isDestroyed()) {
       try { win.webContents.send('pet:gamemode', { on: true, reason: gameMode.reason }); } catch (e) {}
@@ -2100,6 +2160,8 @@ function applyGameMode(on, reason) {
     }
     setMouseInteractive(false, true);                 // 回到默认：穿透 + forward（页面按命中再打开交互）
     registerHotkeys();
+    /* 退出游戏模式后，按用户开关恢复媒体探测（开关是关的就什么都不做） */
+    try { mediaShow.resume(); } catch (e) {}
   }
   if (tray && !tray.isDestroyed()) {
     try { tray.setToolTip(on ? 'DeepSeek-猫鲸（游戏模式：' + (gameMode.reason || '手动') + '）' : 'DeepSeek-猫鲸'); tray.setContextMenu(buildTrayMenu()); } catch (e) {}
@@ -2147,6 +2209,7 @@ if (!app.requestSingleInstanceLock()) {
     if (bootGuard.delayMs > 0) await new Promise((r) => setTimeout(r, bootGuard.delayMs));
     await createWindow();
     startAgentDock();                              // Agent 看板：失败只记日志，不影响桌宠启动
+    bootMediaShow();                               // 媒体演出：按保存的开关决定要不要起探测进程
     watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();
@@ -2750,7 +2813,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.on('window-all-closed', () => { if (quitting || process.platform !== 'darwin') app.quit(); });
-  app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
+  app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} try { mediaShow.stopAll(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
   app.on('will-quit', () => { cancelWindowDisplaySync(); try { globalShortcut.unregisterAll(); } catch (e) {} });
 }
 

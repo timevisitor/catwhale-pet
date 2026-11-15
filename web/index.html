@@ -522,6 +522,23 @@
   <div class="sbox"><span>⚙</span><b style="font-size:13px">设置</b>
     <span class="scount" id="setStatus"></span></div>
   <div class="sform">
+    <div class="albox" id="mediaBox">
+      <div class="alhead"><span>🎬 媒体演出</span><span class="albadge" id="mediaBadge">未开启</span></div>
+      <label style="margin-top:0"><input type="checkbox" id="mediaEnabled"> 看视频 / 听音乐时，让它跟着演一段</label>
+      <div class="hint">
+        开着时：系统在<b>看视频</b>→ 它侧坐在地上看电视；在<b>听音乐</b>（网易云 / QQ音乐 / Spotify 等）→ 它拿麦克风唱歌。<br>
+        演 3 遍会歇 24 秒再演——免得一直重复同一段像复读机。拖动、菜单、聊天、游戏模式期间自动让路。
+      </div>
+      <div class="hint" id="mediaNow">当前：未检测</div>
+      <div class="albtns">
+        <button id="mediaProbe" type="button">现在试试（读一次系统媒体）</button>
+      </div>
+      <div class="hint" id="mediaProbeOut"></div>
+      <div class="hint">
+        原理：只读<b>本机</b>系统媒体会话（Windows SMTC）与音频输出电平，不读播放内容、不联网、不上传。
+        实测网易云这类应用不注册系统媒体会话，所以另用音频电平判断「谁在出声」，两层结果合并后判定视频还是音乐。
+      </div>
+    </div>
     <div class="albox" id="alBox">
       <div class="alhead"><span>⏱ 动画片段循环</span><span class="albadge" id="alBadge">未开启</span></div>
       <label style="margin-top:0">循环动作（含一次性动作与皮肤动作）</label>
@@ -687,6 +704,7 @@
 <script src="director.js"></script>
 <script src="animation-loop.js"></script>
 <script src="emotion.js"></script>
+<script src="media-show-page.js"></script>
 <script>
 /* =====================================================================
    状态配置。role 决定它在状态机里的优先级角色：
@@ -726,7 +744,12 @@ const DEFAULT_STATES = {
   emo_surprised: { name:'惊讶',   file:'emo_surprised.webm', mode:'once', role:'interact', react:10, scale:1.0 },
   emo_think:     { name:'思考',   file:'emo_think.webm',     mode:'once', role:'interact', react:6,  scale:1.0 },
   emo_proud:     { name:'得意',   file:'emo_proud.webm',     mode:'once', role:'interact', react:8,  scale:1.0 },
-  emo_wave:      { name:'打招呼', file:'emo_wave.webm',      mode:'once', role:'interact', react:12, scale:1.0 }
+  emo_wave:      { name:'打招呼', file:'emo_wave.webm',      mode:'once', role:'interact', react:12, scale:1.0 },
+  /* ↓ 本地媒体演出（2026-11）：系统正在看视频/听音乐时自动演
+       role='media' 不进空闲随机池、也不参与点击互动——凭空唱歌很奇怪。
+       mode='loop'：媒体放多久就循环演多久，节奏由 web/media-show-page.js 控制。 */
+  watch_tv:      { name:'看电视', file:'watch_tv.webm',      mode:'loop', role:'media', scale:1.0 },
+  sing_mic:      { name:'唱歌',   file:'sing_mic.webm',      mode:'loop', role:'media', scale:1.0 }
 };
 const VIDEO_DIR = 'assets/video/';
 const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
@@ -786,6 +809,7 @@ const M = {                       // 各种锁，共同决定该演哪个状态
   chatOpen: false,        // 聊天面板打开（同上）
   chatBusy: false,        // harness 正在处理 → 演"操作中"，优先级高于菜单
   dockState: '',          // Agent 看板报来的最紧急状态（working/speaking/waiting_user…）
+  mediaKind: '',          // 媒体演出：当前该演 'watch_tv' / 'sing_mic'（由 web/media-show-page.js 判定，''=不介入）
   taskCount: 0,
   react: null,                    // 一次性动作(状态 id)
   emote: null,                    // 表情差分（状态 id，emo_*）：聊天回复后演，优先级高于「聊天面板打开」
@@ -834,6 +858,12 @@ function resolveState(){
   }
   if (M.chatBusy) return 'working';                        // 1.5 harness 在干活 → 操作中（比菜单优先）
   if (M.emote && now() < M.emoteUntil) return M.emote;     // 1.55 表情差分：用户刚和它聊完，演几秒情绪（短、直接互动 → 盖住后台 Agent 看板与面板抬手）
+  /* 1.57 媒体演出：用户在放视频/音乐 → 看视频/唱歌。
+     排在 Agent 看板之前：用户「正在做的事」比后台 Agent 的进度更该先被反映出来；
+     排在表情之后：聊天/表情是用户的直接互动，仍优先。
+     M.mediaKind 由 web/media-show-page.js 判定（含「演3遍歇一会儿」的节奏与缺素材降级），
+     它返回 '' 时这里整段不生效，原有优先级链一行未动。 */
+  if (M.mediaKind && states[M.mediaKind] && !states[M.mediaKind].__missing) return M.mediaKind;
   if (M.dockState === 'working' || M.dockState === 'speaking') return 'working';   // 1.6 外部 Agent 在干活
   if (M.dockState === 'waiting_user') return 'stand_arms';                        //     有 Agent 等你确认 → 举手
   if (M.menuOpen || M.searchOpen || M.chatOpen || M.settingsOpen || M.envOpen) return 'stand_arms';   // 2 菜单/搜索/聊天/设置/自检面板打开
@@ -956,6 +986,8 @@ function tick(){
   if (M.gameMode) return;                    // 游戏模式：窗口已隐藏，别再切状态/起播解码
   if (M.react && now() >= M.reactUntil) M.react = null;
   if (M.emote && now() >= M.emoteUntil) M.emote = null;
+  if (MEDIA.m) { try{ mediaTick(); }catch(e){} }   // 媒体演出：数循环遍数 / 结束休息
+  if (SET.open) { try{ mvRender(); }catch(e){} }   // 设置面板开着时实时刷新「当前：…」
   if (!AL.run && !M.emote && opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
     rollLounge();
@@ -2313,6 +2345,7 @@ function openSettings(){
   els.settings.classList.add('show');
   placePanel(els.settings);
   alEnsurePanel();                           // 片段循环区：列动作 + 同步已保存配置
+  mvBind(); mvLoad();                        // 媒体演出区：绑事件 + 读已保存开关
   if (cHostOk() && window.petHost.getConfig){
     try{ window.petHost.focusWindow(true); }catch(e){}
     loadSettingsForm();
@@ -2827,7 +2860,7 @@ async function init(){
   }catch(e){ /* file:// 下 fetch 被禁，用默认配置 */ }
   await loadActiveSkin();
   await initDirector();          // 作息导演层（读 director.json + 起轻量 CPU 采样）
-
+  mediaInit();                   // 媒体演出：接主进程推送（states 已就绪，才能判素材缺失）
   pet = document.getElementById('pet');
   els.shadow  = document.getElementById('shadow');
   els.desktop = document.getElementById('desktop');
@@ -3231,6 +3264,7 @@ function bindEvents(){
     const on = !!(v && v.on);
     M.gameMode = on;
     if (on){
+      try{ if (MEDIA.m) { MEDIA.m.setPaused(true); M.mediaKind = ''; } }catch(e){}   // 媒体演出：游戏期间不演
       try{ closeMenu(); }catch(e){}
       try{ if (S.open) closeSearch(); if (C.open) closeChat(); if (SET.open) closeSettings(); if (ENV.open) closeEnv(); }catch(e){}
       try{ if (window.DockUI && DockUI.close) DockUI.close(); }catch(e){}
@@ -3239,6 +3273,7 @@ function bindEvents(){
       for (const id in videos){ try{ videos[id].pause(); }catch(e){} }
       try{ if (hostBridge && hostBridge.dispose) hostBridge.dispose(); hostBridge = null; }catch(e){}
     } else {
+      try{ if (MEDIA.m) MEDIA.m.setPaused(false); }catch(e){}
       try{ initHostBridge(); }catch(e){}
       cur = null; applyState();
     }
@@ -3766,6 +3801,20 @@ window.petAPI = {
                   remainMs: M.emote ? Math.max(0, Math.round(M.emoteUntil - now())) : 0, cur,
                   available: (EMO.lib ? EMO.lib.EMOTIONS : []).filter((e)=> states[emoteId(e)] && !states[emoteId(e)].__missing) })
   },
+  /* 媒体演出：验收/排障用（--diag 与 CDP 都读这里） */
+  media: {
+    info: ()=> Object.assign(mediaInfo(), { mediaKind: M.mediaKind, cur,
+      statesOk: { watch_tv: !!(states.watch_tv && !states.watch_tv.__missing),
+                  sing_mic: !!(states.sing_mic && !states.sing_mic.__missing) } }),
+    setEnabled: (on)=>{ if (MEDIA.m) MEDIA.m.setEnabled(on); syncMediaState(); mvRender(); return mediaInfo(); },
+    probeOnce: ()=> (window.petHost && window.petHost.media && window.petHost.media.probeOnce)
+                       ? window.petHost.media.probeOnce() : Promise.resolve({ ok:false, error:'无宿主' }),
+    /* 测试注入：模拟主进程推来一条状态，不用真的放音乐 */
+    inject: (st)=>{ if (!MEDIA.m) return null; MEDIA.m.update(st || {}); syncMediaState(); mvRender(); return mediaInfo(); },
+    /* 强制演一次某段（验收用） */
+    force: (kind)=>{ M.mediaKind = kind === 'video' ? 'watch_tv' : kind === 'music' ? 'sing_mic' : '';
+                     applyState(); return M.mediaKind; }
+  },
   setState: (id)=>{ if (states[id]){
     closeMenu(); M.react = null; M.dragging = false; M.menuOpen = false;
     // 回待机是用户的脱困入口：先停掉已开启/预览中的固定片段，再切状态（异步安全持久化 disabled）
@@ -3831,6 +3880,187 @@ function directorDebug(){
     cpuBand: ctx && ctx.cpuBand, cpuEma: ctx && Math.round(ctx.cpuEma), cpuRaw: ctx && +director.cpu.value().toFixed(1),
     freeze: !!(ctx && ctx.freeze), lounge: M.lounge, loungeUntilInMs: Math.round(M.loungeUntil - now())
   };
+}
+
+/* ===================== 本地媒体演出 =====================
+   系统正在放视频/音乐 → 桌宠跟着演「看电视」/「唱歌」。
+   判定在 web/media-show-page.js（无 DOM 依赖，可被 Node 单测）；
+   这里只做三件事：接主进程推送、把结果写进 M.mediaKind、按节奏通知「这段演完了」。
+
+   为什么需要「演一段歇一会儿」：一直看视频时如果无限循环同一段动画，桌宠就变成复读机。
+   media-show-page 负责计数（默认演 3 遍歇 24 秒），休息期内 stateId() 返回 ''，
+   M.mediaKind 被清空 → resolveState 自动回落到原有的空闲行为，看起来才像活的。 */
+const MEDIA = {
+  lib: window.CatwhaleMediaShow || null,
+  m: null,
+  lastPushAt: 0,
+  segStartAt: 0,      // 本段开始时间
+  cycling: 0,         // 我们已经观测到第几次回绕
+};
+function mediaInit(){
+  if (!MEDIA.lib) { console.warn('[media] media-show-page.js 未加载，功能关闭'); return; }
+  MEDIA.m = MEDIA.lib.create({ enabled: false });
+  /* 素材可用性：皮肤里删掉了这两个动作时整个功能降级为不介入 */
+  const map = {};
+  for (const id of ['watch_tv', 'sing_mic']) map[id] = states[id] || null;
+  MEDIA.m.setAvailability(map);
+  if (!MEDIA.m.snapshot().available) console.warn('[media] 缺素材，功能降级：', MEDIA.m.snapshot().missing);
+
+  /* 主进程推送 */
+  if (window.petHost && window.petHost.media && window.petHost.media.onState){
+    window.petHost.media.onState((st)=>{
+      try{
+        MEDIA.lastPushAt = Date.now();
+        const wasKind = MEDIA.m.snapshot().kind;
+        MEDIA.m.update(st);
+        const nowKind = MEDIA.m.snapshot().kind;
+        if (nowKind !== wasKind) MEDIA.cycling = 0;
+        syncMediaState();
+      }catch(e){ console.warn('[media] 推送处理失败', e); }
+    });
+  }
+  /* 读一次已保存的开关（主进程此时可能还没收到页面，主动推一次） */
+  if (window.petHost && window.petHost.media && window.petHost.media.get){
+    window.petHost.media.get().then((r)=>{
+      if (!r || !r.ok) return;
+      MEDIA.m.setEnabled(!!(r.cfg && r.cfg.enabled));
+      syncMediaState();
+    }).catch(()=>{});
+  }
+  syncMediaState();
+}
+/* 把判定结果写进状态机（M.mediaKind），并驱动 applyState */
+function syncMediaState(){
+  if (!MEDIA.m) return '';
+  const id = MEDIA.m.stateId();
+  const prev = M.mediaKind;
+  M.mediaKind = id;
+  if (id && id !== prev){ M.mediaKind = MEDIA.m.noteStart(id) && id; MEDIA.segStartAt = now(); MEDIA.cycling = 0; }
+  if (id !== prev) applyState();
+  return id;
+}
+/* 循环回绕检测：媒体演出用的是 mode:'loop'，浏览器自己回绕。
+   这里按 states[id].duration 估每遍时长，数够一遍就回调 onCycleDone，
+   由 media-show-page 决定「继续演」还是「去休息」。 */
+function mediaTick(){
+  if (!MEDIA.m) return;
+  if (MEDIA.m.tickRest()) { M.mediaKind = ''; applyState(); syncMediaState(); return; }
+  const id = M.mediaKind;
+  if (!id) { syncMediaState(); return; }
+  const dur = (states[id] && states[id].duration) ? states[id].duration : 4.2;
+  const per = Math.max(1500, Math.round(dur * 1000 / (baseRate * stateRate(id))));
+  if (now() - MEDIA.segStartAt < per) return;
+  MEDIA.segStartAt = now();
+  MEDIA.cycling++;
+  const r = MEDIA.m.onCycleDone();
+  if (r === 'rest'){ M.mediaKind = ''; applyState(); }
+  else applyState();
+}
+function mediaInfo(){ return MEDIA.m ? MEDIA.m.snapshot() : { enabled: false, reason: '模块未加载' }; }
+
+/* ===== 媒体演出 · 设置面板（读写 settings.json 的 media.show）=====
+   保存即生效：主进程按 enabled 决定起停那个常驻探测进程，不需要重启桌宠。 */
+const MV = { busy: false, els: {} };
+function mvEls(){
+  if (!MV.els.box){
+    const g=(s)=>document.getElementById(s);
+    MV.els = { box:g('mediaBox'), en:g('mediaEnabled'), badge:g('mediaBadge'),
+               now:g('mediaNow'), probe:g('mediaProbe'), out:g('mediaProbeOut') };
+  }
+  return MV.els;
+}
+function mvRender(){
+  const e = mvEls();
+  if (!e.badge) return;
+  const s = mediaInfo();
+  /* 面板没打开时不重排 DOM：这个函数会被 tick 调，闭着面板白跑没意义 */
+  if (!SET.open && !e.box.__renderedOnce) return;
+  e.box.__renderedOnce = true;
+  e.badge.textContent = s.enabled ? (s.playing ? '演出中' : '已开启') : '未开启';
+  e.badge.className = 'albadge' + (s.enabled ? (s.playing ? ' on' : ' pv') : '');
+  if (e.en){
+    /* busy 期间不要回写 checked：mvToggle 里先置 busy 再发 IPC，此刻 enabled 还是旧值，
+       回写会把用户刚点的勾选弹回去（实测勾上后立刻变回未勾，用户会以为点了没反应）。
+       勾选框的权威状态在 IPC 返回后由下一次 mvRender 写入。 */
+    if (!MV.busy) e.en.checked = !!s.enabled;
+    e.en.disabled = MV.busy;
+  }
+  if (e.now){
+    if (!s.enabled) e.now.textContent = '当前：未开启（开关打开后才会读系统媒体）';
+    else if (!s.available) e.now.textContent = '当前：素材缺失（' + (s.missing||[]).join('、') + '），功能暂不生效';
+    else if (s.playing) {
+      const i = s.info || {};
+      const who = i.artist ? (i.title + ' — ' + i.artist) : (i.title || '');
+      e.now.textContent = '当前：' + (s.label||'') + '（' + (i.app||'') + '）' + (who ? ' · ' + who : '') +
+                          (s.resting ? ' · 正在歇 ' + Math.ceil((s.restLeftMs||0)/1000) + ' 秒' : '');
+    } else e.now.textContent = '当前：没在放媒体';
+  }
+}
+async function mvLoad(){
+  const api = window.petHost && window.petHost.media;
+  const e = mvEls();
+  if (!api || !api.get){ if (e.out) e.out.textContent = '设置要在桌面版里用'; return; }
+  try{
+    const r = await api.get();
+    if (r && r.ok){
+      if (MEDIA.m) MEDIA.m.setEnabled(!!(r.cfg && r.cfg.enabled));
+      syncMediaState();
+    }
+  }catch(err){}
+  mvRender();
+}
+async function mvToggle(on){
+  const api = window.petHost && window.petHost.media;
+  const e = mvEls();
+  if (!api || !api.set) return;
+  MV.busy = true; mvRender();
+  try{
+    const r = await api.set({ show: { enabled: !!on } });
+    if (r && r.ok){
+      if (MEDIA.m) MEDIA.m.setEnabled(!!on);
+      syncMediaState();
+      if (e.out) setMsg('mediaProbeOut', on ? '已开启：正在监视系统媒体' : '已关闭：探测进程已停止', on ? 'ok' : '');
+    } else {
+      if (e.out) setMsg('mediaProbeOut', '保存失败：' + ((r && r.error) || '未知错误'), 'bad');
+      if (e.en) e.en.checked = !on;   // 失败要把勾回退，别显示成已开启
+    }
+  }catch(err){
+    if (e.out) setMsg('mediaProbeOut', '保存失败：' + ((err && err.message) || err), 'bad');
+    if (e.en) e.en.checked = !on;
+  }
+  MV.busy = false; mvRender();
+}
+async function mvProbeOnce(){
+  const api = window.petHost && window.petHost.media;
+  const e = mvEls();
+  if (!api || !api.probeOnce) return;
+  if (e.out) setMsg('mediaProbeOut', '正在读取系统媒体…', '');
+  try{
+    const r = await api.probeOnce();
+    if (!r || !r.ok){ if (e.out) setMsg('mediaProbeOut', '读取失败：' + ((r && r.error) || '未知错误'), 'bad'); return; }
+    const d = r.decision || {};
+    const sess = (r.raw && r.raw.smtc) || [];
+    const was = (r.raw && r.raw.wasapi) || [];
+    let text;
+    if (d.playing && d.kind) {
+      text = '识别到：' + (d.kind === 'video' ? '看视频' : '听音乐') + ' · ' + (d.app || '') +
+             (d.title ? ' · ' + d.title : '') + '（来源 ' + (d.source === 'smtc' ? '系统媒体会话' : '音频输出电平') + '）';
+    } else if (d.playing) {
+      text = '有进程在出声（' + (d.proc || d.app || '未知') + '），但这个应用既不是已知影视也不是已知音乐，暂不演出';
+    } else {
+      text = '没检测到正在播放的媒体（系统媒体会话 ' + sess.length + ' 个，出声进程 ' + was.length + ' 个）';
+    }
+    if (e.out) setMsg('mediaProbeOut', text, d.playing && d.kind ? 'ok' : '');
+  }catch(err){
+    if (e.out) setMsg('mediaProbeOut', '读取失败：' + ((err && err.message) || err), 'bad');
+  }
+}
+function mvBind(){
+  const e = mvEls();
+  if (!e.en || e.en.__bound) return;
+  e.en.__bound = true;
+  e.en.addEventListener('change', ()=> mvToggle(!!e.en.checked));
+  e.probe.addEventListener('click', ()=> mvProbeOnce());
 }
 
 /* Agent 看板 → 桌宠状态：只在"最紧急状态"变化时演一次一次性动作，

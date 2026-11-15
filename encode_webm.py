@@ -64,6 +64,12 @@ STATE_MAP = {
     "思考": dict(id="emo_think", name="思考", mode="once", role="interact", scale=1.00, react=6),
     "得意": dict(id="emo_proud", name="得意", mode="once", role="interact", scale=1.00, react=8),
     "打招呼": dict(id="emo_wave", name="打招呼", mode="once", role="interact", scale=1.00, react=12),
+    # ── 本地媒体演出（2026-11）：系统媒体播放时自动演 ──
+    # role=media：只有「检测到在看视频/在听音乐」时才由状态机主动选中，
+    # 不进空闲随机池、也不参与点击互动（凭空唱歌很奇怪）。
+    # 都是 loop：媒体放多久就循环演多久（页面按「演 3 遍歇 24 秒」的节奏控制）。
+    "看电视": dict(id="watch_tv", name="看电视", mode="loop", role="media", scale=1.00),
+    "唱歌":   dict(id="sing_mic", name="唱歌",   mode="loop", role="media", scale=1.00),
 }
 
 
