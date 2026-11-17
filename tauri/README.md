@@ -1,21 +1,50 @@
 # 猫鲸桌宠 · Tauri (Rust) 版
 
+> 这是与 Electron 主线**并行**的 Rust 分支：功能对齐 v0.6.1，独立构建、独立运行，
+> 不改动主线的 `app/`、`web/`、`skin-editor/`。主线仍在 `main`，本目录只存在于 `feat/tauri-rust`。
+
 当前 exe 为 **5.23 MiB（5,488,640 字节）**。SAO 菜单已按原版重做为四列、五分类 21 项；文件搜索和聊天使用原版风格独立浮窗，综合面板保留系统监控、环境自检、角色卡和 Agent 看板等功能。
 
 双击 `catwhale-poc.exe` 运行。目标机需要 WebView2 Runtime，Windows 11 通常已自带。
 
-![最终四列菜单验收截图](shots/verify4_menu.png)
+![最终四列菜单验收截图](reference/shots/verify4_menu.png)
 
-## 一、运行时必须保留的文件
+## 一、目录结构
+
+```text
+tauri/
+├─ src-tauri/               Rust 源码（13 个模块，约 1.2 万行）
+│  ├─ src/main.rs           窗口/托盘/穿透/皮肤/行为引擎
+│  ├─ src/media.rs          媒体演出探测（系统媒体会话 + 音频电平）
+│  ├─ src/chat.rs           DeepSeek 聊天（DPAPI 加密凭据）
+│  ├─ src/harness.rs        DeepSeek Harness 子进程
+│  ├─ src/dock.rs           Agent 看板（127.0.0.1:8770/state）
+│  ├─ src/persona.rs        角色卡
+│  ├─ src/sysinfo.rs        CPU/GPU/内存/硬盘读数
+│  ├─ src/everything.rs     Everything 搜索
+│  ├─ src/boot_guard.rs     启动看门狗（L1/L2/L3 降级档）
+│  ├─ src/gamemode.rs       游戏模式
+│  ├─ src/envcheck.rs       环境自检
+│  ├─ src/feature_config.rs 功能开关
+│  └─ src/update.rs         更新检查
+├─ frontend/                五个 HTML（构建时内嵌进 exe）
+├─ scripts/                 verify4.sh 验收基线 + ev.py CDP 选择器
+├─ reference/shots/         验收截图
+└─ build.sh                 构建入口
+```
+
+## 一·二、运行时必须保留的文件
+
+发布形态下 exe 旁需要这些文件：
 
 ```text
 catwhale-poc.exe          主程序
-WebView2Loader.dll        必须与 exe 同目录
-assets/es.exe             Everything 搜索组件
-frontend/assets/          26 个外置内置回落 WebM
+WebView2Loader.dll        必须与 exe 同目录（Tauri 依赖）
+assets/es.exe             Everything 搜索组件（不入库，发布包内附）
+frontend/assets/          26 个外置内置回落 WebM（复用主线 web/assets/video，逐字节相同）
 ```
 
-HTML 已嵌入 exe，但回落视频没有内嵌。移动程序时请移动整个 `tauri-pet` 目录，或至少保留上面四组运行文件；`src-tauri`、验收脚本和截图不参与运行。
+HTML 已嵌入 exe，回落视频没有内嵌（内嵌会让 PE 增加约 65 MiB）。移动程序时请移动整个目录。
 
 最终 exe SHA-256：
 
@@ -95,27 +124,30 @@ python ev.py C 'window.__chatTest.ready'
 
 ## 六、从源码构建
 
-构建工作区必须保持纯 ASCII 路径：
-
-```text
-H:\_rust\catwhale-poc
-```
-
-运行：
+要求：Rust stable + MinGW-w64（GNU target），Windows x64。
 
 ```bash
-bash /h/_rust/catwhale-poc/build.sh
+# 1) 回落视频从主线复制（仓库中不重复存一份）
+mkdir -p tauri/frontend/assets
+cp web/assets/video/*.webm tauri/frontend/assets/
+
+# 2) 构建（build.sh 会把五个 HTML 复制到 frontend-embed 供内嵌）
+cd tauri && bash build.sh
 ```
 
-工具链和 target 均位于 `H:\_rust\catwhale-poc\toolchain`，不占用 C 盘。release 已配置尺寸优化、LTO 和 strip。
+产物在 `src-tauri/target/release/`。`build.sh` 默认把工具链和 target 放在本机 H 盘路径下，
+在本仓库直接构建时请改掉脚本头部的 `RUSTUP_HOME / CARGO_HOME / CARGO_TARGET_DIR` 三行，
+或直接用：
 
-`build.sh` 只把 index、sao、panel、search、chat 五个 HTML 复制到 `frontend-embed` 供 Tauri 内嵌；26 个 WebM 外置到 exe 旁 `frontend/assets`，同时复制 `assets/es.exe`。不要把整个 `frontend` 改回 `frontendDist`，否则视频会进入 PE，使 exe 增加约 65 MiB。
+```bash
+cd tauri/src-tauri && cargo build --release
+```
 
-构建完成后，将新 exe、DLL、源码和外置资源同步到交付目录，并重新运行 `verify4.sh`。不要通过重命名旧文件冒充新构建。
+**构建路径必须是纯 ASCII**：mingw 的 ld 处理中文路径会报 `cannot open output file`。
 
 ## 七、维护注意事项
 
-- 不修改 `H:\hermes project\桌宠` 下仍在使用的 Electron 版。
+- 本分支不改动主线 Electron 版（`app/`、`web/`、`skin-editor/`）；两条线共用 `%APPDATA%\桌宠\skins` 皮肤目录。
 - main/sao 使用 NOACTIVATE；不要在两个窗口间主动 `SetFocus` 或 `SetForegroundWindow`。
 - Esc 仅在菜单打开时由键盘钩子消费，其他按键放行。
 - `capabilities/default.json` 必须覆盖 `main`、`sao`、`panel`、`search`、`chat`。

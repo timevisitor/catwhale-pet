@@ -6,7 +6,7 @@ main 与预建 sao 是两个 page target，必须按 URL 选择。调试端口�
 IPv4 127.0.0.1:9223 或 IPv6 [::1]:9223，这里自动探测，避免绑定顺序影响验收。"""
 import subprocess, os, sys, json, urllib.request
 
-CDP = r"H:\Hermes交付\abyssal-garden-study\tools\cdp.js"
+CDP = os.environ.get("CDP_JS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cdp.js"))
 mode, arg = sys.argv[1], sys.argv[2]
 if mode in ("M", "shotM"):
     pat = "tauri.localhost/$"
