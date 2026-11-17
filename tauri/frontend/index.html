@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>catwhale-poc</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
+    -webkit-user-select:none;user-select:none}
+  #stage{position:fixed;inset:0;display:flex;align-items:flex-end;justify-content:center;cursor:grab}
+  #stage.dragging{cursor:grabbing}
+  body.demo-background{background:#1b2432}
+  #stage video{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:contain;
+    opacity:0;transition:opacity .08s linear;pointer-events:none;
+    transform-origin:50% 96.67%;   /* 缩放基准＝脚底基线(1450/1500)，放大不会离地、也不会把脚裁掉 */
+    filter:drop-shadow(0 6px 10px rgba(0,0,0,.35))}
+  #stage video.on{opacity:1}
+  #shadow{position:fixed;left:50%;bottom:2px;transform:translateX(-50%);width:62%;height:26px;
+    pointer-events:none;opacity:0;transition:opacity .18s;
+    background:radial-gradient(closest-side,rgba(0,0,0,.42),rgba(0,0,0,0) 100%);border-radius:50%}
+  #shadow.on{opacity:1}
+  #bar{position:fixed;left:50%;bottom:8px;transform:translateX(-50%) translateY(6px);
+    display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:12px;
+    background:rgba(18,24,34,.82);border:1px solid rgba(125,211,252,.28);
+    box-shadow:0 6px 20px rgba(0,0,0,.35);opacity:0;pointer-events:none;
+    transition:opacity .16s ease,transform .16s ease;
+    font:12px/1 "Microsoft YaHei",system-ui,sans-serif;color:#cfe9ff;white-space:nowrap}
+  #bar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+  #bar input[type=range]{width:110px;accent-color:#7dd3fc;cursor:pointer}
+  #bar .val{min-width:30px;text-align:center;color:#7dd3fc;font-variant-numeric:tabular-nums}
+  #bar button{all:unset;cursor:pointer;width:20px;height:20px;display:grid;place-items:center;
+    border-radius:6px;color:#9fb6cd;font-size:14px;line-height:1}
+  #bar button:hover{background:rgba(125,211,252,.16);color:#e6f4ff}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="vA" playsinline muted preload="auto" crossorigin="anonymous"></video>
+  <video id="vB" playsinline muted preload="auto" crossorigin="anonymous"></video>
+</div>
+<div id="shadow"></div>
+<div id="bar">
+  <input id="sz" type="range" min="120" max="620" step="20" value="340">
+  <span class="val" id="szv">340</span>
+  <button id="close" title="退出">✕</button>
+</div>
+
+<script>
+'use strict';
+const T = window.__TAURI__;
+const invoke = (c, a) => T.core.invoke(c, a);
+const now = () => Date.now();
+
+/* ============================ 状态表 ============================
+   优先用 %APPDATA%\桌宠\skins 里的皮肤；读不到就回落到内置 assets。 */
+let states = {};
+let order = [];
+let skinName = '内置', builtinDir = '';
+
+const BUILTIN = {
+  idle:          { name: '待机',   file: 'assets/idle.webm',          mode: 'loop', role: 'idle',     weight: 20 },
+  emo_happy:     { name: '开心',   file: 'assets/emo_happy.webm',     mode: 'once', role: 'idle_act', weight: 20, react: 20 },
+  emo_shy:       { name: '害羞',   file: 'assets/emo_shy.webm',       mode: 'once', role: 'idle_act', weight: 15, react: 15 },
+  emo_angry:     { name: '生气',   file: 'assets/emo_angry.webm',     mode: 'once', role: 'idle_act', weight: 12, react: 15 },
+  emo_sad:       { name: '难过',   file: 'assets/emo_sad.webm',       mode: 'once', role: 'idle_act', weight: 12, react: 15 },
+  emo_surprised: { name: '惊讶',   file: 'assets/emo_surprised.webm', mode: 'once', role: 'idle_act', weight: 12, react: 15 },
+  emo_think:     { name: '思考',   file: 'assets/emo_think.webm',     mode: 'once', role: 'idle_act', weight: 12, react: 15 },
+  emo_proud:     { name: '自豪',   file: 'assets/emo_proud.webm',     mode: 'once', role: 'idle_act', weight: 12, react: 15 },
+  emo_wave:      { name: '挥手',   file: 'assets/emo_wave.webm',      mode: 'once', role: 'idle_act', weight: 20, react: 20 },
+  dizzy:         { name: '眩晕',   file: 'assets/dizzy.webm',         mode: 'once', role: 'idle_act', weight: 15, react: 10 },
+  grabbed:       { name: '被抓住', file: 'assets/grabbed.webm',       mode: 'loop', role: 'drag',     weight: 10 },
+  drop:          { name: '松手落下', file: 'assets/drop.webm',         mode: 'once', role: 'release',  rate: 2 },
+  tail_open:     { name: '睁眼摇尾', file: 'assets/tail_open.webm',     mode: 'loop', role: 'lounge',   weight: 35, react: 40 },
+  tail_closed:   { name: '闭眼摇尾', file: 'assets/tail_closed.webm',   mode: 'loop', role: 'lounge',   weight: 40, react: 60 },
+  eat:           { name: '吃米饭', file: 'assets/eat.webm',             mode: 'once', role: 'idle_act', weight: 20, react: 20, rate: 2 },
+  sit_chair:     { name: '坐椅摆腿', file: 'assets/sit_chair.webm',     mode: 'loop', role: 'lounge',   weight: 15, react: 20 },
+  doze:          { name: '站着打盹', file: 'assets/doze.webm',          mode: 'loop', role: 'lounge',   weight: 20, react: 30 },
+  big_bowl:      { name: '大盆吃饭', file: 'assets/big_bowl.webm',      mode: 'once', role: 'idle_act', weight: 15, rate: 1.5 },
+  jump_high:     { name: '原地跳高', file: 'assets/jump_high.webm',     mode: 'once', role: 'idle_act', weight: 15 },
+  stretch:       { name: '伸懒腰', file: 'assets/stretch.webm',         mode: 'once', role: 'idle_act', weight: 25, react: 15 },
+  read:          { name: '看书',   file: 'assets/read.webm',            mode: 'loop', role: 'lounge',   weight: 20, react: 20 },
+  run:           { name: '跑动',   file: 'assets/run.webm',             mode: 'loop', role: 'lounge',   weight: 12 },
+  working:       { name: '工作',   file: 'assets/working.webm',         mode: 'loop', role: 'work',     weight: 12 },
+  sing_mic:      { name: '唱歌',   file: 'assets/sing_mic.webm',      mode: 'once', role: 'media',    weight: 0 },
+  watch_tv:      { name: '看视频', file: 'assets/watch_tv.webm',      mode: 'once', role: 'media',    weight: 0 },
+  stand_arms:    { name: '菜单',   file: 'assets/stand_arms.webm',    mode: 'loop', role: 'menu',     weight: 0 }
+};
+
+function fileUrl(dir, rel) {
+  if (!dir) return rel;
+  const sep = (dir.endsWith('\\') || dir.endsWith('/')) ? '' : '\\';
+  const abs = dir + sep + rel.replace(/\//g, '\\');
+  try { return T.core.convertFileSrc(abs); } catch (e) { return rel; }
+}
+
+function buildStates(actions, dir, out) {
+  out = out || {};
+  for (const id in actions) {
+    if (!Object.prototype.hasOwnProperty.call(actions, id)) continue;
+    const a = actions[id] || {};
+    if (!a.file) continue;
+    out[id] = {
+      id, name: a.name || id,
+      url: fileUrl(dir, a.file),
+      mode: a.mode === 'once' ? 'once' : 'loop',
+      role: a.role || 'lounge',
+      weight: typeof a.weight === 'number' ? a.weight : 20,
+      react: typeof a.react === 'number' ? a.react : null,
+      rate: (typeof a.rate === 'number' && a.rate > 0) ? a.rate : 1,
+      scale: typeof a.scale === 'number' ? a.scale : 1,
+      scaleX: typeof a.scaleX === 'number' ? a.scaleX : 1,
+      scaleY: typeof a.scaleY === 'number' ? a.scaleY : 1,
+      offX: typeof a.offX === 'number' ? a.offX : 0,
+      offY: typeof a.offY === 'number' ? a.offY : 0,
+      duration: typeof a.duration === 'number' ? a.duration : 4.0,
+      w: a.width || 900, h: a.height || 1500
+    };
+  }
+  return out;
+}
+
+let skinLoading = false, skinPending = false;
+async function loadSkin() {
+  if (skinLoading) { skinPending = true; return; }
+  skinLoading = true;
+  try {
+    let r = null;
+    try { r = await invoke('skin_load'); } catch (e) { console.warn('skin_load failed', e); }
+    if (!builtinDir) {
+      try { builtinDir = await invoke('builtin_asset_dir'); } catch (e) { console.warn('builtin_asset_dir failed', e); }
+    }
+    // 内置动作与皮肤动作逐项合并。内置 WebM 从 exe 旁 frontend/assets 外置读取，
+    // 不进入 Tauri 内嵌资源；用户皮肤仍使用自己的绝对目录。
+    states = buildStates(BUILTIN, builtinDir);
+    if (r && r.ok && r.actions && Object.keys(r.actions).length) {
+      buildStates(r.actions, r.dir, states);
+      skinName = r.name || r.slug;
+    } else {
+      skinName = '内置';
+    }
+    failed.clear();
+    lastGridSig = '';
+    order = Object.keys(states);
+    window.__states = states;
+    await loadDirector();
+    const base = states.idle || states[order[0]];
+    if (base && base.w && base.h) {
+      try { await invoke('set_aspect', { a: base.w / base.h }); } catch (e) {}
+    }
+    console.log('[skin]', skinName, '| actions:', order.length,
+      '| roles:', [...new Set(order.map(i => states[i].role))].join(','));
+    cur = null;
+    M.react = null;
+    M.lounge = states.idle ? 'idle' : order[0];
+    if (!M.gameMode) play(resolveState(), { force: true, once: isMediaPerformance(resolveState()) });
+    publishRect();
+  } finally {
+    skinLoading = false;
+  }
+}
+
+function userActionActive() {
+  return M.dragging || M.menuOpen || !!(M.react && now() < M.reactUntil) ||
+    !!(M.taskId && now() < M.taskUntil);
+}
+function requestSkinLoad() {
+  skinPending = true;
+  if (skinLoading || M.gameMode || userActionActive()) return;
+  skinPending = false;
+  loadSkin().catch(function (e) { console.warn('skin reload failed', e); });
+}
+
+/* ============================ 播放（双缓冲，避免切状态闪黑） ============================ */
+const vids = [document.getElementById('vA'), document.getElementById('vB')];
+let vidIdx = 0;
+let cur = null, playSeq = 0;
+const failed = new Set();
+let animationLoop = { enabled: false, actionId: 'idle', start: 0, end: 2 };
+
+function activeVideo() { return vids[vidIdx]; }
+
+function segmentFor(id) {
+  const c = animationLoop;
+  if (M.gameMode || isMediaPerformance(id) || !c || !c.enabled || c.actionId !== id) return null;
+  const start = Number(c.start), end = Number(c.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return null;
+  return { start: start, end: end };
+}
+
+function stopSegmentLoop(v) {
+  if (!v) return;
+  if (v._loopFrame != null && typeof v.cancelVideoFrameCallback === 'function') {
+    try { v.cancelVideoFrameCallback(v._loopFrame); } catch (e) {}
+  }
+  v._loopFrame = null;
+  if (v._loopTimer != null) clearInterval(v._loopTimer);
+  v._loopTimer = null;
+  if (v._seekTimer != null) clearTimeout(v._seekTimer);
+  v._seekTimer = null;
+  v._segmentSeeking = false;
+  v._segment = null;
+}
+
+function primeSegment(v) {
+  const seg = v._segment;
+  if (!seg || v._segmentPrimed || v.readyState < 1) return;
+  let start = seg.start;
+  if (Number.isFinite(v.duration) && v.duration > 0) start = Math.min(start, Math.max(0, v.duration - 0.05));
+  try { v.currentTime = start; } catch (e) {}
+  v._segmentPrimed = true;
+}
+
+function seekSegment(v) {
+  const seg = v._segment;
+  if (!seg || v._segmentSeeking || v.readyState < 1) return;
+  let start = seg.start;
+  if (Number.isFinite(v.duration) && v.duration > 0) start = Math.min(start, Math.max(0, v.duration - 0.05));
+  v._segmentSeeking = true;
+  try { v.currentTime = start; } catch (e) { v._segmentSeeking = false; return; }
+  if (v._seekTimer != null) clearTimeout(v._seekTimer);
+  v._seekTimer = setTimeout(function () { v._segmentSeeking = false; }, 180);
+  if (!M.gameMode && v.paused) {
+    const p = v.play();
+    if (p && p.catch) p.catch(function () {});
+  }
+}
+
+function checkSegment(v) {
+  const seg = v._segment;
+  if (!seg || v._segmentSeeking || v.readyState < 1) return;
+  const t = v.currentTime;
+  // 预留约两帧，减少越过 end 后才 seek 造成的可见跳帧。
+  if (t >= seg.end - 0.034 || t < seg.start - 0.25) seekSegment(v);
+}
+
+function fallbackSegmentLoop(v) {
+  if (v._loopTimer != null) clearInterval(v._loopTimer);
+  v._loopTimer = setInterval(function () {
+    if (v !== activeVideo() || !v._segment || M.gameMode) return;
+    checkSegment(v);
+  }, 40);
+}
+
+function armFrameLoop(v) {
+  if (v !== activeVideo() || !v._segment || M.gameMode) return;
+  try {
+    v._loopFrame = v.requestVideoFrameCallback(function () {
+      v._loopFrame = null;
+      if (v !== activeVideo() || !v._segment || M.gameMode) return;
+      checkSegment(v);
+      armFrameLoop(v);
+    });
+  } catch (e) {
+    v._loopFrame = null;
+    fallbackSegmentLoop(v);
+  }
+}
+
+function startSegmentLoop(v) {
+  if (!v._segment || M.gameMode) return;
+  if (typeof v.requestVideoFrameCallback === 'function') armFrameLoop(v);
+  else fallbackSegmentLoop(v);
+}
+
+function play(id, opts) {
+  opts = opts || {};
+  let st = states[id];
+  if (!st) return;
+  if (failed.has(id) && id !== 'idle') {
+    if (states.idle && cur !== 'idle') play('idle', { force: true });
+    return;
+  }
+  if (id === cur && !opts.force) return;
+  const prev = vids[vidIdx];
+  const next = vids[1 - vidIdx];
+  const token = ++playSeq;
+  cur = id;
+  stopSegmentLoop(next);
+  next._playToken = token;
+  next._segment = segmentFor(id);
+  next._segmentPrimed = false;
+
+  next.loop = !next._segment && !opts.once && st.mode === 'loop';
+  next.playbackRate = st.rate;
+  next.src = st.url;
+  next._stateId = id;
+  applyVideoTransform(next, st);
+
+  let activated = false, finished = false;
+  const cleanup = function () { next.removeEventListener('canplay', go); };
+  const fail = function () {
+    if (finished || token !== next._playToken || cur !== id || M.gameMode) return;
+    finished = true;
+    cleanup();
+    failed.add(id);
+    stopSegmentLoop(next);
+    next._playFail = null;
+    // 不主动撤掉当前可见帧；idle 在另一缓冲区可播后再交叉淡化。
+    if (M.react === id) M.react = null;
+    if (M.taskId === id) { M.taskId = null; M.taskSeq++; }
+    if (M.media && M.media.id === id) {
+      M.media.repeats = 3;
+      M.media.restUntil = now() + mediaRestDelay();
+    }
+    cur = null;
+    if (id !== 'idle' && states.idle) play('idle', { force: true });
+  };
+  const go = function () {
+    if (activated || finished || token !== next._playToken || cur !== id) return;
+    activated = true;
+    cleanup();
+    primeSegment(next);
+    next.classList.add('on');
+    if (prev !== next) {
+      prev.classList.remove('on');
+      prev._playFail = null;
+      stopSegmentLoop(prev);
+      prev.pause();
+    }
+    vidIdx = 1 - vidIdx;
+    next._playFail = fail;
+    if (M.gameMode) { next.pause(); return; }
+    startSegmentLoop(next);
+    const p = next.play();
+    if (p && p.catch) p.catch(fail);
+  };
+  next._playFail = fail;
+  next.addEventListener('canplay', go);
+  if (next.readyState >= 2) go();
+  else {
+    try { next.load(); } catch (e) { fail(); }
+  }
+  publishRect();
+}
+
+/* 与原版 videoTransform 同构：整体缩放 × 分轴比例 + 百分比平移。
+   菜单在角色右侧时水平翻转角色，并沿用原版的角色中轴而非元素中心。 */
+const MIRROR_AXIS = 413 / 900;
+function videoTransform(st) {
+  const sc = (st.scale != null) ? st.scale : 1;
+  const sx = sc * (st.scaleX != null ? st.scaleX : 1);
+  const sy = sc * (st.scaleY != null ? st.scaleY : 1);
+  const ox = st.offX || 0, oy = st.offY || 0;
+  let t = '';
+  if (ox || oy) t += 'translate(' + ox + '%,' + oy + '%) ';
+  t += 'scaleX(' + (M.petMirror ? -sx : sx) + ') scaleY(' + sy + ')';
+  return t;
+}
+
+function applyVideoTransform(v, st) {
+  v.style.transform = videoTransform(st);
+  v.style.transformOrigin = (M.petMirror ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
+}
+
+function applyVideoMirror() {
+  for (const v of vids) {
+    const st = states[v._stateId];
+    if (st) applyVideoTransform(v, st);
+  }
+  lastGridSig = '';
+}
+
+function setPetMirror(on) {
+  on = !!on;
+  if (M.petMirror === on) return;
+  M.petMirror = on;
+  applyVideoMirror();
+  // 镜像不仅改变画面，也立即重采 alpha 网格，保证点击区域跟角色一起翻转。
+  setTimeout(sampleHitGrid, 0);
+}
+
+function playOnce(id, user) {
+  const st = states[id];
+  if (!st || failed.has(id) || M.gameMode) return false;
+  M.react = id;
+  M.reactUser = !!user;
+  const ms = Math.round((st.duration || 4) * 1000 / (st.rate || 1));
+  M.reactUntil = now() + ms;
+  if (user) M.lastInteract = now();
+  play(id, { force: true, once: true });
+  return true;
+}
+
+vids.forEach(function (v) {
+  v.addEventListener('error', function () { if (typeof v._playFail === 'function') v._playFail(); });
+  v.addEventListener('loadedmetadata', function () { primeSegment(v); });
+  v.addEventListener('seeked', function () { v._segmentSeeking = false; });
+  v.addEventListener('ended', function () {
+    if (v !== activeVideo()) return;
+    if (v._segment) {
+      seekSegment(v);
+      return;
+    }
+    if (isMediaPerformance(cur)) {
+      M.media.repeats++;
+      if (M.media.repeats < 3) {
+        play(cur, { force: true, once: true });
+      } else {
+        M.media.restUntil = now() + mediaRestDelay();
+        M.lounge = states.idle ? 'idle' : order[0];
+        play(resolveState(), { force: true });
+      }
+      return;
+    }
+    if (M.react === cur) M.react = null;
+    tick(true);
+  });
+});
+
+/* ============================ 行为引擎（复刻 Electron 版优先级链） ============================ */
+const IDLE_HOLD_MS = 12000;
+const LOUNGE_MIN_MS = 7000;
+const LOUNGE_MAX_MS = 14000;
+const IDLE_ACT_CHANCE = 0.35;
+
+const M = {
+  dragging: false,
+  lastInteract: now(),
+  lounge: 'idle',
+  loungeUntil: 0,
+  react: null,
+  reactUser: false,
+  reactUntil: 0,
+  menuOpen: false,
+  petMirror: false,
+  saoMirror: false,
+  floatMirror: false,
+  taskId: null,
+  taskUntil: 0,
+  taskSeq: 0,
+  media: { playing: false, kind: null, id: null, repeats: 0, restUntil: 0 },
+  gameMode: false,
+  chatEmote: true,
+  opts: { auto: true }
+};
+
+function mediaRestDelay() { return 24000 + Math.floor(Math.random() * 6001); }
+function isMediaPerformance(id) {
+  return !!(id && M.media && M.media.playing && M.media.id === id &&
+    M.media.repeats < 3 && (!M.media.restUntil || now() >= M.media.restUntil));
+}
+function clearMedia() {
+  M.media.playing = false;
+  M.media.kind = null;
+  M.media.id = null;
+  M.media.repeats = 0;
+  M.media.restUntil = 0;
+}
+
+const PHASES = [
+  { id: 'dawn',      from: 360,  to: 540  },
+  { id: 'morning',   from: 540,  to: 690  },
+  { id: 'lunch',     from: 690,  to: 810  },
+  { id: 'afternoon', from: 810,  to: 1050 },
+  { id: 'evening',   from: 1050, to: 1170 },
+  { id: 'night',     from: 1170, to: 1380 }
+];
+const WEIGHTS = {
+  dawn:      { tail_open: 3, run: 2.4, stretch: 2.4, read: 1, jump_high: 0.6, doze: 0.2, working: 0.2, sit_chair: 0.4, eat: 0.15, big_bowl: 0.1 },
+  morning:   { working: 2.5, read: 2, run: 1.2, stretch: 0.8, sit_chair: 1.5, tail_open: 0.8, doze: 0.25, eat: 0.1, big_bowl: 0.1, jump_high: 0.6 },
+  lunch:     { eat: 5, big_bowl: 4, doze: 2, idle: 1.2, sit_chair: 0.6, tail_open: 0.6, run: 0.3, jump_high: 0.4 },
+  afternoon: { tail_open: 2, tail_closed: 2, sit_chair: 1.5, read: 1.2, run: 0.6, stretch: 0.8, working: 1, doze: 0.8, eat: 0.25, big_bowl: 0.15, jump_high: 0.6 },
+  evening:   { jump_high: 4.5, tail_open: 3, run: 2, stretch: 2, doze: 0.2, working: 0.3, eat: 0.3, big_bowl: 0.15, sit_chair: 0.8 },
+  night:     { doze: 3, tail_closed: 2, sit_chair: 1, read: 0.6, tail_open: 0.8, working: 0.4, stretch: 0.3, run: 0.15, jump_high: 0.2, eat: 0.25, big_bowl: 0.15 },
+  late:      { doze: 3, tail_closed: 2.4, idle: 3, sit_chair: 0.4, tail_open: 0.2, working: 0.05, read: 0.2, stretch: 0, run: 0, jump_high: 0, eat: 0, big_bowl: 0 }
+};
+const TEMPO = { dawn: 1.2, morning: 1.0, lunch: 0.8, afternoon: 0.9, evening: 1.4, night: 0.7, late: 0.35 };
+const BASE_WEIGHTS = JSON.parse(JSON.stringify(WEIGHTS));
+const BASE_TEMPO = Object.assign({}, TEMPO);
+
+async function loadDirector() {
+  let cfg = null;
+  try {
+    const r = await invoke('director_get');
+    if (r && r.ok && r.cfg) cfg = r.cfg;
+  } catch (e) {}
+  if (cfg && cfg.director && typeof cfg.director === 'object') cfg = cfg.director;
+  for (const phase in BASE_WEIGHTS) {
+    WEIGHTS[phase] = Object.assign({}, BASE_WEIGHTS[phase]);
+    TEMPO[phase] = BASE_TEMPO[phase];
+  }
+  const overrides = cfg && cfg.weights;
+  if (overrides && typeof overrides === 'object') {
+    for (const phase in overrides) {
+      if (!WEIGHTS[phase] || !overrides[phase] || typeof overrides[phase] !== 'object') continue;
+      for (const id in overrides[phase]) {
+        const w = Number(overrides[phase][id]);
+        if (Number.isFinite(w)) WEIGHTS[phase][id] = w;
+      }
+    }
+  }
+  const tempo = cfg && cfg.tempo;
+  if (typeof tempo === 'number' && Number.isFinite(tempo) && tempo > 0) {
+    for (const phase in TEMPO) TEMPO[phase] = tempo;
+  } else if (tempo && typeof tempo === 'object') {
+    for (const phase in tempo) {
+      const t = Number(tempo[phase]);
+      if (TEMPO[phase] !== undefined && Number.isFinite(t) && t > 0) TEMPO[phase] = t;
+    }
+  }
+  ctxAt = -1e9;
+}
+
+function phaseNow() {
+  const d = new Date();
+  const t = d.getHours() * 60 + d.getMinutes();
+  for (let i = 0; i < PHASES.length; i++) {
+    const p = PHASES[i];
+    if (t >= p.from && t < p.to) return p.id;
+  }
+  return 'late';
+}
+function mult(id, phase) {
+  const w = WEIGHTS[phase] || {};
+  return (w[id] === undefined) ? 1 : w[id];
+}
+function tempoNow() { return TEMPO[phaseNow()] || 1; }
+
+let ctxAt = -1e9, ctxCache = null;
+function ctx() {
+  if (now() - ctxAt < 5000) return ctxCache;
+  ctxAt = now();
+  ctxCache = { phase: phaseNow(), tempo: tempoNow() };
+  return ctxCache;
+}
+
+function pickWeighted(list) {
+  let total = 0;
+  for (let i = 0; i < list.length; i++) total += list[i].w;
+  if (total <= 0) return null;
+  let r = Math.random() * total;
+  for (let i = 0; i < list.length; i++) { r -= list[i].w; if (r <= 0) return list[i].id; }
+  return list.length ? list[list.length - 1].id : null;
+}
+
+function usable(id) { return !!(states[id] && states[id].url && !failed.has(id)); }
+function hasRole(role) { return order.some(function (i) { return states[i].role === role && usable(i); }); }
+function byRole(role) {
+  for (let i = 0; i < order.length; i++) if (states[order[i]].role === role && usable(order[i])) return order[i];
+  return null;
+}
+function idleState() { return states.idle ? 'idle' : order[0]; }
+
+function resolveState() {
+  if (M.gameMode) return idleState();
+  if (M.dragging) return byRole('drag') || idleState();
+  if (M.taskId && now() < M.taskUntil && usable(M.taskId)) return M.taskId;
+  // 固定表情、任务和拖动均高于菜单；stand_arms 不会截断这些动作。
+  if (M.react && now() < M.reactUntil && usable(M.react)) return M.react;
+  if (M.menuOpen) return byRole('menu') || idleState();
+  // 媒体演出只替换普通 idle：三遍后休息 24~30 秒，期间也不抽自动动作。
+  if (M.media.playing) {
+    if (isMediaPerformance(M.media.id) && usable(M.media.id)) return M.media.id;
+    return idleState();
+  }
+  if (!M.opts.auto) return idleState();
+  if (now() - M.lastInteract < IDLE_HOLD_MS) return idleState();
+  if (M.lounge && usable(M.lounge)) return M.lounge;
+  return idleState();
+}
+
+function loungeSpan() {
+  const t = (ctx().tempo || 1);
+  return (LOUNGE_MIN_MS + Math.random() * (LOUNGE_MAX_MS - LOUNGE_MIN_MS)) / t;
+}
+
+function rollLounge() {
+  const c = ctx();
+  const acts = [];
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i], st = states[id];
+    if (st.role !== 'idle_act' || !usable(id)) continue;
+    const m = mult(id, c.phase);
+    if (m <= 0) continue;
+    acts.push({ id: id, w: st.weight * m });
+  }
+  if (acts.length && Math.random() < IDLE_ACT_CHANCE) {
+    const pick = pickWeighted(acts);
+    if (pick) {
+      M.loungeUntil = now() + loungeSpan();
+      window.__lastRoll = { at: now(), kind: 'act', id: pick, phase: c.phase };
+      playOnce(pick, false);
+      return;
+    }
+  }
+  const pool = [];
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i], st = states[id];
+    if (!usable(id)) continue;
+    let w = 0;
+    if (st.role === 'lounge') w = st.weight;
+    else if (st.role === 'task' || st.role === 'work') w = st.weight * 0.6;
+    else continue;
+    const m = mult(id, c.phase);
+    if (m <= 0) continue;
+    pool.push({ id: id, w: w * m });
+  }
+  if (states.idle) {
+    const mi = mult('idle', c.phase);
+    if (mi > 0) pool.push({ id: 'idle', w: 25 * mi });
+  }
+  const chosen = pickWeighted(pool) || (states.idle ? 'idle' : order[0]);
+  M.lounge = chosen;
+  M.loungeUntil = now() + loungeSpan();
+  window.__lastRoll = { at: now(), kind: 'lounge', id: chosen, phase: c.phase, span: M.loungeUntil - now() };
+}
+
+function tick(force) {
+  if (M.gameMode) return;
+  if (M.react && now() >= M.reactUntil) M.react = null;
+  if (M.taskId && now() >= M.taskUntil) M.taskId = null;
+  if (M.media.playing && M.media.restUntil && now() >= M.media.restUntil) {
+    M.media.repeats = 0;
+    M.media.restUntil = 0;
+  }
+  if (skinPending && !skinLoading && !userActionActive()) requestSkinLoad();
+  const canRoll = M.opts.auto && !M.dragging && !M.menuOpen && !M.react && !M.taskId &&
+    !M.media.playing && (now() - M.lastInteract >= IDLE_HOLD_MS) && (now() >= M.loungeUntil);
+  if (canRoll) rollLounge();
+  const want = resolveState();
+  if (want && (want !== cur || force) && states[want]) play(want, { once: isMediaPerformance(want) });
+}
+setInterval(function () { tick(false); }, 150);
+
+/* ============================ 交互 ============================ */
+const stage = document.getElementById('stage');
+const bar = document.getElementById('bar');
+
+/* 菜单开着的时候，点击落在角色上要把菜单收掉。
+   为什么不看 M.menuOpen：前端状态会被后端事件/刷新时机打乱（实测点击时读到 false，
+   菜单却明明挂着）。改成无条件请求后端关闭——close_sao 对已隐藏窗口是幂等操作。 */
+function dismissMenuIfOpen() {
+  M.menuOpen = false;
+  invoke('close_sao').catch(function () {});
+}
+window.addEventListener('pointerdown', function (e) {
+  if (e.button === 0) dismissMenuIfOpen();
+}, true);
+window.addEventListener('mousedown', function (e) {
+  if (e.button === 0) dismissMenuIfOpen();
+}, true);
+
+/* sao 以 NOACTIVATE 显示，真实 Esc 通常由 Rust 低级键盘钩子转发。
+   若主窗本就有键盘焦点，这里作为后备，同样保持「先收二级、再关菜单」语义。 */
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && M.menuOpen) {
+    e.preventDefault();
+    invoke('sao_escape').catch(function () {});
+  }
+});
+
+function publishRect() {
+  const r = stage.getBoundingClientRect();
+  invoke('set_role_rect', { x: r.left, y: r.top, w: r.width, h: r.height }).catch(function () {});
+}
+
+/* ---- 命中网格：把当前视频帧缩到 96×160 采 alpha，交给 Rust 做逐像素穿透判定 ----
+   Electron 版是页面自己 elementFromPoint 判断后上报「交互/穿透」二态；
+   Tauri 版把判定搬到 Rust 侧（零全局钩子），这里只负责定期喂网格。 */
+const GW = 96, GH = 160;
+let hitCanvas = null, hitCtx = null, hitBusy = false, lastGridSig = '';
+
+function sampleHitGrid() {
+  if (hitBusy) return;
+  const v = activeVideo();
+  if (!v || v.readyState < 2 || !v.videoWidth) return;
+  hitBusy = true;
+  try {
+    if (!hitCanvas) {
+      hitCanvas = document.createElement('canvas');
+      hitCanvas.width = GW; hitCanvas.height = GH;
+      hitCtx = hitCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    hitCtx.clearRect(0, 0, GW, GH);
+    hitCtx.save();
+    if (M.petMirror) {
+      hitCtx.translate(GW, 0);
+      hitCtx.scale(-1, 1);
+    }
+    hitCtx.drawImage(v, 0, 0, GW, GH);
+    hitCtx.restore();
+    const img = hitCtx.getImageData(0, 0, GW, GH);
+    const n = GW * GH;
+    const data = new Uint8Array(n);
+    let x0 = GW, y0 = GH, x1 = -1, y1 = -1, any = 0;
+    for (let i = 0; i < n; i++) {
+      if (img.data[i * 4 + 3] > 24) {
+        data[i] = 1; any++;
+        const x = i % GW, y = (i / GW) | 0;
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    if (!any) return;   // 全透明帧（切换瞬态）不更新，保留上一份
+    // 视频元素在窗口内的实际矩形 → 归一化包围盒
+    const vr = v.getBoundingClientRect();
+    const wr = { w: window.innerWidth || 1, h: window.innerHeight || 1 };
+    const bbox = [
+      (vr.left + (x0 / GW) * vr.width) / wr.w,
+      (vr.top + (y0 / GH) * vr.height) / wr.h,
+      (vr.left + ((x1 + 1) / GW) * vr.width) / wr.w,
+      (vr.top + ((y1 + 1) / GH) * vr.height) / wr.h,
+    ];
+    const sig = (M.petMirror ? 'mirror|' : 'normal|') + cur + '|' + bbox.map(function (n2) { return n2.toFixed(3); }).join(',');
+    if (sig === lastGridSig) return;
+    lastGridSig = sig;
+    invoke('set_hit_grid', {
+      w: GW, h: GH, bbox: bbox, data: Array.from(data),
+    }).catch(function () {});
+  } catch (e) {
+    // 视频跨源取不到像素时退回矩形命中（Rust 侧行为一致），不反复刷日志
+    if (!window.__gridErrOnce) { window.__gridErrOnce = String(e); }
+  } finally {
+    hitBusy = false;
+  }
+}
+setInterval(sampleHitGrid, 220);
+window.addEventListener('resize', publishRect);
+
+let barHover = false, hideTimer = null;
+function showBar() {
+  bar.classList.add('show');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(function () { if (!barHover) bar.classList.remove('show'); }, 1600);
+}
+bar.addEventListener('mouseenter', function () { barHover = true; });
+bar.addEventListener('mouseleave', function () { barHover = false; showBar(); });
+stage.addEventListener('mousemove', showBar);
+stage.addEventListener('contextmenu', function (e) {
+  e.preventDefault();
+  M.lastInteract = now();
+  M.menuOpen = true;
+  invoke('open_sao').catch(function (err) { console.warn('open_sao', err); });
+});
+
+stage.addEventListener('mousedown', function (e) {
+  if (e.button !== 0) return;
+  M.dragging = true;
+  stage.classList.add('dragging');
+  M.lastInteract = now();
+  invoke('drag_begin').catch(function () {});
+});
+document.addEventListener('mouseup', function () {
+  if (!M.dragging) return;
+  M.dragging = false;
+  stage.classList.remove('dragging');
+  M.lastInteract = now();
+  const drop = byRole('release');
+  if (drop) playOnce(drop, true);
+  else play(resolveState(), { force: true });
+});
+window.addEventListener('blur', function () {
+  if (M.dragging) { M.dragging = false; stage.classList.remove('dragging'); }
+});
+
+stage.addEventListener('dblclick', function () {
+  const pool = [];
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i], st = states[id];
+    if (st.mode !== 'once' || !usable(id)) continue;
+    pool.push({ id: id, w: (st.react != null ? st.react : st.weight) });
+  }
+  const pick = pickWeighted(pool);
+  if (pick) playOnce(pick, true);
+});
+
+document.getElementById('sz').addEventListener('input', function (e) {
+  const h = parseInt(e.target.value, 10);
+  document.getElementById('szv').textContent = h;
+  invoke('set_pet_size', { h: h }).catch(function () {});
+});
+document.getElementById('close').addEventListener('click', function () {
+  invoke('quit').catch(function () {});
+});
+
+/* ============================ 后端事件 ============================ */
+T.event.listen('pet:play', function (e) {
+  const id = e.payload;
+  window.__lastEvent = id;
+  if (M.gameMode) return;
+  M.lastInteract = now();
+  if (id === 'random') {
+    const pool = [];
+    for (let i = 0; i < order.length; i++) {
+      const st = states[order[i]];
+      if (st.mode === 'once' && st.role !== 'release') {
+        pool.push({ id: order[i], w: (st.react != null ? st.react : st.weight) });
+      }
+    }
+    const pick = pickWeighted(pool);
+    if (pick) playOnce(pick, true);
+    return;
+  }
+  if (id === 'idle') {
+    M.react = null; M.taskId = null; M.taskSeq++;
+    clearMedia();
+    M.lounge = idleState();
+    M.loungeUntil = now() + IDLE_HOLD_MS;
+    play(idleState(), { force: true });
+    return;
+  }
+  if (states[id]) { playOnce(id, true); return; }
+  const once = order.filter(function (i) { return states[i].mode === 'once'; });
+  if (once.length) playOnce(once[Math.floor(Math.random() * once.length)], true);
+}).then(function () { window.__listenOk = 'ok'; })
+  .catch(function (err) { window.__listenOk = 'fail: ' + err; });
+
+T.event.listen('pet:task', function (e) {
+  if (M.gameMode) return;
+  const p = e.payload;
+  let arg = (typeof p === 'number') ? p : null;
+  if (p && typeof p === 'object') arg = p.arg !== undefined ? p.arg : (p.ms !== undefined ? p.ms : p.duration);
+  let ms = Number(arg);
+  if (arg === null || arg === undefined || !Number.isFinite(ms)) ms = 10000;
+  ms = Math.max(0, Math.min(ms, 2147483647));
+  const id = byRole('work') || (usable('working') ? 'working' : null) || byRole('task') || idleState();
+  M.taskId = id;
+  M.taskUntil = now() + ms;
+  M.lastInteract = now();
+  M.react = null;
+  const seq = ++M.taskSeq;
+  play(resolveState(), { force: true });
+  setTimeout(function () {
+    if (seq !== M.taskSeq) return;
+    M.taskId = null;
+    M.lastInteract = now();
+    M.lounge = idleState();
+    M.loungeUntil = now() + IDLE_HOLD_MS;
+    if (!M.gameMode) play(resolveState(), { force: true });
+  }, ms);
+}).then(function () { window.__listenTask = 'ok'; }).catch(function (err) { window.__listenTask = 'fail: ' + err; });
+
+T.event.listen('pet:shadow', function (e) {
+  document.getElementById('shadow').classList.toggle('on', !!e.payload);
+}).then(function () { window.__listenShadow = 'ok'; }).catch(function (err) { window.__listenShadow = 'fail: ' + err; });
+
+function switchValue(p, key) {
+  if (typeof p === 'boolean') return p;
+  if (typeof p === 'number') return !!p;
+  if (p && typeof p === 'object') {
+    if (typeof p[key] === 'boolean') return p[key];
+    if (typeof p.enabled === 'boolean') return p.enabled;
+    if (typeof p.on === 'boolean') return p.on;
+    if (typeof p.value === 'boolean') return p.value;
+  }
+  return null;
+}
+
+function setDemoBackground(p) {
+  const on = switchValue(p, 'demoBackground');
+  document.body.classList.toggle('demo-background', on === null ? !!p : on);
+}
+
+T.event.listen('pet:demo-background', function (e) {
+  // 只切主窗 class；桌面全屏背景由 Rust 的独立窗口负责。
+  setDemoBackground(e.payload);
+}).then(function () { window.__listenDemoBackground = 'ok'; })
+  .catch(function (err) { window.__listenDemoBackground = 'fail: ' + err; });
+
+T.event.listen('pet:chat-emote', function (e) {
+  const on = switchValue(e.payload, 'chatEmote');
+  if (on !== null) M.chatEmote = on;
+}).then(function () { window.__listenChatEmote = 'ok'; })
+  .catch(function (err) { window.__listenChatEmote = 'fail: ' + err; });
+
+T.event.listen('media:state', function (e) {
+  const raw = e.payload || {};
+  const p = raw.state && typeof raw.state === 'object' ? raw.state : raw;
+  const kind = String(p.kind || (p.info && p.info.kind) || '').toLowerCase();
+  const id = kind === 'video' ? 'watch_tv' : (kind === 'music' ? 'sing_mic' : null);
+  if (M.gameMode) { clearMedia(); return; }
+  if (p.playing && id) {
+    const changed = !M.media.playing || M.media.kind !== kind || M.media.id !== id;
+    M.media.playing = true;
+    M.media.kind = kind;
+    M.media.id = id;
+    if (changed) {
+      M.media.repeats = 0;
+      M.media.restUntil = 0;
+    }
+    tick(false);
+  } else if (M.media.playing || M.media.id) {
+    clearMedia();
+    M.lastInteract = now();
+    M.lounge = idleState();
+    M.loungeUntil = now() + IDLE_HOLD_MS;
+    tick(false);
+  }
+}).then(function () { window.__listenMedia = 'ok'; })
+  .catch(function (err) { window.__listenMedia = 'fail: ' + err; });
+
+T.event.listen('pet:gamemode', function (e) {
+  const parsed = switchValue(e.payload, 'gameMode');
+  const on = parsed === null ? !!e.payload : parsed;
+  if (on === M.gameMode) return;
+  M.gameMode = on;
+  clearMedia();
+  M.react = null;
+  M.taskId = null;
+  M.taskSeq++;
+  M.lounge = idleState();
+  M.loungeUntil = now() + IDLE_HOLD_MS;
+  if (on) {
+    for (const v of vids) {
+      stopSegmentLoop(v);
+      v.loop = false;
+      v.pause();
+    }
+  } else {
+    M.lastInteract = now();
+    cur = null;
+    play(idleState(), { force: true });
+  }
+}).then(function () { window.__listenGameMode = 'ok'; })
+  .catch(function (err) { window.__listenGameMode = 'fail: ' + err; });
+
+const EMOTION_RULES = [
+  { id: 'happy', re: /开心|高兴|快乐|喜悦|哈哈+|嘻嘻+|太好啦|太棒了|😄|😃|😊|🎉|\b(?:happy|glad|joyful|delighted|yay|haha+)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:开心|高兴|快乐|喜悦)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:happy|glad|joyful|delighted)\b/gi },
+  { id: 'shy', re: /害羞|腼腆|羞涩|不好意思|☺️|\b(?:shy|bashful|embarrassed)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:害羞|腼腆|羞涩|不好意思)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:shy|bashful|embarrassed)\b/gi },
+  { id: 'angry', re: /生气|愤怒|火大|气死|讨厌|😠|😡|\b(?:angry|mad|furious|annoyed)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:生气|愤怒|火大)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:angry|mad|furious|annoyed)\b/gi },
+  { id: 'sad', re: /难过|伤心|悲伤|委屈|沮丧|😭|😢|\b(?:sad|unhappy|sorrowful|depressed|cry)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:难过|伤心|悲伤|委屈|沮丧)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:sad|unhappy|sorrowful|depressed)\b/gi },
+  { id: 'surprised', re: /惊讶|吃惊|意外|震惊|居然|竟然|😮|😲|\b(?:surprised|amazed|astonished|shocked|wow)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:惊讶|吃惊|意外|震惊)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:surprised|amazed|astonished|shocked)\b/gi },
+  { id: 'think', re: /思考|考虑|让我想想|我想想|🤔|\b(?:think|thinking|thought|ponder|hmm+)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:思考|考虑|想想)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:think|thinking|thought|ponder)\b/gi },
+  { id: 'proud', re: /自豪|骄傲|干得漂亮|我真棒|😎|\b(?:proud|pride)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:是|感到|感觉)?\s*(?:自豪|骄傲)|\b(?:not|no|never|don't|do not|isn't|is not|am not)\s+(?:so\s+|very\s+|really\s+)?(?:proud)\b/gi },
+  { id: 'wave', re: /挥手|招手|再见|拜拜|👋|\b(?:wave|waving|goodbye|bye)\b/i,
+    neg: /(?:不|没(?:有)?|不太|并不|并未|不要|别)\s*(?:挥手|招手)|\b(?:not|no|never|don't|do not)\s+(?:wave|waving)\b/gi }
+];
+
+function emotionFromText(text) {
+  let clean = String(text || '')
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, ' ')
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/```[\s\S]*$/g, ' ')
+    .replace(/`[^`\r\n]*`/g, ' ')
+    .replace(/(?:^|\n)[ \t]{4}[^\n]*/g, ' ');
+  for (const rule of EMOTION_RULES) {
+    clean = clean.replace(rule.neg, ' ');
+    if (rule.re.test(clean)) return rule.id;
+  }
+  return null;
+}
+
+let chatTurnText = '';
+T.event.listen('harness:event', function (e) {
+  const p = e.payload || {};
+  const kind = p.kind || p.type;
+  if (kind === 'delta') {
+    chatTurnText += typeof p.text === 'string' ? p.text : '';
+  } else if (kind === 'message') {
+    if (typeof p.text === 'string' && p.text) chatTurnText = p.text;
+  } else if (kind === 'turnStart') {
+    chatTurnText = '';
+  } else if (kind === 'turnEnd') {
+    const text = chatTurnText || (typeof p.text === 'string' ? p.text : '');
+    chatTurnText = '';
+    if (!M.chatEmote || M.gameMode || !text) return;
+    const emotion = emotionFromText(text);
+    if (emotion) playOnce('emo_' + emotion, false);
+  }
+}).then(function () { window.__listenHarness = 'ok'; })
+  .catch(function (err) { window.__listenHarness = 'fail: ' + err; });
+
+T.event.listen('pet:mirror', function (e) {
+  const p = e && e.payload;
+  if (p && typeof p === 'object') {
+    if (p.source === 'float') M.floatMirror = !!p.on;
+    else M.saoMirror = !!p.on;
+  } else {
+    M.saoMirror = !!p;
+  }
+  setPetMirror(M.saoMirror || M.floatMirror);
+}).then(function () { window.__listenMirror = 'ok'; })
+  .catch(function (err) { window.__listenMirror = 'fail: ' + err; });
+
+T.event.listen('sao:closed', function () {
+  M.menuOpen = false;
+  M.saoMirror = false;
+  M.lastInteract = now();
+  setPetMirror(M.floatMirror);
+}).catch(function () {});
+
+T.event.listen('skin:changed', function (e) {
+  window.__lastSkin = e.payload;
+  // 当前后端没有 skin.json mtime 接口：不以 2.5 秒轮询反复 skin_load，
+  // 只响应变更事件；正在拖动/演固定表情/执行任务/开菜单时延后加载。
+  requestSkinLoad();
+}).then(function () { window.__listenSkin = 'ok'; })
+  .catch(function (err) { window.__listenSkin = 'fail: ' + err; });
+
+/* ============================ 启动 ============================ */
+(async function boot() {
+  try {
+    const c = await invoke('get_config');
+    const el = document.getElementById('sz');
+    if (c && c.h) { el.value = c.h; document.getElementById('szv').textContent = c.h; }
+    if (c) {
+      const chat = c.chatEmote !== undefined ? c.chatEmote : c.chat_emote;
+      if (typeof chat === 'boolean') M.chatEmote = chat;
+      const demo = c.demoBackground !== undefined ? c.demoBackground : c.demo_background;
+      if (demo !== undefined) setDemoBackground(demo);
+    }
+  } catch (e) {}
+  try {
+    const r = await invoke('animation_loop_get');
+    if (r && r.ok && r.config) animationLoop = Object.assign({}, animationLoop, r.config);
+  } catch (e) {}
+  await loadSkin();
+  M.lastInteract = now();
+  M.loungeUntil = now() + 3000;
+  publishRect();
+  setTimeout(publishRect, 400);
+  setTimeout(sampleHitGrid, 300);
+  setTimeout(sampleHitGrid, 1200);
+  window.__petReady = true;
+  console.log('[boot] ready, skin =', skinName);
+})();
+</script>
+</body>
+</html>
