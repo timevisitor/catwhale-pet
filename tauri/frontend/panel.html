@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>猫鲸 · 独立面板</title>
+<style>
+:root{
+  --bg:#e7e8e3;--panel:#f8f9f5;--paper:#fff;--line:#c5c9c1;--line2:#a6ada3;
+  --text:#4e5851;--dim:#737d75;--gold:#f6c62e;--gold2:#ac7d0c;--gold3:#66521a;
+  --green:#397a51;--red:#a5413b;--blue:#526f86;--mono:"Cascadia Mono","Consolas",monospace;
+}
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{overflow:hidden;background:var(--bg);color:var(--text);font:12px/1.5 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;user-select:none}
+button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}button:disabled,input:disabled,select:disabled,textarea:disabled{opacity:.5;cursor:default}
+[hidden]{display:none!important}#app{height:100%;display:flex;flex-direction:column;background:linear-gradient(145deg,#f0f1ec,#e2e4de)}
+.top{height:43px;flex:0 0 43px;display:flex;align-items:center;padding:0 12px;border-bottom:1px solid var(--line2);background:rgba(248,249,245,.96);border-left:3px solid var(--gold);gap:9px}
+.brand{font-size:14px;font-weight:650;letter-spacing:1px}.brand small{font:10px var(--mono);color:var(--dim);letter-spacing:.5px}.spacer{flex:1}.host{display:flex;align-items:center;gap:5px;color:var(--dim);font-size:10px}.dot{width:7px;height:7px;display:inline-block;border-radius:50%;background:#929a92}.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}.dot.run{background:var(--gold2);animation:pulse 1s infinite}
+.nav{flex:0 0 35px;display:flex;padding:0 7px;background:#f4f5f0;border-bottom:1px solid var(--line);overflow-x:auto}
+.nav button{border:0;border-bottom:3px solid transparent;background:transparent;padding:6px 12px 5px;white-space:nowrap;color:var(--dim)}.nav button:hover{color:var(--gold3);background:#fffdf3}.nav button.active{color:var(--gold3);border-bottom-color:var(--gold);background:#fff;font-weight:600}
+main{flex:1;min-height:0;position:relative}.page{position:absolute;inset:0;overflow:auto;padding:9px}.page.chat-page{overflow:hidden;display:flex;flex-direction:column;padding:0}
+.card{background:rgba(248,249,245,.94);border:1px solid var(--line);border-top:2px solid var(--gold);border-radius:2px;padding:8px;margin-bottom:8px;box-shadow:0 1px 3px rgba(50,55,48,.06)}
+.card h2,.card h3{font-size:12px;margin:0 0 7px;font-weight:650;display:flex;align-items:center;gap:7px}.card h2 .right,.card h3 .right{margin-left:auto;font-weight:400;color:var(--dim);font-size:10px}.subtle{color:var(--dim)}.mono{font-family:var(--mono)}.small{font-size:10px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--gold2)}
+.row{display:flex;align-items:center;gap:6px;margin:5px 0}.row.wrap{flex-wrap:wrap}.row>label{color:var(--dim)}.grow{flex:1;min-width:0}.two{display:grid;grid-template-columns:1fr 1fr;gap:7px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+input[type=text],input[type=password],input[type=number],input[type=url],select,textarea{width:100%;min-width:0;border:1px solid var(--line);border-radius:2px;background:rgba(255,255,255,.86);padding:5px 7px;outline:none;user-select:text}textarea{resize:vertical;min-height:52px;line-height:1.55}input:focus,select:focus,textarea:focus{border-color:var(--gold2);box-shadow:0 0 0 2px rgba(246,198,46,.22);background:#fff}input[type=checkbox]{accent-color:var(--gold2);margin:0}label.check{display:flex;align-items:center;gap:5px;cursor:pointer}.field{display:flex;flex-direction:column;gap:3px;margin:5px 0}.field>label{font-size:10px;color:var(--dim)}
+button,.btn{border:1px solid var(--line2);background:rgba(255,255,255,.76);border-radius:2px;padding:4px 9px;line-height:1.45;white-space:nowrap}button:hover:not(:disabled){background:#fffdf1;border-color:var(--gold2)}button.primary{background:var(--gold);border-color:var(--gold2);color:#40340f;font-weight:600}button.danger{color:var(--red);border-color:#c99591}button.active,button.on{background:var(--gold);border-color:var(--gold2);color:var(--gold3)}button.link{border:0;background:transparent;color:var(--gold2);padding:2px 4px;text-decoration:underline}button.icon{padding:2px 6px}.actions{display:flex;gap:5px;flex-wrap:wrap;align-items:center}.status{min-height:17px;color:var(--dim);margin-top:5px;white-space:pre-wrap;word-break:break-word}.status:empty{display:none}.divider{height:1px;background:var(--line);margin:7px 0}.hint{font-size:10px;color:var(--dim);line-height:1.55}.badge{display:inline-block;border:1px solid var(--line);background:#eef0ea;padding:0 5px;font-size:10px;white-space:nowrap}.badge.ok{background:#e0eee4;border-color:#91b59d}.badge.bad{background:#f4e3e1;border-color:#d2a29e}.badge.warn{background:#f8efcd;border-color:#d9bc5e}.badge.run{background:#f8efcd;border-color:var(--gold2)}
+pre{white-space:pre-wrap;word-break:break-word;user-select:text;font:10px/1.5 var(--mono);margin:5px 0 0;max-height:210px;overflow:auto;background:#eef0eb;border:1px solid var(--line);padding:6px}code{font-family:var(--mono);background:#f5e9b9;padding:0 3px;user-select:text}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#aeb4aa;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-track{background:transparent}
+/* 搜索 */
+.search-head{display:flex;gap:6px;align-items:center;padding:9px;background:var(--panel);border-bottom:1px solid var(--line);border-left:3px solid var(--gold)}.search-head input{font-size:14px;padding:7px 9px}.search-head select{width:74px;flex:0 0 74px}.search-body{height:100%;display:flex;flex-direction:column}.search-results{flex:1;min-height:0;overflow:auto;padding:6px}.search-foot{flex:0 0 auto;padding:5px 10px;border-top:1px solid var(--line);background:var(--panel);color:var(--dim);font-size:10px;display:flex;gap:10px;flex-wrap:wrap}
+.result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 7px;padding:6px 7px;border-left:3px solid transparent;border-bottom:1px solid #d9dcd5;background:rgba(255,255,255,.42);cursor:default}.result:hover{background:#fffdf2}.result.selected{background:#f8e8a7;border-left-color:var(--gold2)}.result .name{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.result .meta{text-align:right;color:var(--dim);font:10px var(--mono);white-space:nowrap}.result .path{grid-column:1/2;direction:rtl;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font:10px var(--mono);user-select:text}.result .ops{grid-column:2/3;grid-row:2/3;display:flex;gap:3px}.empty{padding:24px 14px;text-align:center;color:var(--dim);line-height:1.9}
+/* 聊天 */
+.chat-toolbar{flex:0 0 auto;padding:6px 9px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}.chat-toolbar .route{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:10px}.messages{flex:1;min-height:0;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:7px}.msg{max-width:90%;padding:7px 9px;border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:2px;background:#fff;line-height:1.65;word-break:break-word;user-select:text}.msg.user{align-self:flex-end;background:#f8df81;border-color:#c5a33c;color:#493c12}.msg.assistant{align-self:flex-start}.msg.error{align-self:stretch;max-width:none;background:#f6e6e4;border-color:#c98781;color:#853a35}.msg.streaming:after{content:"";display:inline-block;width:5px;height:12px;background:var(--gold2);margin-left:3px;vertical-align:-2px;animation:blink .9s steps(1) infinite}.msg p{margin:0 0 5px}.msg p:last-child{margin-bottom:0}.msg pre{user-select:text}.reason{align-self:flex-start;max-width:94%;color:var(--dim);font-size:10px}.reason details,.tool details{border:1px solid var(--line);background:#f0f1ec;padding:4px 6px}.reason summary,.tool summary{cursor:pointer}.reason .reason-text{white-space:pre-wrap;max-height:160px;overflow:auto;margin-top:4px;user-select:text}.tool{align-self:flex-start;max-width:94%;font:10px/1.5 var(--mono);border:1px solid var(--line);background:#f0f1ec;padding:5px 7px;word-break:break-word;user-select:text}.tool.error{border-color:#c98781;background:#f6e6e4}.composer{flex:0 0 auto;border-top:1px solid var(--line);padding:7px 9px;background:var(--panel)}.composer textarea{height:65px;min-height:65px;max-height:140px}.composer-bottom{display:flex;align-items:center;margin-top:5px;gap:6px}.chat-meta{font:10px var(--mono);color:var(--dim)}
+/* 控制 */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.metric{border:1px solid var(--line);background:#fff;padding:7px;min-width:0}.metric .mname{font-size:10px;color:var(--dim)}.metric .mvalue{font:16px/1.4 var(--mono);color:var(--gold3);overflow:hidden;text-overflow:ellipsis}.metric .mdetail{font-size:9px;color:var(--dim);min-height:28px;word-break:break-word}.bar{height:4px;background:#e0e2dc;margin-top:4px}.bar i{height:100%;display:block;background:var(--gold);width:0;transition:width .2s}.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.control-grid .card{margin:0}.disk-list{font:10px var(--mono);color:var(--dim);margin-top:5px}.update-notes{max-height:100px;overflow:auto;white-space:pre-wrap;user-select:text;color:var(--dim);font-size:10px}
+/* 设置 / 环境 */
+.form-section{border-top:1px solid var(--line);padding-top:6px;margin-top:8px}.form-section:first-child{border-top:0;padding-top:0;margin-top:0}.keyhint{font-size:10px;color:var(--dim)}.env-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}.env-log{height:145px;overflow:auto;background:#eceee8;border:1px solid var(--line);padding:6px;font:10px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;user-select:text}.progress{height:5px;background:#d8dbd4;margin:6px 0}.progress i{display:block;height:100%;background:var(--gold);width:0;transition:width .2s}
+/* 角色卡 */
+.persona-layout{display:grid;grid-template-columns:minmax(190px,.7fr) minmax(280px,1.3fr);gap:8px}.persona-list{max-height:calc(100vh - 160px);overflow:auto}.persona-item{border:1px solid var(--line);background:#fff;padding:6px;margin-bottom:5px;border-left:3px solid transparent}.persona-item.active{border-left-color:var(--gold2);background:#fff8db}.persona-item.selected{outline:1px solid var(--gold2)}.persona-item .pname{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.persona-item .pmeta{font-size:10px;color:var(--dim);margin:2px 0 4px;word-break:break-word}.persona-form{max-height:calc(100vh - 160px);overflow:auto}.persona-form textarea{min-height:48px}.persona-form textarea.tall{min-height:82px}.version-select{width:130px}
+/* Agent 看板 */
+.dock-summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dock-item{border:1px solid var(--line);border-left:3px solid var(--line2);background:#fff;padding:7px;margin-bottom:5px}.dock-item.working,.dock-item.speaking{border-left-color:var(--gold2)}.dock-item.error{border-left-color:var(--red)}.dock-item.waiting_user{border-left-color:#b47b24;background:#fff8df}.dock-item.pinned{background:#fff6ce}.dock-top{display:flex;gap:6px;align-items:center}.dock-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dock-detail{display:grid;grid-template-columns:52px minmax(0,1fr);gap:2px 6px;margin-top:5px;font-size:10px}.dock-detail dt{color:var(--dim)}.dock-detail dd{margin:0;word-break:break-all;user-select:text}.channel{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 6px;padding:5px;border-bottom:1px solid var(--line)}.channel .detail{grid-column:1/3;color:var(--dim);font-size:10px;word-break:break-word}
+#toast{position:fixed;z-index:100;left:50%;bottom:15px;transform:translateX(-50%);max-width:90%;background:#3f4841;color:#fff;border:1px solid #6f786f;padding:6px 12px;box-shadow:0 4px 14px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .15s;white-space:pre-wrap;word-break:break-word}#toast.show{opacity:1}#toast.bad{background:#843f3a}#toast.ok{background:#356445}
+@keyframes pulse{50%{opacity:.35}}@keyframes blink{50%{opacity:0}}
+@media(max-width:620px){.metrics{grid-template-columns:1fr 1fr}.control-grid,.env-cards,.persona-layout{grid-template-columns:1fr}.persona-list,.persona-form{max-height:none}.two{grid-template-columns:1fr}.nav button{padding-left:8px;padding-right:8px}.result .meta{font-size:9px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>猫鲸 <small>CATWHALE / PANEL</small></div>
+    <div class="spacer"></div><div class="host"><i id="hostDot" class="dot"></i><span id="hostText">正在连接 Tauri</span></div>
+  </header>
+  <nav class="nav" aria-label="面板导航">
+    <button type="button" data-page="control">控制</button><button type="button" data-page="settings">设置</button>
+    <button type="button" data-page="persona">角色卡</button><button type="button" data-page="dock">Agent 看板</button>
+  </nav>
+  <main>
+    <section id="page-search" class="page search-body" hidden>
+      <div class="search-head"><input id="searchInput" type="text" autocomplete="off" spellcheck="false" placeholder="搜索本机文件，支持 ext:pdf、path:、dm:today"><select id="searchLimit" aria-label="结果上限"><option>30</option><option>50</option><option>100</option></select></div>
+      <div id="searchResults" class="search-results" role="listbox" aria-label="搜索结果"></div>
+      <div class="search-foot"><span id="searchCount">输入关键词开始</span><span>↑↓ 选择</span><span>Enter 打开</span><span>Ctrl+Enter 定位</span><span>Ctrl+C 复制路径</span></div>
+    </section>
+
+    <section id="page-chat" class="page chat-page" hidden>
+      <div class="chat-toolbar"><i id="chatDot" class="dot"></i><span id="chatState">未连接</span><span id="chatRoute" class="route grow"></span><button type="button" id="chatPersona">角色卡</button><button type="button" id="chatSettings">设置</button></div>
+      <div id="chatMessages" class="messages" role="log" aria-label="聊天记录"></div>
+      <div class="composer"><textarea id="chatInput" spellcheck="false" placeholder="输入消息；Enter 发送，Shift+Enter 换行"></textarea><div class="composer-bottom"><span id="chatUsage" class="chat-meta grow"></span><button type="button" id="chatClear">清空</button><button type="button" id="chatCancel" disabled>停止生成</button><button type="button" id="chatSend" class="primary">发送</button></div></div>
+    </section>
+
+    <section id="page-control" class="page" hidden>
+      <div class="card"><h2>系统实时状态 <span id="sysUpdated" class="right">尚未采样</span></h2>
+        <div class="metrics">
+          <div class="metric"><div class="mname">CPU</div><div id="cpuValue" class="mvalue">—</div><div id="cpuDetail" class="mdetail">等待数据</div><div class="bar"><i id="cpuBar"></i></div></div>
+          <div class="metric"><div class="mname">内存</div><div id="memValue" class="mvalue">—</div><div id="memDetail" class="mdetail">等待数据</div><div class="bar"><i id="memBar"></i></div></div>
+          <div class="metric"><div class="mname">磁盘</div><div id="diskValue" class="mvalue">—</div><div id="diskDetail" class="mdetail">完整采样后显示</div><div id="diskList" class="disk-list"></div></div>
+          <div class="metric"><div class="mname">GPU</div><div id="gpuValue" class="mvalue">—</div><div id="gpuDetail" class="mdetail">完整采样后显示</div><div class="bar"><i id="gpuBar"></i></div></div>
+        </div>
+        <div class="row"><button type="button" id="sysStart" class="primary">开始完整采样</button><button type="button" id="sysStop">停止完整采样</button><span class="hint">后台同时保留轻量 CPU / 内存采样；磁盘与 NVIDIA GPU 来自完整采样。</span></div>
+      </div>
+      <div class="control-grid">
+        <div class="card"><h3>媒体演出 <span id="mediaBadge" class="right badge">读取中</span></h3>
+          <label class="check"><input id="mediaEnabled" type="checkbox"> 检测系统视频 / 音乐并联动演出</label>
+          <div class="three"><div class="field"><label>轮询 ms</label><input id="mediaPoll" type="number" min="500" step="100"></div><div class="field"><label>开始阈值 ms</label><input id="mediaStart" type="number" min="0" step="100"></div><div class="field"><label>停止阈值 ms</label><input id="mediaStop" type="number" min="0" step="100"></div></div>
+          <div class="actions"><button type="button" id="mediaApply" class="primary">保存媒体设置</button><button type="button" id="mediaProbe">探测一次</button><button type="button" id="mediaDiag">诊断</button></div>
+          <div id="mediaNow" class="status">尚未读取媒体状态</div><pre id="mediaOutput" hidden></pre>
+        </div>
+        <div class="card"><h3>动画片段循环 <span id="animationBadge" class="right badge">未开启</span></h3>
+          <div class="field"><label>动作 ID（当前皮肤的动作标识）</label><input id="animationAction" type="text" spellcheck="false" placeholder="idle"></div>
+          <div class="two"><div class="field"><label>起点（秒）</label><input id="animationStart" type="number" min="0" step="0.01"></div><div class="field"><label>终点（秒）</label><input id="animationEnd" type="number" min="0.2" step="0.01"></div></div>
+          <label class="check"><input id="animationEnabled" type="checkbox"> 开启并保存循环</label>
+          <div class="actions"><button type="button" id="animationApply" class="primary">应用配置</button><button type="button" id="animationStop">停止循环</button><button type="button" id="animationReload">重新读取</button></div><div id="animationStatus" class="status"></div>
+        </div>
+        <div class="card"><h3>游戏模式 <span id="gameBadge" class="right badge">读取中</span></h3><div id="gameNow" class="status">检测反作弊进程，必要时隐藏桌宠。</div><div class="actions"><button type="button" data-game="on">手动开启</button><button type="button" data-game="off">手动关闭</button><button type="button" data-game="auto">恢复自动</button><button type="button" id="gameReload">刷新</button></div><div id="gameProcs" class="hint"></div></div>
+        <div class="card"><h3>版本更新 <span id="updateVersion" class="right">—</span></h3><div id="updateNow" class="status">尚未检查</div><div class="actions"><button type="button" id="updateCheck" class="primary">检查新版本</button><button type="button" id="updateOpenRelease">发布页</button><button type="button" id="updateOpenDownload">下载地址</button></div><div id="updateNotes" class="update-notes"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-settings" class="page" hidden>
+      <div class="card"><h2>对话与 Harness 设置 <span id="configVersion" class="right"></span></h2>
+        <div class="two"><div class="field"><label>对话后端</label><select id="cfgBackend"><option value="harness">DeepSeek Harness（工具）</option><option value="api">直连 API</option></select></div><div class="field"><label>你的称呼</label><input id="cfgUserName" type="text" placeholder="用户"></div></div>
+        <div id="cfgHarnessFields" class="form-section">
+          <div class="two"><div class="field"><label>DeepSeek Base URL</label><input id="cfgDeepBase" type="text" spellcheck="false" placeholder="https://api.deepseek.com"></div><div class="field"><label>模型</label><input id="cfgDeepModel" type="text" spellcheck="false" placeholder="留空使用 Harness 默认"></div></div>
+          <div class="field"><label>DeepSeek API Key</label><input id="cfgDeepKey" type="password" autocomplete="off" spellcheck="false" placeholder="留空表示不修改已保存的 Key"><div id="cfgDeepKeyHint" class="keyhint"></div></div>
+          <div class="two"><div class="field"><label>Harness 仓库路径</label><input id="cfgRepo" type="text" spellcheck="false" placeholder="D:\deepseek-harness"></div><div class="field"><label>Profile</label><input id="cfgProfile" type="text" spellcheck="false" placeholder="headless"></div></div>
+          <div class="actions"><button type="button" id="cfgBrowse">验证 / 浏览仓库路径</button><button type="button" id="cfgDetect">重新探测 Harness</button></div><div id="cfgRepoStatus" class="status"></div>
+        </div>
+        <div id="cfgApiFields" class="form-section" hidden>
+          <div class="two"><div class="field"><label>接口协议</label><select id="cfgProtocol"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div><div class="field"><label>模型名</label><input id="cfgApiModel" type="text" spellcheck="false" placeholder="deepseek-chat / gpt-4o-mini"></div></div>
+          <div class="field"><label>API Base URL</label><input id="cfgApiBase" type="text" spellcheck="false" placeholder="https://api.openai.com/v1"></div>
+          <div class="field"><label>API Key</label><input id="cfgApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="留空表示不修改；本地接口可不填"><div id="cfgApiKeyHint" class="keyhint"></div></div>
+        </div>
+        <div class="actions"><button type="button" id="cfgSave" class="primary">保存</button><button type="button" id="cfgTest">保存并测试连接</button><button type="button" id="cfgReload">重新读取</button><button type="button" id="cfgEnv">环境自检 / 部署</button></div><div id="cfgStatus" class="status"></div><pre id="cfgOutput" hidden></pre>
+      </div>
+    </section>
+
+    <section id="page-env" class="page" hidden>
+      <div class="card"><h2>环境自检与一键部署 <span id="envSummary" class="right">尚未检测</span></h2><div class="row wrap"><label class="check"><input id="envQuick" type="checkbox" checked> 快速检测</label><button type="button" id="envCheck" class="primary">重新检测</button><button type="button" id="envBack">返回设置</button><button type="button" id="envCancel" disabled>取消当前部署</button><label class="check"><input id="envNoAsk" type="checkbox"> 不再自动提示</label></div><div class="progress"><i id="envProgress"></i></div><div id="envPhase" class="status"></div></div>
+      <div class="env-cards">
+        <div class="card"><h3>DeepSeek Harness <span id="envHarnessBadge" class="right badge">未知</span></h3><div id="envHarnessDetail" class="hint">检测后显示仓库、Node 与依赖状态。</div><div class="field"><label>已有仓库或部署目标目录</label><input id="envHarnessDir" type="text" spellcheck="false" placeholder="D:\deepseek-harness"></div><label class="check"><input id="envMirror" type="checkbox" checked> 下载依赖使用镜像</label><div class="actions"><button type="button" id="envDeployHarness" class="primary">克隆 / 安装依赖</button><button type="button" id="envHarnessSite">仓库主页</button></div></div>
+        <div class="card"><h3>Everything <span id="envEverythingBadge" class="right badge">未知</span></h3><div id="envEverythingDetail" class="hint">检测后显示运行状态、实例与程序路径。</div><div class="field"><label>便携版部署目录</label><input id="envEverythingDir" type="text" spellcheck="false" placeholder="D:\Tools\Everything"></div><label class="check"><input id="envAuto" type="checkbox"> 开机自动后台启动已配置的 Everything</label><div class="actions"><button type="button" id="envDeployEverything" class="primary">下载并部署</button><button type="button" id="envLaunchEverything">启动检测到的一份</button><button type="button" id="envEverythingSite">官网</button></div></div>
+      </div>
+      <div class="card"><h3>部署日志 <span class="right">实时接收 env:log</span></h3><div id="envLogs" class="env-log">暂无日志</div></div>
+    </section>
+
+    <section id="page-persona" class="page" hidden>
+      <div class="card"><div class="row wrap"><button type="button" id="personaNew" class="primary">新建角色卡</button><button type="button" id="personaImport">导入 PNG / JSON</button><input id="personaFile" type="file" accept=".png,.json,image/png,application/json" hidden><button type="button" id="personaDefault">使用默认助手</button><button type="button" id="personaReveal">打开角色目录</button><button type="button" id="personaReload">刷新</button></div><div class="row"><select id="personaExportFormat" aria-label="导出格式"><option value="png">PNG（酒馆角色卡）</option><option value="json">JSON（V2）</option></select><input id="personaExportPath" class="grow" type="text" spellcheck="false" placeholder="导出完整路径，例如 D:\cards\catwhale.png"><button type="button" id="personaExport">导出选中角色</button></div><div id="personaStatus" class="status">支持 V1 / V2 / V3 与 SillyTavern PNG；只保存人设字段。</div></div>
+      <div class="persona-layout"><div id="personaList" class="persona-list"></div>
+        <form id="personaForm" class="card persona-form" hidden onsubmit="return false"><h2 id="personaFormTitle">编辑角色卡 <span class="right"><select id="personaVersion" class="version-select"><option value="v1">V1 字段</option><option value="v2" selected>V2 字段</option><option value="v3">V3 字段</option></select></span></h2>
+          <div class="two"><div class="field"><label>角色名 *</label><input data-p-field="name" type="text" required></div><div class="field"><label>角色版本</label><input data-p-field="character_version" type="text"></div></div>
+          <div class="field"><label>人设描述（description / char_persona）</label><textarea class="tall" data-p-field="description"></textarea></div>
+          <div class="field"><label>性格（personality）</label><textarea data-p-field="personality"></textarea></div>
+          <div class="field"><label>场景（scenario / world_scenario）</label><textarea data-p-field="scenario"></textarea></div>
+          <div class="field"><label>开场白（first_mes / char_greeting）</label><textarea data-p-field="first_mes"></textarea></div>
+          <div class="field"><label>对话示例（mes_example / example_dialogue）</label><textarea class="tall" data-p-field="mes_example"></textarea></div>
+          <div class="field"><label>系统提示词（system_prompt）</label><textarea data-p-field="system_prompt"></textarea></div>
+          <div class="field"><label>历史后指令（post_history_instructions）</label><textarea data-p-field="post_history_instructions"></textarea></div>
+          <div class="field"><label>补充开场白（alternate_greetings，每行一条）</label><textarea data-p-field="alternate_greetings"></textarea></div>
+          <div class="two"><div class="field"><label>作者</label><input data-p-field="creator" type="text"></div><div class="field"><label>标签（逗号分隔）</label><input data-p-field="tags" type="text"></div></div>
+          <div class="field"><label>作者备注（creator_notes / creatorcomment）</label><textarea data-p-field="creator_notes"></textarea></div>
+          <div class="actions"><button type="button" id="personaSave" class="primary">保存角色卡</button><button type="button" id="personaCancelEdit">取消编辑</button><button type="button" id="personaDelete" class="danger">删除此角色</button></div>
+        </form>
+      </div>
+    </section>
+
+    <section id="page-dock" class="page" hidden>
+      <div class="card"><div class="dock-summary"><i id="dockDot" class="dot"></i><b>Agent 看板</b><span id="dockSummary" class="grow subtle">正在连接</span><button type="button" id="dockProbe" class="primary">重新探测</button><button type="button" id="dockClear">清理已结束</button></div><div class="row wrap"><select id="dockChannel" class="grow" aria-label="Agent 通道"><option value="">全部通道</option></select><button type="button" id="dockPrev">上一个</button><button type="button" id="dockNext">下一个</button><button type="button" id="dockPin">钉住 / 取消</button></div><div id="dockStatus" class="status"></div></div>
+      <div class="control-grid"><div class="card"><h3>会话 <span id="dockSessionCount" class="right">0</span></h3><div id="dockSessions"></div></div><div><div class="card"><h3>通道</h3><div id="dockChannels"></div></div><div class="card"><h3>看板配置</h3><label class="check"><input id="dockEnabled" type="checkbox"> 启用本地推送服务</label><div class="two"><div class="field"><label>端口</label><input id="dockPort" type="number" min="1024" max="65535"></div><div class="field"><label>完成会话保留秒数</label><input id="dockKeep" type="number" min="5" max="3600"></div></div><button type="button" id="dockConfigSave" class="primary">保存看板配置</button><div class="hint">通用程序可向 127.0.0.1:端口/state POST 状态；这里不会执行 Agent 命令。</div></div></div></div>
+    </section>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script>
+(function(){
+'use strict';
+const $=(id)=>document.getElementById(id);
+const $$=(sel,root)=>Array.from((root||document).querySelectorAll(sel));
+const esc=(v)=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const errText=(e)=>String(e&&e.message||e||'未知错误');
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,Number(n)||0));
+const isOk=(r)=>!!(r&&r.ok!==false);
+const failText=(r,fallback)=>(r&&(r.error||r.detail))||fallback||'操作失败';
+const PAGE_NAMES={control:'控制',settings:'设置',persona:'角色卡',dock:'Agent 看板',env:'环境自检'};
+const PAGES=Object.keys(PAGE_NAMES);
+let active='control',toastTimer=0,hostAvailable=false;
+const loaded={chat:false,settings:false,persona:false,dock:false,env:false};
+const listeners=[];
+window.__panelTest={active:'control',results:[],messages:[]};
+
+function toast(message,kind){const el=$('toast');el.textContent=String(message||'');el.className=kind?'show '+kind:'show';clearTimeout(toastTimer);toastTimer=setTimeout(()=>{el.className='';},2800);}
+async function invokeCmd(command,args){
+  try{
+    if(!window.__TAURI__||!window.__TAURI__.core||typeof window.__TAURI__.core.invoke!=='function')return {ok:false,error:'Tauri 通道不可用'};
+    return await window.__TAURI__.core.invoke(command,args||{});
+  }catch(e){return {ok:false,error:command+'：'+errText(e)};}
+}
+async function listen(name,handler){
+  try{
+    if(!window.__TAURI__||!window.__TAURI__.event||typeof window.__TAURI__.event.listen!=='function')return;
+    const un=await window.__TAURI__.event.listen(name,e=>{try{handler(e&&Object.prototype.hasOwnProperty.call(e,'payload')?e.payload:e);}catch(err){console.error(name,err);}});
+    if(typeof un==='function')listeners.push(un);
+  }catch(e){console.warn('listen '+name,e);}
+}
+function fmtSize(n){n=Number(n);if(!isFinite(n)||n<=0)return '0 B';if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB';}
+function fmtTime(v){if(!v)return '—';if(typeof v==='number'){const d=new Date(v);return isNaN(d)?String(v):d.toLocaleString('zh-CN',{hour12:false});}return String(v).replace('T',' ').slice(0,19);}
+function ago(v){const d=Math.max(0,Date.now()-Number(v||0));if(!v)return '—';if(d<8000)return '刚刚';if(d<60000)return Math.round(d/1000)+' 秒前';return Math.round(d/60000)+' 分钟前';}
+function setBadge(el,text,kind){if(typeof el==='string')el=$(el);el.textContent=text;el.className='right badge'+(kind?' '+kind:'');}
+function jsonText(v){try{return JSON.stringify(v,null,2);}catch(e){return String(v);}}
+function output(el,value){if(typeof el==='string')el=$(el);el.hidden=false;el.textContent=typeof value==='string'?value:jsonText(value);}
+function mdLite(text){
+  const parts=String(text==null?'':text).split(/```/);
+  return parts.map((part,i)=>{
+    if(i%2){const body=part.replace(/^[\w+#.-]*\n/,'').replace(/\n$/,'');return '<pre>'+esc(body)+'</pre>';}
+    return esc(part).replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').replace(/(^|\n)### ([^\n]+)/g,'$1<b>$2</b>').replace(/\n/g,'<br>');
+  }).join('');
+}
+
+function showPage(page,focus){
+  if(!PAGES.includes(page))page='control';
+  if(active==='control'&&page!=='control')stopSys(false);
+  active=page;window.__panelTest.active=page;
+  for(const p of PAGES){const sec=$('page-'+p);if(sec)sec.hidden=p!==page;}
+  $$('.nav [data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===page||(page==='env'&&b.dataset.page==='settings')));
+  document.title='猫鲸 · '+PAGE_NAMES[page];
+  try{const u=new URL(location.href);u.searchParams.set('p',page);history.replaceState(null,'',u.href);}catch(e){}
+  if(page==='search')renderSearch();
+  if(page==='chat'){renderChat();refreshHarnessStatus();if(!loaded.chat)refreshChat();}
+  if(page==='control')startControl();
+  if(page==='settings'&&!loaded.settings)loadConfig();
+  if(page==='persona')refreshPersonas();
+  if(page==='dock')refreshDock();
+  if(page==='env'){if(!loaded.env)refreshEnv();}
+  if(focus!==false)setTimeout(()=>{const target=page==='search'?$('searchInput'):page==='chat'?$('chatInput'):null;if(target)target.focus();},30);
+}
+
+/* 文件搜索 */
+const S={rows:window.__panelTest.results,sel:-1,seq:0,timer:0,busy:false,error:'',errorCode:''};
+function scheduleSearch(){clearTimeout(S.timer);S.timer=setTimeout(runSearch,140);}
+async function runSearch(){
+  const q=$('searchInput').value;
+  if(!q.trim()){S.seq++;S.rows.splice(0);S.sel=-1;S.busy=false;S.error='';S.errorCode='';renderSearch();return;}
+  const seq=++S.seq;S.busy=true;S.error='';S.errorCode='';renderSearch();
+  const r=await invokeCmd('everything_search',{query:q,limit:Number($('searchLimit').value)||30});
+  if(seq!==S.seq)return;
+  S.busy=false;
+  if(r&&r.ok){S.rows.splice(0,S.rows.length,...(Array.isArray(r.results)?r.results:[]));S.sel=S.rows.length?0:-1;S.error='';S.errorCode='';}
+  else{S.rows.splice(0);S.sel=-1;S.error=failText(r,'搜索失败');S.errorCode=(r&&r.error)||'';}
+  renderSearch();
+}
+function renderSearch(){
+  const box=$('searchResults'),q=$('searchInput').value.trim();
+  $('searchCount').textContent=S.busy?'搜索中…':S.rows.length?S.rows.length+' 项':q?'0 项':'输入关键词开始';
+  if(S.error){box.innerHTML='<div class="empty bad">'+esc(S.error)+(S.errorCode==='NO_ES'?'<br>没有找到 Everything 搜索组件。<br><button type="button" class="primary" id="searchEnv">打开环境自检 / 部署</button>':'')+'</div>';return;}
+  if(!q){box.innerHTML='<div class="empty">使用 Everything 索引搜索本机文件。<br>例：<b>报表 ext:xlsx</b>　<b>path:桌面 图纸</b>　<b>dm:today ext:pdf</b></div>';return;}
+  if(S.busy&&!S.rows.length){box.innerHTML='<div class="empty">正在搜索…</div>';return;}
+  if(!S.rows.length){box.innerHTML='<div class="empty">没有匹配的文件</div>';return;}
+  box.innerHTML=S.rows.map((r,i)=>{
+    const path=String(r.path||''),name=String(r.name||path.split(/[\\/]/).pop()||'');
+    return '<div class="result'+(i===S.sel?' selected':'')+'" role="option" aria-selected="'+(i===S.sel)+'" data-index="'+i+'">'
+      +'<div class="name" title="'+esc(name)+'">'+esc(name)+'</div><div class="meta">'+esc(fmtSize(r.size))+'<br>'+esc(fmtTime(r.mtime))+'</div>'
+      +'<div class="path" title="'+esc(path)+'">'+esc(path)+'</div><div class="ops"><button type="button" class="icon" data-search-act="open" data-index="'+i+'" title="打开">打开</button><button type="button" class="icon" data-search-act="reveal" data-index="'+i+'" title="定位">定位</button><button type="button" class="icon" data-search-act="copy" data-index="'+i+'" title="复制路径">复制</button></div></div>';
+  }).join('');
+  const selected=box.querySelector('.result.selected');if(selected)selected.scrollIntoView({block:'nearest'});
+}
+async function searchAction(index,action){
+  const r=S.rows[index];if(!r)return;S.sel=index;renderSearch();
+  const cmd=action==='open'?'everything_open':action==='reveal'?'everything_reveal':'everything_copy';
+  const args=action==='copy'?{text:String(r.path||'')}:{path:String(r.path||'')};
+  const res=await invokeCmd(cmd,args);
+  if(!res||res.ok===false)toast(failText(res,action==='copy'?'复制失败':'操作失败'),'bad');
+  else toast(action==='copy'?'已复制完整路径':action==='reveal'?'已打开所在文件夹':'已打开文件','ok');
+}
+function moveSearch(delta){if(!S.rows.length)return;S.sel=(S.sel+delta+S.rows.length)%S.rows.length;renderSearch();}
+
+/* 聊天 */
+const C={msgs:window.__panelTest.messages,current:null,tools:[],reasoning:'',busy:false,state:'',backend:'harness',route:'',usage:null,title:'',persona:'',error:'',started:0,timer:0};
+function chatScroll(){const box=$('chatMessages'),follow=box.scrollHeight-box.scrollTop-box.clientHeight<60;box.dataset.follow=follow?'1':'0';return follow;}
+function afterChatRender(follow){const box=$('chatMessages');if(follow!==false)box.scrollTop=box.scrollHeight;}
+function renderChat(){
+  const box=$('chatMessages'),follow=chatScroll();
+  let html=C.msgs.map(m=>'<div class="msg '+(m.role==='user'?'user':m.role==='err'?'error':'assistant')+(m.streaming?' streaming':'')+'">'+mdLite(m.text||'')+'</div>').join('');
+  if(C.reasoning)html+='<div class="reason"><details><summary>思考过程（'+C.reasoning.length+' 字）</summary><div class="reason-text">'+mdLite(C.reasoning)+'</div></details></div>';
+  html+=C.tools.map((t,i)=>'<div class="tool'+(t.isError?' error':'')+'"><b>'+(t.done?'完成':'调用中')+' · '+esc(t.name||'工具')+'</b>'+(t.args?'<div>'+esc(t.args)+'</div>':'')+(t.done?'<details><summary>工具返回</summary><pre>'+esc(t.result||'')+'</pre></details>':'')+'</div>').join('');
+  if(C.busy&&!C.current)html+='<div class="reason">'+(C.state==='starting'?'正在启动 Harness 运行时…':'正在等待流式回复…')+'</div>';
+  if(C.error)html+='<div class="msg error">'+mdLite(C.error)+'</div>';
+  if(!html)html='<div class="msg assistant">开始一段对话。Harness 支持工具调用；直连 API 支持 OpenAI / Anthropic 协议。<br>可在角色卡页面切换人设，在设置页面配置后端。</div>';
+  box.innerHTML=html;afterChatRender(follow);
+  $('chatSend').disabled=C.busy||!$('chatInput').value.trim();$('chatCancel').disabled=!C.busy;$('chatClear').disabled=C.busy||!C.msgs.length;
+  $('chatState').textContent=C.busy?'生成中':C.state==='starting'?'启动中':C.state==='dead'?'Harness 已停止':C.backend==='api'?'直连 API':'Harness '+(C.state==='idle'?'就绪':'待连接');
+  $('chatDot').className='dot '+(C.busy?'run':C.state==='dead'?'bad':C.state==='idle'?'ok':'');
+  $('chatRoute').textContent=[C.backend==='api'?'API':'Harness',C.route,C.persona?'角色 '+C.persona:'',C.title].filter(Boolean).join(' · ');
+  $('chatUsage').textContent=usageText(C.usage);
+}
+function usageText(u){if(!u||typeof u!=='object')return '';const input=u.inputTokens??u.input_tokens??u.promptTokens??u.prompt_tokens;const output=u.outputTokens??u.output_tokens??u.completionTokens??u.completion_tokens??u.totalOutputTokens;const total=u.totalTokens??u.total_tokens;const bits=[];if(input!=null)bits.push('输入 '+input);if(output!=null)bits.push('输出 '+output);if(total!=null)bits.push('总计 '+total);return bits.length?bits.join(' / ')+' tokens':jsonText(u);}
+function appendMessage(role,text,streaming){const m={role,text:String(text||''),at:Date.now(),streaming:!!streaming};C.msgs.push(m);return m;}
+function ensureStream(){if(!C.current)C.current=appendMessage('assistant','',true);return C.current;}
+async function refreshChat(){
+  loaded.chat=true;const r=await invokeCmd('chat_history');
+  if(!Array.isArray(r)){C.error=failText(r,'读取聊天记录失败');renderChat();return;}
+  const current=C.current;
+  C.msgs.splice(0,C.msgs.length,...r.filter(m=>m&&typeof m==='object'));
+  if(current&&C.busy){const exists=C.msgs.some(m=>m===current);if(!exists)C.msgs.push(current);}
+  C.error='';renderChat();
+}
+async function refreshHarnessStatus(){
+  const st=await invokeCmd('harness_status');if(!st||st.ok===false){$('chatState').textContent=failText(st,'状态读取失败');return;}
+  C.backend=st.backend||C.backend;C.state=st.state||(st.busy||st.running?'running':st.ready?'idle':'');
+  C.persona=st.persona&&(st.persona.name||st.persona.id)||C.persona;
+  if(st.backend==='api')C.route=(st.apiProtocol||st.provider||'')+' / '+(st.apiModel||st.model||'未填模型');
+  else if(st.provider||st.model)C.route=(st.provider||'')+' / '+(st.model||'');
+  if(st.busy||st.running||st.state==='running'){if(!C.busy){C.busy=true;C.started=Date.now();}}
+  else if(st.state==='idle'&&!C.current)C.busy=false;
+  renderChat();
+}
+async function sendChat(){
+  const text=$('chatInput').value.trim();if(!text||C.busy)return;
+  C.busy=true;C.started=Date.now();C.error='';C.reasoning='';C.tools=[];C.usage=null;C.title='';C.current=null;
+  appendMessage('user',text,false);$('chatInput').value='';renderChat();
+  const r=await invokeCmd('harness_chat',{prompt:text,history:[]});
+  if(!r||r.ok===false){C.busy=false;C.error='发送失败：'+failText(r,'未知错误');if(C.current){C.current.streaming=false;C.current=null;}renderChat();return;}
+  if(!r.streaming){C.busy=false;if(C.current){C.current.streaming=false;C.current=null;}await refreshChat();}else renderChat();
+}
+async function cancelChat(){if(!C.busy)return;const r=await invokeCmd('harness_cancel');C.busy=false;if(C.current){C.current.streaming=false;C.current=null;}C.reasoning='';C.tools=[];C.error=r&&r.ok?'已取消这次请求。':'取消：'+failText(r,'已请求停止');renderChat();}
+async function clearChat(){if(C.busy)return;const r=await invokeCmd('chat_clear');if(!r||r.ok===false){C.error=failText(r,'清空失败');}else{C.msgs.splice(0);C.current=null;C.tools=[];C.reasoning='';C.usage=null;C.title='';C.error='';}renderChat();}
+function onHarnessEvent(evt){
+  if(!evt||typeof evt!=='object')return;
+  switch(evt.kind){
+    case 'delta':C.busy=true;ensureStream().text+=String(evt.text||'');break;
+    case 'reasoning':C.reasoning+=String(evt.text||'');break;
+    case 'message':if(evt.text){ensureStream().text=String(evt.text);}if(evt.usage)C.usage=evt.usage;break;
+    case 'toolCall':C.tools.push({name:String(evt.name||'工具'),callId:evt.callId,args:typeof evt.args==='string'?evt.args:jsonText(evt.args),done:false,result:'',isError:false});break;
+    case 'toolResult':{let t=null;const id=evt.callId;t=[...C.tools].reverse().find(x=>!x.done&&(id==null||String(x.callId)===String(id)))||[...C.tools].reverse().find(x=>!x.done);if(!t){t={name:'工具',callId:id,args:'',done:false};C.tools.push(t);}t.done=true;t.result=String(evt.text||'');t.isError=!!evt.isError;break;}
+    case 'usage':C.usage=evt.usage||evt;break;
+    case 'route':C.route=(evt.provider||'')+' / '+(evt.model||'');break;
+    case 'title':C.title=String(evt.title||'');break;
+    case 'turnEnd':{
+      const reason=evt.reason||{},kind=typeof reason==='string'?reason:reason.kind;
+      C.busy=false;if(C.current){C.current.streaming=false;C.current=null;}
+      if(kind==='error')C.error=(C.backend==='api'?'API 出错：':'Harness 出错：')+((reason.error&&reason.error.message)||reason.message||evt.error||'未知错误');
+      else if(kind==='cancelled')C.error='这次生成已取消。';else C.error='';
+      C.reasoning='';C.tools=[];setTimeout(refreshChat,120);break;
+    }
+  }
+  renderChat();
+}
+function onHarnessStatus(st){
+  if(!st)return;C.state=st.state||C.state;
+  if(st.info&&st.info.provider)C.route=st.info.provider+' / '+(st.info.model||'');
+  if(st.state==='running'){C.busy=true;if(!C.started)C.started=Date.now();}
+  else if(st.state==='idle'){if(!C.current)C.busy=false;}
+  else if(st.state==='dead'){C.busy=false;if(C.current){C.current.streaming=false;C.current=null;}C.error='Harness 已停止：'+((st.info&&st.info.reason)||st.dead||'下次发消息会自动重启');}
+  renderChat();
+}
+
+/* 控制面板 */
+const SYS={running:false,timer:0,last:null,lastFull:null};
+function renderSys(data){
+  if(!data||typeof data!=='object')return;
+  if(!data.light)SYS.lastFull=data;
+  const merged=Object.assign({},SYS.lastFull||{},data);
+  if(data.light&&SYS.lastFull){merged.disks=SYS.lastFull.disks;merged.gpu=SYS.lastFull.gpu;merged.cpuFreqMHz=SYS.lastFull.cpuFreqMHz;merged.ramSpeedMHz=SYS.lastFull.ramSpeedMHz;}
+  SYS.last=merged;
+  const cpu=Number(merged.cpu),memUsed=Number(merged.memUsedGB),memTotal=Number(merged.memTotalGB),memPct=memTotal>0?memUsed/memTotal*100:0;
+  $('cpuValue').textContent=isFinite(cpu)?cpu.toFixed(1)+'%':'—';$('cpuDetail').textContent=(merged.cpuFreqMHz?'频率 '+merged.cpuFreqMHz+' MHz':'实时占用')+(merged.ramSpeedMHz?' · 内存 '+merged.ramSpeedMHz+' MHz':'');$('cpuBar').style.width=clamp(cpu,0,100)+'%';
+  $('memValue').textContent=isFinite(memPct)&&memTotal>0?memPct.toFixed(1)+'%':'—';$('memDetail').textContent=isFinite(memUsed)&&isFinite(memTotal)?memUsed.toFixed(2)+' / '+memTotal.toFixed(2)+' GB':'等待数据';$('memBar').style.width=clamp(memPct,0,100)+'%';
+  const disks=Array.isArray(merged.disks)?merged.disks:[];
+  $('diskValue').textContent=disks.length?disks.map(d=>String(d.drive||'')).filter(Boolean).join(' / '):'—';
+  $('diskDetail').textContent=disks.length?disks.map(d=>(d.drive||'?')+' '+Number(d.usedPct||0).toFixed(0)+'%').join(' · '):merged.disks===null?'等待完整采样':'没有可显示的磁盘';
+  $('diskList').textContent=disks.map(d=>(d.drive||'?')+'：'+Number(d.totalGB||0).toFixed(1)+' GB').join('　');
+  const gpu=merged.gpu;$('gpuValue').textContent=gpu&&gpu.util!=null?Number(gpu.util).toFixed(0)+'%':'—';
+  $('gpuDetail').textContent=gpu?('显存 '+Number(gpu.memUsedMB||0).toFixed(0)+' / '+Number(gpu.memTotalMB||0).toFixed(0)+' MB · '+Number(gpu.tempC||0).toFixed(0)+'°C'):merged.gpu===null?'未检测到 NVIDIA GPU 或等待完整采样':'等待数据';
+  $('gpuBar').style.width=gpu?clamp(gpu.util,0,100)+'%':'0';$('sysUpdated').textContent='更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});
+}
+async function pollSys(){const r=await invokeCmd('sysinfo_get');if(r&&r.ok!==false)renderSys(r.data||r);else $('sysUpdated').textContent=failText(r,'读取失败');}
+async function startSys(notify){
+  if(SYS.running)return;const light=await invokeCmd('sysinfo_start_light');const full=await invokeCmd('sysinfo_start');
+  if(!light||light.ok===false||!full||full.ok===false){$('sysUpdated').textContent=failText(full,failText(light,'启动失败'));if(notify)toast($('sysUpdated').textContent,'bad');}
+  SYS.running=true;await pollSys();clearInterval(SYS.timer);SYS.timer=setInterval(pollSys,2000);if(notify)toast('系统完整采样已启动','ok');
+}
+function stopSys(notify){if(!SYS.running&&!SYS.timer)return;clearInterval(SYS.timer);SYS.timer=0;SYS.running=false;invokeCmd('sysinfo_stop').then(r=>{if(notify)toast(r&&r.ok?'已停止完整采样':failText(r,'停止失败'),r&&r.ok?'ok':'bad');});if(notify)$('sysUpdated').textContent='完整采样已停止（轻量采样保留）';}
+const MEDIA={cfg:null};
+function fillMedia(r){
+  if(!r||r.ok===false){$('mediaNow').textContent=failText(r,'媒体读取失败');return;}
+  const cfg=r.cfg||MEDIA.cfg||{};MEDIA.cfg=cfg;
+  if(document.activeElement!==$('mediaPoll'))$('mediaPoll').value=cfg.pollMs??2000;
+  if(document.activeElement!==$('mediaStart'))$('mediaStart').value=cfg.startMs??1200;
+  if(document.activeElement!==$('mediaStop'))$('mediaStop').value=cfg.stopMs??2500;
+  $('mediaEnabled').checked=!!cfg.enabled;renderMediaState(r.state||{});
+}
+function renderMediaState(st){
+  const info=st.info||{};setBadge('mediaBadge',st.playing?'演出中':st.enabled?'监控中':'未开启',st.playing?'run':st.enabled?'ok':'');
+  const kind=info.kind||st.kind;$('mediaNow').textContent=(st.enabled?'监控运行：'+(st.running?'是':'否'):'监控未开启')+'\n当前：'+(kind?String(kind):'无媒体演出')+(info.title?' · '+info.title:'')+(info.artist?' / '+info.artist:'')+(info.app?' · '+info.app:'')+(st.lastError?'\n错误：'+st.lastError:'')+'\n样本 '+(st.samples||0)+' · 错误 '+(st.errors||0)+' · 重启 '+(st.restarts||0);
+}
+async function loadMedia(){fillMedia(await invokeCmd('media_get'));}
+async function saveMedia(){const patch={enabled:$('mediaEnabled').checked,pollMs:Number($('mediaPoll').value),startMs:Number($('mediaStart').value),stopMs:Number($('mediaStop').value)};const r=await invokeCmd('media_set',{patch});fillMedia(r);if(r&&r.ok)toast('媒体设置已保存','ok');else toast(failText(r,'媒体设置保存失败'),'bad');}
+function fillAnimation(r){if(!r||r.ok===false){$('animationStatus').textContent=failText(r,'读取失败');return;}const c=r.config||{};$('animationEnabled').checked=!!c.enabled;$('animationAction').value=c.actionId||'idle';$('animationStart').value=c.start??0;$('animationEnd').value=c.end??2;setBadge('animationBadge',c.enabled?'循环中':'未开启',c.enabled?'ok':'');$('animationStatus').textContent=r.error||'配置已读取';$('animationStatus').className='status '+(r.error?'bad':'');}
+async function loadAnimation(){fillAnimation(await invokeCmd('animation_loop_get'));}
+async function saveAnimation(forceOff){const cfg={enabled:forceOff?false:$('animationEnabled').checked,actionId:$('animationAction').value.trim(),start:Number($('animationStart').value),end:Number($('animationEnd').value)};const r=await invokeCmd('animation_loop_set',{cfg});fillAnimation(r);if(r&&r.ok)toast(cfg.enabled?'动画循环已开启':'动画循环已停止','ok');else toast(failText(r,'动画配置失败'),'bad');}
+function renderGame(g){if(!g)return;setBadge('gameBadge',g.active?'已开启':'未开启',g.active?'warn':'ok');$('gameNow').textContent=(g.active?'桌宠窗口应由游戏模式隐藏。':'当前未进入游戏模式。')+'\n原因：'+(g.reason||'无')+' · 模式：'+(g.manual==='on'?'手动开':g.manual==='off'?'手动关':'自动')+' · 扫描 '+(g.scans||0)+' 次';$('gameProcs').textContent='监控进程：'+(Array.isArray(g.procs)?g.procs.join('、'):'—');}
+async function loadGame(){const r=await invokeCmd('gamemode_get');if(r)renderGame(r);else $('gameNow').textContent='读取失败';}
+async function setGame(mode){const on=mode==='auto'?null:mode==='on';const r=await invokeCmd('gamemode_set_manual',{on});renderGame(r);toast('游戏模式已切换为'+(mode==='auto'?'自动':mode==='on'?'手动开启':'手动关闭'),'ok');}
+function renderUpdate(r){if(!r)return;if(r.currentVersion)$('updateVersion').textContent='v'+r.currentVersion;const latest=r.latest||r;if(latest&&latest.hasUpdate){$('updateNow').textContent='发现新版本 v'+latest.latestVersion+'（当前 v'+(latest.currentVersion||r.currentVersion)+'）';$('updateNotes').textContent=latest.notes||'';}else if(latest&&latest.noRelease){$('updateNow').textContent='仓库暂未发布版本。';}else if(r.ok===false){$('updateNow').textContent='检查失败：'+failText(r);}else if(r.hasUpdate===false){$('updateNow').textContent='当前已是最新版本。';}else if(r.ok&&r.latest===null){$('updateNow').textContent='尚未发现缓存的新版本。';}}
+async function checkUpdate(){$('updateNow').textContent='正在检查 GitHub Releases…';const r=await invokeCmd('update_check');renderUpdate(r);}
+async function openUpdate(which){const cached=await invokeCmd('update_status');const latest=cached&&cached.latest||{};const url=which==='download'?(latest.downloadUrl||latest.releaseUrl||''):(latest.releaseUrl||'');const r=await invokeCmd('update_open_url',{url});toast(r&&r.ok?'已用系统浏览器打开':failText(r,'打开失败'),r&&r.ok?'ok':'bad');}
+function startControl(){startSys(false);loadMedia();loadAnimation();loadGame();invokeCmd('update_status').then(renderUpdate);}
+
+/* 设置 */
+function toggleBackend(){const api=$('cfgBackend').value==='api';$('cfgApiFields').hidden=!api;$('cfgHarnessFields').hidden=api;}
+function keyHint(section){if(!section)return '';return section.keySet?'已保存 Key'+(section.keyTail?'（尾号 '+section.keyTail+'）':''):'尚未保存 Key';}
+async function loadConfig(){
+  const r=await invokeCmd('config_get');if(!r||r.ok===false){$('cfgStatus').textContent=failText(r,'配置读取失败');$('cfgStatus').className='status bad';return;}
+  loaded.settings=true;const chat=r.chat||{},deep=r.deepseek||{},h=r.harness||{};
+  $('cfgBackend').value=chat.backend||'harness';$('cfgUserName').value=chat.userName||'';$('cfgProtocol').value=chat.protocol||'openai';$('cfgApiBase').value=chat.baseUrl||'';$('cfgApiModel').value=chat.model||'';
+  $('cfgDeepBase').value=deep.baseUrl||'';$('cfgDeepModel').value=deep.model||'';$('cfgRepo').value=h.repo||'';$('cfgProfile').value=h.profile||'headless';
+  $('cfgDeepKey').value='';$('cfgApiKey').value='';$('cfgDeepKeyHint').textContent=keyHint(deep);$('cfgApiKeyHint').textContent=keyHint(chat);$('configVersion').textContent=r.version?'v'+r.version:'';
+  toggleBackend();$('cfgStatus').textContent='配置已读取。两个 Key 输入框留空都不会修改原值。';$('cfgStatus').className='status ok';
+}
+async function saveConfig(){
+  const patch={chat:{backend:$('cfgBackend').value,protocol:$('cfgProtocol').value,baseUrl:$('cfgApiBase').value.trim(),model:$('cfgApiModel').value.trim(),userName:$('cfgUserName').value},deepseek:{baseUrl:$('cfgDeepBase').value.trim(),model:$('cfgDeepModel').value.trim()},harness:{repo:$('cfgRepo').value.trim(),profile:$('cfgProfile').value.trim()||'headless'}};
+  const deepKey=$('cfgDeepKey').value,apiKey=$('cfgApiKey').value;if(deepKey)patch.apiKey=deepKey;if(apiKey)patch.chatApiKey=apiKey;
+  const r=await invokeCmd('config_set',{patch});if(!r||r.ok===false){$('cfgStatus').textContent='保存失败：'+failText(r);$('cfgStatus').className='status bad';return false;}
+  $('cfgDeepKey').value='';$('cfgApiKey').value='';$('cfgStatus').textContent='配置已保存，聊天后端已按新配置重启。';$('cfgStatus').className='status ok';await loadConfig();return true;
+}
+async function testConfig(){if(!await saveConfig())return;$('cfgStatus').textContent='正在测试连接…';const r=await invokeCmd('config_test');output('cfgOutput',r);if(r&&r.ok){$('cfgStatus').textContent='连接成功：'+(r.model||'')+' · '+(r.ms||0)+' ms'+(r.text?'\n返回：'+r.text:'');$('cfgStatus').className='status ok';}else{$('cfgStatus').textContent='测试未完成：'+failText(r,'未知错误')+(r&&r.code==='HARNESS_REQUIRED'?'\n当前是 Harness 后端，请通过聊天发送一条消息验证；先用“重新探测”检查仓库。':'');$('cfgStatus').className='status bad';}}
+async function detectHarness(browse){const path=$('cfgRepo').value.trim();$('cfgRepoStatus').textContent='正在检查仓库…';const cmd=browse?'dialog_browse_repo':'harness_detect';const args=browse?{path}:{path:path||null,force:true};const r=await invokeCmd(cmd,args);output('cfgOutput',r);if(r&&(r.picked||r.path)){$('cfgRepo').value=r.picked||r.path;}const ok=!!(r&&(r.status==='ok'||r.valid===true||(r.hasBin&&r.hasTsx)));$('cfgRepoStatus').textContent=(ok?'仓库可用：':'仓库检查：')+(r&&(r.detail||r.status||r.error)||jsonText(r));$('cfgRepoStatus').className='status '+(ok?'ok':'warn');}
+
+/* 环境自检 */
+const ENV={data:null,busy:'',logs:[]};
+function envItem(id){return ENV.data&&Array.isArray(ENV.data.items)?ENV.data.items.find(x=>x.id===id)||{}:{};}
+function envRender(){
+  const h=envItem('harness'),ev=envItem('everything'),tools=(ENV.data&&ENV.data.tools)||h.tools||{};
+  setBadge('envHarnessBadge',h.status==='ok'?'已就绪':h.status==='nodeps'?'缺依赖':'未就绪',h.status==='ok'?'ok':'bad');setBadge('envEverythingBadge',ev.status==='ok'?'已就绪':'未就绪',ev.status==='ok'?'ok':'bad');
+  $('envHarnessDetail').textContent=(h.detail||'未检测')+'\n仓库：'+(h.repo||'未配置')+'\n工具链：git '+((tools.git&&tools.git.version)||'未检测')+' · Node '+((tools.node&&tools.node.version)||'未检测')+' · pnpm '+((tools.pnpm&&tools.pnpm.version)||'未检测');
+  $('envEverythingDetail').textContent=(ev.detail||'未检测')+'\n已找到：'+(ev.foundExe||ev.deployedExe||'无')+'\nes.exe：'+(ev.esExeOk?'可用':'缺失')+(ev.instance?' · 实例 '+ev.instance:'');
+  if(ev.foundExe&&ev.autoLaunchExe)$('envAuto').checked=!!ev.autoLaunch;
+  if(ENV.data){$('envNoAsk').checked=!!ENV.data.noAsk;$('envSummary').textContent=ENV.data.allOk?'全部就绪':(ENV.data.items||[]).filter(i=>i.status!=='ok').length+' 项待处理';}
+  for(const b of [$('envDeployHarness'),$('envDeployEverything')])b.disabled=!!ENV.busy;$('envCancel').disabled=!ENV.busy;
+}
+async function refreshEnv(){loaded.env=true;$('envSummary').textContent='检测中…';const r=await invokeCmd('env_check',{quick:$('envQuick').checked});if(!r||r.ok===false){$('envSummary').textContent=failText(r,'检测失败');return;}ENV.data=r;envRender();}
+function envLogText(e){if(e.kind==='log')return String(e.line||'');if(e.kind==='progress')return '… '+String(e.id||'')+' '+Number(e.pct||0)+'%（'+Math.round(Number(e.got||0)/1048576)+' / '+Math.round(Number(e.total||0)/1048576)+' MB）';if(e.kind==='phase')return '▶ '+String(e.text||e.phase||'');return jsonText(e);}
+function renderEnvLogs(){const el=$('envLogs');el.textContent=ENV.logs.length?ENV.logs.slice(-200).map(envLogText).join('\n'):'暂无日志';el.scrollTop=el.scrollHeight;const last=[...ENV.logs].reverse().find(e=>e.kind==='progress');$('envProgress').style.width=last?clamp(last.pct,0,100)+'%':'0';}
+function onEnvLog(e){if(!e)return;ENV.logs.push(e);if(ENV.logs.length>300)ENV.logs.shift();if(e.kind==='phase')$('envPhase').textContent=e.text||'';renderEnvLogs();}
+async function deployEnv(id){
+  if(ENV.busy)return;const dir=id==='harness'?$('envHarnessDir').value.trim():$('envEverythingDir').value.trim();if(!dir){toast('请先填写部署目录','bad');return;}
+  ENV.busy=id;ENV.logs=[];$('envPhase').textContent='准备部署 '+id+'…';envRender();renderEnvLogs();
+  const r=await invokeCmd(id==='harness'?'env_deploy_harness':'env_deploy_everything',id==='harness'?{dir,useMirror:$('envMirror').checked}:{dir});
+  ENV.busy='';if(!r||r.ok===false){ENV.logs.push({kind:'log',line:'✗ '+failText(r,'部署失败')});toast(failText(r,'部署失败'),'bad');}else{ENV.logs.push({kind:'log',line:'✓ 部署完成：'+(r.dir||r.repo||r.exe||'')});toast('部署完成','ok');if(r.repo)$('cfgRepo').value=r.repo;}
+  $('envPhase').textContent=r&&r.ok?'部署完成':'部署失败';envRender();renderEnvLogs();await refreshEnv();
+}
+async function cancelEnv(){if(!ENV.busy)return;const r=await invokeCmd('env_cancel',{id:ENV.busy});toast(r&&r.ok?'已请求取消':failText(r,'取消失败'),r&&r.ok?'ok':'bad');}
+async function launchEverything(){const ev=envItem('everything'),exe=ev.foundExe||ev.deployedExe||null;const r=await invokeCmd('env_launch_everything',{explicitExe:exe});toast(r&&r.ok?'Everything 已启动':failText(r,'启动失败'),r&&r.ok?'ok':'bad');if(r&&r.ok)setTimeout(refreshEnv,1800);}
+async function openEnvUrl(url){const r=await invokeCmd('env_open_url',{url});if(!r||r.ok===false)toast(failText(r,'打开网址失败'),'bad');}
+
+/* 角色卡 */
+const P={list:[],activeId:'',active:null,selectedId:'',editingId:'',version:'v2',pendingVersion:''};
+const P_FIELDS=['name','description','personality','scenario','first_mes','mes_example','creator_notes','system_prompt','post_history_instructions','alternate_greetings','tags','creator','character_version'];
+function applyPersona(r){if(!r||r.ok===false)return false;if(Array.isArray(r.list))P.list=r.list;if('activeId'in r){P.activeId=r.activeId||'';P.active=r.active||null;}C.persona=P.active&&P.active.name||'';return true;}
+function renderPersonas(){
+  const box=$('personaList');if(!P.list.length){box.innerHTML='<div class="card subtle">还没有角色卡。可新建，或导入 V1 / V2 / V3 JSON 与 SillyTavern PNG。</div>';return;}
+  box.innerHTML=P.list.map(it=>'<div class="persona-item'+(it.id===P.activeId?' active':'')+(it.id===P.selectedId?' selected':'')+'" data-persona-id="'+esc(it.id)+'"><div class="pname">'+(it.id===P.activeId?'● ':'')+esc(it.name||it.id)+'</div><div class="pmeta">'+esc(it.broken||[it.creator?'作者 '+it.creator:'',(it.tags||[]).join(' · ')].filter(Boolean).join(' / ')||it.id)+'</div><div class="actions">'+(it.broken?'':'<button type="button" data-persona-act="use" data-id="'+esc(it.id)+'">'+(it.id===P.activeId?'使用中':'使用')+'</button><button type="button" data-persona-act="edit" data-id="'+esc(it.id)+'">编辑</button>')+'<button type="button" class="danger" data-persona-act="delete" data-id="'+esc(it.id)+'">删除</button></div></div>').join('');
+}
+function fillPersona(card){
+  card=card||{};for(const k of P_FIELDS){const el=document.querySelector('[data-p-field="'+k+'"]');if(!el)continue;el.value=k==='tags'?(card.tags||[]).join(', '):k==='alternate_greetings'?(card.alternate_greetings||[]).join('\n'):String(card[k]||'');}
+  $('personaVersion').value=P.version||'v2';$('personaFormTitle').firstChild.textContent=P.editingId?'编辑角色卡 ':'新建角色卡 ';$('personaDelete').disabled=!P.editingId;$('personaForm').hidden=false;
+}
+function newPersona(){P.editingId='';P.selectedId='';P.version='v2';fillPersona({});renderPersonas();$('personaStatus').textContent='正在新建角色卡；保存时按所选 V1 / V2 / V3 结构提交。';}
+async function editPersona(id){const r=await invokeCmd('persona_get',{id});if(!r||r.ok===false){$('personaStatus').textContent=failText(r,'读取角色失败');return;}P.editingId=id;P.selectedId=id;P.version=P.pendingVersion||'v2';P.pendingVersion='';fillPersona(r.card||{});renderPersonas();$('personaStatus').textContent='已载入 '+id+'，可编辑全部规范字段。';}
+function collectPersona(){const card={};for(const k of P_FIELDS){const value=document.querySelector('[data-p-field="'+k+'"]').value;if(k==='tags')card[k]=value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);else if(k==='alternate_greetings')card[k]=value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);else card[k]=value;}return card;}
+async function savePersona(){
+  const card=collectPersona();if(!card.name.trim()){$('personaStatus').textContent='角色名不能为空';return;}if(!card.description.trim()&&!card.personality.trim()&&!card.system_prompt.trim()){$('personaStatus').textContent='description / personality / system_prompt 至少填写一项';return;}
+  const version=$('personaVersion').value;let payload=card;if(version==='v2')payload={spec:'chara_card_v2',spec_version:'2.0',data:card};else if(version==='v3')payload={spec:'chara_card_v3',spec_version:'3.0',data:Object.assign({group_only_greetings:[]},card)};
+  const r=await invokeCmd('persona_save',{card:payload,id:P.editingId||null});if(!applyPersona(r)){$('personaStatus').textContent='保存失败：'+failText(r);return;}P.editingId=r.saved||P.editingId;P.selectedId=P.editingId;P.version=version;renderPersonas();$('personaStatus').textContent='已保存「'+card.name+'」（'+version.toUpperCase()+' 输入，统一按人设白名单存储）。';if(r.activeId)refreshChat();
+}
+async function usePersona(id){const r=await invokeCmd('persona_set_active',{id:id||null});if(!applyPersona(r)){$('personaStatus').textContent=failText(r,'切换失败');return;}P.selectedId=id;renderPersonas();$('personaStatus').textContent=id?'已切换角色，聊天记录按角色分开保存。':'已回到默认助手。';renderChat();refreshChat();}
+async function deletePersona(id){const it=P.list.find(x=>x.id===id);if(!id)return;if(!confirm('确定删除角色卡「'+((it&&it.name)||id)+'」？\n该角色的聊天记录会保留。'))return;const r=await invokeCmd('persona_delete',{id});if(!applyPersona(r)){$('personaStatus').textContent=failText(r,'删除失败');return;}if(P.editingId===id){P.editingId='';$('personaForm').hidden=true;}P.selectedId='';renderPersonas();$('personaStatus').textContent='角色卡已删除。';}
+async function importPersona(file){
+  if(!file)return;if(file.size>8*1024*1024){$('personaStatus').textContent='文件过大（上限 8MB）';return;}
+  P.pendingVersion='';if(/\.json$/i.test(file.name)){try{const raw=JSON.parse(await file.text());P.pendingVersion=raw.spec==='chara_card_v3'?'v3':raw.spec==='chara_card_v2'?'v2':'v1';}catch(e){}}
+  try{const bytes=Array.from(new Uint8Array(await file.arrayBuffer()));const r=await invokeCmd('persona_import_buffer',{data:bytes});if(!applyPersona(r)){$('personaStatus').textContent='导入失败：'+failText(r);return;}renderPersonas();$('personaStatus').textContent='已导入 '+file.name+'（'+(r.format||'角色卡')+'）。';if(r.imported)await editPersona(r.imported);}catch(e){$('personaStatus').textContent='读取文件失败：'+errText(e);}
+}
+async function exportPersona(){const id=P.selectedId||P.editingId||P.activeId,path=$('personaExportPath').value.trim(),format=$('personaExportFormat').value;if(!id){$('personaStatus').textContent='请先选中一个角色';return;}if(!path){$('personaStatus').textContent='请输入导出完整路径';return;}const r=await invokeCmd('persona_export',{id,format,path});$('personaStatus').textContent=r&&r.ok?'已导出到：'+r.path:'导出失败：'+failText(r);$('personaStatus').className='status '+(r&&r.ok?'ok':'bad');}
+async function refreshPersonas(){loaded.persona=true;const r=await invokeCmd('persona_list');if(!applyPersona(r)){$('personaStatus').textContent=failText(r,'角色列表读取失败');return;}renderPersonas();}
+
+/* Agent 看板 */
+const DK={snap:null,configLoaded:false};
+function dockSelected(){const ss=DK.snap&&DK.snap.sessions||[];return ss.find(s=>s.key===(DK.snap&&DK.snap.pinned))||ss.find(s=>s.agent===(DK.snap&&DK.snap.selected))||ss[0]||null;}
+function dockState(s){return({working:'干活中',speaking:'输出中',waiting_user:'等你确认',done:'已结束',error:'出错',idle:'空闲',sleeping:'休息'})[s]||s||'未知';}
+function renderDock(snap){
+  if(snap&&Array.isArray(snap.sessions))DK.snap=snap;const d=DK.snap;if(!d)return;const ss=d.sessions||[],chs=d.channels||[],cur=dockSelected();
+  $('dockDot').className='dot '+(d.ok?'ok':'bad');$('dockSummary').textContent=(d.ok?'服务运行中':'服务未运行')+' · '+ss.length+' 个会话 · '+chs.filter(c=>c.available).length+' 个可用通道 · '+(d.host||'127.0.0.1')+':'+(d.port||'—');
+  $('dockSessionCount').textContent=String(ss.length);$('dockStatus').textContent=(d.error||'')+(d.counters?' 接收 '+(d.counters.received||0)+' · 丢弃 '+(d.counters.dropped||0)+' · 解析错误 '+(d.counters.parseErrors||0):'');
+  const select=$('dockChannel'),old=d.selected||'';select.innerHTML='<option value="">全部通道</option>'+chs.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'（'+c.sessions+'）</option>').join('');select.value=old;
+  $('dockSessions').innerHTML=ss.length?ss.map(s=>'<div class="dock-item '+esc(s.state)+(s.key===d.pinned?' pinned':'')+'" data-dock-key="'+esc(s.key)+'"><div class="dock-top"><i class="dot '+(s.state==='working'||s.state==='speaking'?'run':s.state==='error'?'bad':'')+'"></i><span class="dock-title grow">'+esc(s.agentName||s.agent)+' · '+esc(s.title||s.sessionId||'未命名会话')+'</span><span class="badge">'+esc(dockState(s.state))+'</span></div><dl class="dock-detail"><dt>session</dt><dd>'+esc(s.sessionId||s.key)+'</dd><dt>state</dt><dd>'+esc(s.state)+(s.event?' / '+esc(s.event):'')+' · '+esc(ago(s.updatedAt))+'</dd><dt>title</dt><dd>'+esc(s.title||'—')+'</dd><dt>tool</dt><dd>'+esc(s.tool||'—')+'</dd><dt>cwd</dt><dd>'+esc(s.cwd||'—')+'</dd></dl><div class="actions"><button type="button" data-dock-act="pin" data-key="'+esc(s.key)+'">'+(s.key===d.pinned?'取消钉住':'钉住')+'</button></div></div>').join(''):'<div class="empty">暂无 Agent 会话。可探测通道，或由支持的工具 POST /state。</div>';
+  $('dockChannels').innerHTML=chs.length?chs.map(c=>'<div class="channel"><b>'+(c.available?'● ':'○ ')+esc(c.name)+(c.wired?' · 已接入':'')+'</b><button type="button" data-dock-act="select" data-id="'+esc(c.id)+'">'+(d.selected===c.id?'取消筛选':'筛选')+'</button><div class="detail">'+esc(c.detail||'')+' · '+c.sessions+' 个会话</div></div>').join(''):'<div class="empty">尚未探测到通道</div>';
+  const cfg=d.config||{};if(!DK.configLoaded){$('dockEnabled').checked=cfg.enabled!==false;$('dockPort').value=cfg.port||d.port||8770;$('dockKeep').value=cfg.keepDoneSec||60;DK.configLoaded=true;}
+  $('dockPin').disabled=!cur;
+}
+async function refreshDock(probe){loaded.dock=true;const r=await invokeCmd(probe?'dock_probe':'dock_get');if(r&&Array.isArray(r.sessions))renderDock(r);else $('dockStatus').textContent=failText(r,'看板读取失败');}
+async function dockPin(key){await invokeCmd('dock_pin',{key:key||null});refreshDock();}
+async function dockSelect(id){await invokeCmd('dock_select',{id:id||null});refreshDock();}
+async function dockCycle(dir){await invokeCmd('dock_cycle',{dir});refreshDock();}
+async function dockClear(){const n=await invokeCmd('dock_clear_ended');toast(typeof n==='number'?'已清理 '+n+' 个结束会话':failText(n,'清理完成'),'ok');refreshDock();}
+async function saveDockConfig(){const patch={enabled:$('dockEnabled').checked,port:Number($('dockPort').value),keepDoneSec:Number($('dockKeep').value)};DK.configLoaded=false;const r=await invokeCmd('dock_config',{patch});renderDock(r);toast(r&&r.sessions?'看板配置已保存':failText(r,'配置失败'),r&&r.sessions?'ok':'bad');}
+
+function bindEvents(){
+  $$('.nav [data-page]').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));
+  $('searchInput').addEventListener('input',scheduleSearch);$('searchInput').addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();moveSearch(e.key==='ArrowDown'?1:-1);}
+    else if(e.key==='Enter'){e.preventDefault();searchAction(S.sel,e.ctrlKey?'reveal':'open');}
+    else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='c'&&S.sel>=0){e.preventDefault();searchAction(S.sel,'copy');}
+  });
+  $('searchLimit').addEventListener('change',scheduleSearch);
+  $('searchResults').addEventListener('click',e=>{if(e.target&&e.target.id==='searchEnv'){showPage('env');return;}const b=e.target.closest('[data-search-act]');if(b){searchAction(Number(b.dataset.index),b.dataset.searchAct);return;}const row=e.target.closest('.result');if(row){S.sel=Number(row.dataset.index);renderSearch();}});
+  $('searchResults').addEventListener('dblclick',e=>{const row=e.target.closest('.result');if(row)searchAction(Number(row.dataset.index),'open');});
+  $('chatInput').addEventListener('input',renderChat);$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}});$('chatSend').addEventListener('click',sendChat);$('chatCancel').addEventListener('click',cancelChat);$('chatClear').addEventListener('click',clearChat);$('chatPersona').addEventListener('click',()=>showPage('persona'));$('chatSettings').addEventListener('click',()=>showPage('settings'));
+  $('sysStart').addEventListener('click',()=>startSys(true));$('sysStop').addEventListener('click',()=>stopSys(true));
+  $('mediaApply').addEventListener('click',saveMedia);$('mediaEnabled').addEventListener('change',saveMedia);$('mediaProbe').addEventListener('click',async()=>{output('mediaOutput','正在独立探测系统媒体…');const r=await invokeCmd('media_probe_once');output('mediaOutput',r);});$('mediaDiag').addEventListener('click',async()=>output('mediaOutput',await invokeCmd('media_diag')));
+  $('animationApply').addEventListener('click',()=>saveAnimation(false));$('animationStop').addEventListener('click',()=>saveAnimation(true));$('animationReload').addEventListener('click',loadAnimation);
+  $$('[data-game]').forEach(b=>b.addEventListener('click',()=>setGame(b.dataset.game)));$('gameReload').addEventListener('click',loadGame);
+  $('updateCheck').addEventListener('click',checkUpdate);$('updateOpenRelease').addEventListener('click',()=>openUpdate('release'));$('updateOpenDownload').addEventListener('click',()=>openUpdate('download'));
+  $('cfgBackend').addEventListener('change',toggleBackend);$('cfgSave').addEventListener('click',saveConfig);$('cfgTest').addEventListener('click',testConfig);$('cfgReload').addEventListener('click',loadConfig);$('cfgEnv').addEventListener('click',()=>{if(!$('envHarnessDir').value)$('envHarnessDir').value=$('cfgRepo').value;showPage('env');});$('cfgDetect').addEventListener('click',()=>detectHarness(false));$('cfgBrowse').addEventListener('click',()=>detectHarness(true));
+  $('envCheck').addEventListener('click',refreshEnv);$('envBack').addEventListener('click',()=>showPage('settings'));$('envCancel').addEventListener('click',cancelEnv);$('envDeployHarness').addEventListener('click',()=>deployEnv('harness'));$('envDeployEverything').addEventListener('click',()=>deployEnv('everything'));$('envLaunchEverything').addEventListener('click',launchEverything);$('envHarnessSite').addEventListener('click',()=>openEnvUrl('https://github.com/deepseek-ai/deepseek-harness'));$('envEverythingSite').addEventListener('click',()=>openEnvUrl('https://www.voidtools.com/zh-cn/downloads/'));
+  $('envNoAsk').addEventListener('change',async()=>{const r=await invokeCmd('env_dismiss',{on:$('envNoAsk').checked});if(!r||r.ok===false)toast(failText(r,'保存失败'),'bad');});$('envAuto').addEventListener('change',async()=>{const r=await invokeCmd('env_everything_auto',{on:$('envAuto').checked});toast(r&&r.ok?'自动启动设置已保存':failText(r,'保存失败'),r&&r.ok?'ok':'bad');});
+  $('personaNew').addEventListener('click',newPersona);$('personaImport').addEventListener('click',()=>$('personaFile').click());$('personaFile').addEventListener('change',async()=>{await importPersona($('personaFile').files[0]);$('personaFile').value='';});$('personaDefault').addEventListener('click',()=>usePersona(''));$('personaReveal').addEventListener('click',async()=>{const r=await invokeCmd('persona_reveal');$('personaStatus').textContent=r&&r.ok?'角色目录：'+r.path:failText(r,'打开目录失败');});$('personaReload').addEventListener('click',refreshPersonas);$('personaSave').addEventListener('click',savePersona);$('personaCancelEdit').addEventListener('click',()=>{$('personaForm').hidden=true;P.editingId='';});$('personaDelete').addEventListener('click',()=>deletePersona(P.editingId));$('personaExport').addEventListener('click',exportPersona);
+  $('personaList').addEventListener('click',e=>{const b=e.target.closest('[data-persona-act]');if(b){const id=b.dataset.id;if(b.dataset.personaAct==='use')usePersona(id);else if(b.dataset.personaAct==='edit')editPersona(id);else deletePersona(id);return;}const row=e.target.closest('[data-persona-id]');if(row){P.selectedId=row.dataset.personaId;renderPersonas();const it=P.list.find(x=>x.id===P.selectedId);if(it&&!/\.(png|json)$/i.test($('personaExportPath').value))$('personaExportPath').placeholder='导出 '+P.selectedId+' 的完整路径';}});
+  $('dockProbe').addEventListener('click',()=>refreshDock(true));$('dockClear').addEventListener('click',dockClear);$('dockPrev').addEventListener('click',()=>dockCycle(-1));$('dockNext').addEventListener('click',()=>dockCycle(1));$('dockPin').addEventListener('click',()=>{const cur=dockSelected();if(cur)dockPin(cur.key);});$('dockChannel').addEventListener('change',()=>dockSelect($('dockChannel').value));$('dockConfigSave').addEventListener('click',saveDockConfig);
+  $('dockSessions').addEventListener('click',e=>{const b=e.target.closest('[data-dock-act="pin"]');if(b)dockPin(b.dataset.key);});$('dockChannels').addEventListener('click',e=>{const b=e.target.closest('[data-dock-act="select"]');if(b)dockSelect(DK.snap&&DK.snap.selected===b.dataset.id?'':b.dataset.id);});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&active==='env')showPage('settings');});
+}
+
+function init(){
+  hostAvailable=!!(window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke);$('hostDot').className='dot '+(hostAvailable?'ok':'bad');$('hostText').textContent=hostAvailable?'Tauri 已连接':'Tauri 不可用';
+  bindEvents();
+  listen('panel:show',payload=>{const p=typeof payload==='string'?payload:payload&&(payload.p||payload.panel||payload.page||payload.view);if(PAGES.includes(p))showPage(p);});
+  listen('harness:event',onHarnessEvent);listen('harness:status',onHarnessStatus);listen('sysinfo',renderSys);listen('media:state',renderMediaState);listen('pet:gamemode',e=>{if(active==='control')loadGame();});listen('env:log',onEnvLog);listen('dock:update',renderDock);
+  const query=new URLSearchParams(location.search).get('p');showPage(PAGES.includes(query)?query:'control',false);
+  window.__panelReady=true;
+  window.addEventListener('beforeunload',()=>{clearInterval(SYS.timer);for(const un of listeners){try{un();}catch(e){}}});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+</body>
+</html>

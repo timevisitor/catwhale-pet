@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>猫鲸 · 文件搜索</title>
+<style>
+:root{--ui-bg:rgba(248,249,245,.97);--ui-fg:#49564e;--ui-dim:#778178;--ui-border:rgba(103,112,106,.36);--gold:#f6c62e;--gold-deep:#ac7d0c;--font:"Microsoft YaHei UI","Segoe UI",sans-serif;--mono:"Cascadia Mono","Consolas",monospace}
+*{box-sizing:border-box}html,body{margin:0;min-width:320px;background:transparent;color:var(--ui-fg);font:12px/1.5 var(--font);overflow:hidden}body{user-select:none}button,input{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--gold-deep);outline-offset:1px}
+#search{width:100%;background:var(--ui-bg);border:1px solid rgba(255,255,247,.85);border-radius:2px;box-shadow:0 0 0 1px rgba(90,100,92,.22),0 10px 28px rgba(0,0,0,.18);overflow:hidden;animation:open .18s cubic-bezier(.2,.8,.2,1)}
+.sbox{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--ui-border);border-left:3px solid var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.55),rgba(244,246,242,.35))}.sbox svg{width:17px;height:17px;flex:none;color:var(--ui-dim)}.sbox input{flex:1;min-width:0;padding:4px 7px;background:rgba(255,255,255,.72);border:1px solid rgba(90,100,92,.28);border-radius:2px;outline:none;font-size:14px;user-select:text}.sbox input:focus{border-color:var(--gold);box-shadow:0 0 0 2px rgba(246,198,46,.25);background:#fff}.sbox input::placeholder{color:rgba(103,112,106,.6)}.scount{color:var(--ui-dim);font-size:11px;white-space:nowrap}
+#slist{max-height:336px;overflow-y:auto}.srow{display:flex;gap:9px;align-items:center;padding:6px 11px;cursor:default;border-left:3px solid transparent;border-bottom:1px solid rgba(103,112,106,.18)}.srow:hover{background:rgba(246,198,46,.16)}.srow.sel{background:var(--gold);border-left-color:var(--gold-deep)}.sname{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.spath{flex:1 1 auto;min-width:40px;color:var(--ui-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;user-select:text}.smeta{flex:0 0 auto;color:var(--ui-dim);font:11px var(--mono);white-space:nowrap;font-variant-numeric:tabular-nums}.srow.sel .sname{color:#4a3c10}.srow.sel .spath,.srow.sel .smeta{color:rgba(74,60,16,.8)}.srow button{display:grid;place-items:center;width:25px;height:23px;padding:2px;background:rgba(255,255,255,.62);border:1px solid rgba(90,100,92,.26);border-radius:2px}.srow button:hover{background:#fffdf3;border-color:var(--gold-deep)}.srow button svg{width:14px;height:14px}
+.sfoot{display:flex;gap:12px;padding:6px 11px;border-top:1px solid rgba(103,112,106,.22);color:var(--ui-dim);font-size:11px;flex-wrap:wrap}.smsg{padding:16px 13px;color:var(--ui-dim);font-size:12.5px;line-height:1.7}.smsg b{color:var(--ui-fg);font-weight:600}.smsg.bad{color:#9a413b}.smsg button{margin-top:8px;padding:4px 9px;background:#fff8db;border:1px solid var(--gold-deep);border-radius:2px}.empty-icon{display:block;margin:0 auto 8px;width:24px;height:24px;opacity:.65}
+::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:rgba(103,112,106,.35);border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-track{background:transparent}
+@keyframes open{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}@media(prefers-reduced-motion:reduce){#search{animation:none}}
+</style>
+</head>
+<body>
+<div id="search" role="dialog" aria-label="文件搜索">
+  <div class="sbox">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+    <input id="sinput" type="text" spellcheck="false" autocomplete="off" aria-label="搜索文件" placeholder="搜索文件（支持 ext:pdf、path: 等语法）">
+    <span class="scount" id="scount"></span>
+  </div>
+  <div id="slist" role="listbox" aria-label="搜索结果"></div>
+  <div class="sfoot"><span>↑↓ 选择</span><span>Enter 打开</span><span>Ctrl+Enter 打开所在文件夹</span><span>Ctrl+C 复制路径</span><span>Esc 关闭</span></div>
+</div>
+<script>
+(function(){
+'use strict';
+const $=id=>document.getElementById(id);
+const T=window.__TAURI__;
+const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const errText=e=>String(e&&e.message||e||'未知错误');
+const failText=(r,f)=>(r&&(r.error||r.detail))||f||'操作失败';
+const S={rows:[],sel:-1,seq:0,timer:0,busy:false,error:'',errorCode:'',layout:0};
+window.__searchTest={results:S.rows,ready:false};
+async function invokeCmd(cmd,args){try{if(!T||!T.core)return{ok:false,error:'Tauri 通道不可用'};return await T.core.invoke(cmd,args||{});}catch(e){return{ok:false,error:cmd+'：'+errText(e)};}}
+function closeFloat(){S.seq++;clearTimeout(S.timer);invokeCmd('close_float',{label:'search'});}
+function scheduleLayout(){if(S.layout)return;S.layout=requestAnimationFrame(()=>{S.layout=0;const h=Math.ceil($('search').getBoundingClientRect().height);invokeCmd('float_layout',{label:'search',width:470,height:h});});}
+function fmtSize(n){n=Number(n);if(!isFinite(n)||n<=0)return'';if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';if(n<1073741824)return(n/1048576).toFixed(1)+' MB';return(n/1073741824).toFixed(2)+' GB';}
+function fmtDate(v){if(!v)return'';if(typeof v==='number'){const d=new Date(v);return isNaN(d)?'':d.toLocaleDateString('zh-CN');}return String(v).replace('T',' ').slice(0,10);}
+function scheduleSearch(){clearTimeout(S.timer);S.timer=setTimeout(runSearch,140);}
+async function runSearch(){
+  const q=$('sinput').value;
+  if(!q.trim()){S.seq++;S.rows.splice(0);S.sel=-1;S.busy=false;S.error='';S.errorCode='';renderSearch();return;}
+  const seq=++S.seq;S.busy=true;S.error='';S.errorCode='';renderSearch();
+  const r=await invokeCmd('everything_search',{query:q,limit:30});if(seq!==S.seq)return;
+  S.busy=false;
+  if(r&&r.ok){S.rows.splice(0,S.rows.length,...(Array.isArray(r.results)?r.results:[]));S.sel=S.rows.length?0:-1;}
+  else{S.rows.splice(0);S.sel=-1;S.error=failText(r,'搜索失败');S.errorCode=(r&&r.error)||'';}
+  renderSearch();
+}
+function renderSearch(){
+  const list=$('slist'),q=$('sinput').value.trim();$('scount').textContent=S.busy?'搜索中…':S.rows.length?S.rows.length+' 项':q?'0 项':'';
+  if(S.error){list.innerHTML='<div class="smsg bad">'+esc(S.error)+(S.errorCode==='NO_ES'?'<br><button type="button" id="searchEnv">打开环境自检 / 部署</button>':'')+'</div>';scheduleLayout();return;}
+  if(!q){list.innerHTML='<div class="smsg"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>搜索本机文件（走 Everything 索引，毫秒级）。<br>例：<b>报表 ext:xlsx</b>　<b>path:桌面 图纸</b>　<b>dm:today ext:pdf</b></div>';scheduleLayout();return;}
+  if(S.busy&&!S.rows.length){list.innerHTML='<div class="smsg">搜索中…</div>';scheduleLayout();return;}
+  if(!S.rows.length){list.innerHTML='<div class="smsg">没有匹配的文件</div>';scheduleLayout();return;}
+  list.innerHTML=S.rows.map((r,i)=>{const path=String(r.path||''),name=String(r.name||path.split(/[\\/]/).pop()||''),dir=path.length>name.length?path.slice(0,path.length-name.length-1):'';
+    return'<div class="srow'+(i===S.sel?' sel':'')+'" role="option" aria-selected="'+(i===S.sel)+'" data-i="'+i+'" title="'+esc(path)+'"><span class="sname">'+esc(name)+'</span><span class="spath">'+esc(dir)+'</span><span class="smeta">'+esc(fmtSize(r.size)+(r.mtime?'　'+fmtDate(r.mtime):''))+'</span><button type="button" data-reveal="'+i+'" title="打开所在文件夹" aria-label="打开所在文件夹"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7h7l2 2h9v10H3z"/><path d="M3 7V5h7l2 2"/></svg></button></div>';}).join('');
+  const sel=list.querySelector('.srow.sel');if(sel)sel.scrollIntoView({block:'nearest'});scheduleLayout();
+}
+function moveSel(d){if(!S.rows.length)return;S.sel=(S.sel+d+S.rows.length)%S.rows.length;renderSearch();}
+async function activate(i,action){
+  const r=S.rows[i];if(!r)return;S.sel=i;renderSearch();
+  const cmd=action==='reveal'?'everything_reveal':action==='copy'?'everything_copy':'everything_open';
+  const res=await invokeCmd(cmd,action==='copy'?{text:String(r.path||'')}:{path:String(r.path||'')});
+  if(!res||res.ok===false){S.error=failText(res,'操作失败');renderSearch();return;}
+  if(action==='copy'){$('scount').textContent='已复制路径';return;}
+  closeFloat();
+}
+$('sinput').addEventListener('input',scheduleSearch);
+$('sinput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();moveSel(e.key==='ArrowDown'?1:-1);}
+  else if(e.key==='Enter'){e.preventDefault();activate(S.sel,e.ctrlKey?'reveal':'open');}
+  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='c'&&S.sel>=0){e.preventDefault();activate(S.sel,'copy');}
+});
+$('slist').addEventListener('click',e=>{if(e.target&&e.target.id==='searchEnv'){invokeCmd('open_panel',{panel:'env'});return;}const b=e.target.closest('[data-reveal]');if(b){activate(Number(b.dataset.reveal),'reveal');return;}const row=e.target.closest('.srow');if(row){S.sel=Number(row.dataset.i);renderSearch();$('sinput').focus();}});
+$('slist').addEventListener('dblclick',e=>{const row=e.target.closest('.srow');if(row)activate(Number(row.dataset.i),'open');});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();closeFloat();}});
+async function listen(name,fn){try{if(T&&T.event)return await T.event.listen(name,e=>fn(e&&e.payload));}catch(e){console.warn(name,e);}}
+listen('float:show',label=>{if(label&&label!=='search')return;setTimeout(()=>{$('sinput').focus();$('sinput').setSelectionRange($('sinput').value.length,$('sinput').value.length);if($('sinput').value.trim())scheduleSearch();},40);});
+window.addEventListener('resize',scheduleLayout);
+renderSearch();setTimeout(()=>{$('sinput').focus();window.__searchTest.ready=true;},40);
+})();
+</script>
+</body>
+</html>

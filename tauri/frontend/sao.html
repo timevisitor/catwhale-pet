@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>sao</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent;
+    -webkit-user-select:none;user-select:none}
+  body{font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
+  /* 标准四列内容：250 + 46 + 166 + 186 + 3×20 = 708×374。 */
+  #sao{--sao-card-w:250px;--sao-card-h:374px;--sao-cat-d:46px;--sao-cat-gap:56px;
+    --sao-list-w:166px;--sao-sub-w:186px;--sao-row-h:42px;
+    position:fixed;left:0;top:0;height:var(--sao-card-h);display:none;align-items:center;gap:20px;
+    z-index:12;color:#566059;pointer-events:none;isolation:isolate}
+  #sao.show{display:flex}
+  #sao,#sao *{box-sizing:border-box;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
+  #sao>*{flex-shrink:0} #sao button{margin:0;font-weight:400;cursor:pointer}
+  #sao button:focus-visible{outline:2px solid #AC7D0C;outline-offset:3px}
+  #sao button:disabled{opacity:.48;cursor:not-allowed}
+  #sao .sao-mod,#sao .row,#sao .sub-head{background:rgba(248,249,245,.94);border:1px solid rgba(255,255,247,.8);
+    border-radius:1px;color:#566059;box-shadow:0 0 0 1px rgba(90,100,92,.18),0 10px 28px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08)}
+  #saoCard{position:relative;width:var(--sao-card-w);height:var(--sao-card-h);display:flex;flex-direction:column;
+    pointer-events:auto;outline:1px solid rgba(90,100,92,.24);background:rgba(240,242,236,.92)}
+  #saoCard .cd-title{display:flex;align-items:center;gap:8px;padding:14px 14px 12px;font-size:15px;font-weight:500;letter-spacing:.5px;flex:none}
+  #saoCard .cd-title svg{width:19px;height:19px;flex:none}
+  #saoCard .cd-rule,#saoCard .cd-rule2{height:1px;flex:none;background:rgba(103,112,106,.3);margin:0 14px}
+  #saoCard .cd-preview{position:relative;flex:1 1 auto;min-height:0;overflow:hidden}
+  #saoCard .cd-char{position:absolute;left:27%;bottom:0;width:auto;height:88%;max-width:54%;transform:translateX(-50%);
+    object-fit:contain;opacity:1;pointer-events:none;user-select:none}
+  #saoCard .cd-char-veil{display:none}
+  #saoCard .cd-rule2{display:block}
+  #saoCard .cd-status{display:block;flex:none;padding:9px 14px 10px;font-size:11px;line-height:1.75;color:#69736C}
+  #saoCard .cd-status .cd-hint{white-space:nowrap}
+  #saoCard .cd-tri{position:absolute;right:-12px;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:12px solid rgba(248,249,245,.94)}
+  #sao.mirror #saoCard .cd-tri{right:auto;left:-12px;border-left:0;border-right:12px solid rgba(248,249,245,.94)}
+  #cdMarks{position:absolute;left:119px;right:10px;top:20px;bottom:8px;pointer-events:none;z-index:1;
+    display:flex;flex-direction:column;align-items:stretch;gap:12px}
+  #cdMarks .mk{position:relative;min-width:0;padding-left:11px;font-size:10.5px;line-height:1.55;color:#59635C;overflow-wrap:anywhere}
+  #cdMarks .mk::before{content:'';position:absolute;left:0;top:.62em;width:4px;height:4px;border-radius:50%;background:#C89A17}
+  #cdMarks .mk.empty{opacity:.62}
+  @media (max-height:340px){#cdMarks{left:104px;top:12px;gap:7px}#cdMarks .mk{font-size:9.5px}}
+  #sao #saoCats{position:relative;width:var(--sao-cat-d);display:flex;flex-direction:column;align-items:center;
+    gap:calc(var(--sao-cat-gap) - var(--sao-cat-d));background:transparent;border:0;box-shadow:none}
+  #saoCats .axis{position:absolute;width:1px;top:23px;bottom:23px;background:rgba(210,216,209,.5)}
+  #saoCats .cat{position:relative;display:flex;align-items:center;justify-content:center;width:var(--sao-cat-d);height:var(--sao-cat-d);
+    padding:0;border:1px solid rgba(242,245,235,.85);border-radius:50%;background:rgba(248,249,245,.3);pointer-events:auto;
+    box-shadow:0 4px 12px rgba(0,0,0,.16),0 1px 3px rgba(0,0,0,.08);transition:background .13s,border-color .13s,transform .13s,box-shadow .13s}
+  #saoCats .cat::before{content:'';position:absolute;inset:4px;border-radius:50%;border:1px solid rgba(255,255,255,.6);background:rgba(248,249,245,.6)}
+  #saoCats .cat svg{width:20px;height:20px;position:relative;color:#69786F}
+  #saoCats .cat:hover::before{background:rgba(255,253,234,.94)}
+  #saoCats .cat.on{border-color:#AC7D0C;box-shadow:0 4px 12px rgba(0,0,0,.16),0 0 0 2px rgba(246,198,46,.22)}
+  #saoCats .cat.on::before{background:#F6C62E;border-color:#C89716} #saoCats .cat.on svg{color:#FFFBE9}
+  #saoCats .cat:active{transform:scale(.98)}
+  #saoCats .cat-tri{position:absolute;left:calc(100% + 5px);border-top:6px solid transparent;border-bottom:6px solid transparent;border-right:8px solid #FFFBE9}
+  #sao.mirror #saoCats .cat-tri{left:auto;right:calc(100% + 5px);border-right:0;border-left:8px solid #FFFBE9}
+  #saoList,#saoSub{position:relative;display:flex;flex-direction:column;background:transparent;border:0;
+    scrollbar-width:thin;scrollbar-color:#BABFAF transparent;overflow-y:auto;max-height:var(--sao-card-h)}
+  #saoList{width:var(--sao-list-w);gap:calc(var(--sao-cat-gap) - var(--sao-row-h))}
+  #saoSub{width:var(--sao-sub-w);align-self:flex-start;gap:2px;visibility:hidden} #saoSub.show{visibility:visible}
+  #sao.mirror{flex-direction:row-reverse}
+  #sao .row{flex:none;display:flex;align-items:center;gap:9px;padding:0 11px;width:100%;height:var(--sao-row-h);
+    font-size:14px;text-align:left;pointer-events:auto;transition:background .13s,border-color .13s}
+  #sao .row svg{width:21px;height:21px;flex:none}
+  #sao .row .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #sao .row .sub-arw,#sao .row .state{flex:none;font-size:11px;color:inherit;font-style:normal}
+  #sao .row:hover{background:#FFF9DE;border-color:#E6C660} #sao .row.on{background:#F6C62E;border-color:#C99A19;color:#66521A}
+  #sao .row:active{background:#E8B922} #sao.mirror .row .sub-arw{transform:scaleX(-1)}
+  #sao .sub-head{display:flex;align-items:center;height:32px;flex:none;font-size:12px;padding:0 10px;
+    pointer-events:auto;text-align:left;border-bottom:1px solid #D6B95C} #sao .sub-head:hover{background:#FFF9DE}
+  #saoBridge{position:absolute;pointer-events:auto;background:transparent}
+  #saoBridge::after{content:'';position:absolute;top:20px;height:1px;left:4px;right:4px;background:rgba(209,216,201,.5)}
+  #sao.compact{gap:12px} #sao.narrow #saoCard{display:none}
+  #sao.mini{--sao-list-w:130px;--sao-sub-w:160px;gap:10px} #sao.mini #saoCats{display:none}
+  #sao.stack #saoList{display:none} #sao.stack #saoSub{width:min(250px,calc(100vw - 24px))} #sao.stack #saoBridge{display:none}
+  #sao.show #saoCard,#sao.show #saoList{animation:sao-panel-in .22s cubic-bezier(.2,.8,.2,1)}
+  #sao.show #saoCats{animation:sao-fade-in .16s ease-out} #saoSub.show{animation:sao-fade-in .15s ease-out}
+  @keyframes sao-panel-in{from{opacity:0;translate:0 6px}to{opacity:1;translate:0 0}}
+  @keyframes sao-fade-in{from{opacity:0}to{opacity:1}}
+  @media (prefers-reduced-motion:reduce){#sao,#sao *{animation:none!important;transition:none!important}}
+  @media (max-height:340px){#sao{--sao-cat-d:36px;--sao-cat-gap:42px;--sao-row-h:36px}#saoCats .axis{top:18px;bottom:18px}}
+</style>
+</head>
+<body>
+<div id="sao" role="region" aria-label="桌宠系统菜单">
+  <div id="saoCard" class="sao-mod">
+    <div class="cd-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="1"/><path d="M12 4v16M8 9.5h1.5M14.5 9.5H16M8 14h1.5M14.5 14H16"/></svg>
+      <span id="saoName"><span id="cdName">猫鲸</span></span>
+    </div>
+    <div class="cd-rule"></div>
+    <div class="cd-preview">
+      <video id="cdChar" class="cd-char" muted loop autoplay playsinline preload="auto" hidden></video>
+      <div class="cd-char-veil"></div>
+      <div id="cdMarks"></div>
+    </div>
+    <div class="cd-rule2"></div>
+    <div class="cd-status" id="saoCardInfo"><div>当前动作：<span id="cdState">待机</span></div><div class="cd-hint">提示：点角色也能互动</div></div>
+    <div class="cd-tri" id="saoCardTri" style="top:120px"></div>
+  </div>
+  <div id="saoCats" class="sao-mod" role="menu" aria-label="圆形分类轴">
+    <div class="axis"></div><div class="cat-tri" id="saoCatTri" style="top:14px"></div>
+  </div>
+  <div id="saoList" role="menu" aria-label="功能分类"></div>
+  <div id="saoSub" role="menu" aria-label="分类功能"></div>
+  <div class="bridge" id="saoBridge"></div>
+</div>
+
+<script>
+'use strict';
+const T = window.__TAURI__;
+const invoke = (command,args) => {
+  if (!T || !T.core || typeof T.core.invoke !== 'function') return Promise.reject('Tauri invoke unavailable');
+  return T.core.invoke(command,args);
+};
+
+/* 全部图标内联，无外部依赖，CSP=null 可运行。 */
+const P = {
+  hand:'<path d="M8 13V7.5a1.4 1.4 0 0 1 2.8 0V12"/><path d="M10.8 12V6.8a1.4 1.4 0 0 1 2.8 0V12"/><path d="M13.6 12.4V8.6a1.4 1.4 0 0 1 2.8 0v5.6c0 3.3-2.2 5.8-5.4 5.8-2.6 0-4-1.2-4.9-3.2L5.6 14a1.3 1.3 0 0 1 2.1-1.5L8 13"/>',
+  wave:'<path d="M9 11V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M12 11V5.5a1.5 1.5 0 0 1 3 0V11"/><path d="M15 11.5V8a1.5 1.5 0 0 1 3 0v6.5c0 3-2 5.5-5.5 5.5S7 17.5 7 14.5V12l-1.6.8a1.4 1.4 0 0 0 .9 2.6"/>',
+  pic:'<rect x="4" y="5.5" width="16" height="13" rx="1"/><path d="M4 14l4.5-4 3.5 3 3-2.5 5 4.5"/>',
+  play:'<circle cx="12" cy="12" r="8"/><path d="M10.2 9l4.6 3-4.6 3z"/>',
+  tail:'<path d="M5 16c0-6 4-10 10-10"/><path d="M15 6l3.5 2-1.5 3.5"/>',
+  chat:'<path d="M4.5 6.5h15v9h-7l-4 3v-3h-4z"/>',
+  rice:'<path d="M4.5 11h15a7.5 7.5 0 0 1-15 0z"/><path d="M9 8c0-1.5.6-2.5 1.5-3M12 8c0-1.8.5-2.8 1.2-3.5M15 8c0-1.5.5-2.4 1.3-3"/>',
+  spark:'<path d="M12 4l1.8 4.6L18.5 10l-4.7 1.4L12 16l-1.8-4.6L5.5 10l4.7-1.4z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>',
+  home:'<path d="M4.5 11L12 4.5 19.5 11"/><path d="M6.5 10.5V19h11v-8.5"/>',
+  ruler:'<path d="M4 15.5L15.5 4l4.5 4.5L8.5 20z"/><path d="M8 11.5l1.5 1.5M10.5 9l1.5 1.5M13 6.5l1.5 1.5"/>',
+  moon:'<path d="M14.5 4.5a6.5 6.5 0 1 0 5 10.5 7.5 7.5 0 0 1-5-10.5z"/>',
+  task:'<path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M6.5 17.5l2-2M15.5 8.5l2-2"/><circle cx="12" cy="12" r="3"/>',
+  search:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/>',
+  panel:'<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9h17M9 9v10.5"/>',
+  gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2M12 18.5v2M4.9 7.8l1.7 1M17.4 15.2l1.7 1M4.9 16.2l1.7-1M17.4 8.8l1.7-1"/>',
+  power:'<path d="M12 4.5v7"/><path d="M7.5 7a6.5 6.5 0 1 0 9 0"/>',
+  reload:'<path d="M19 12a7 7 0 1 1-2-4.9"/><path d="M19 4.5V9h-4.5"/>',
+  screen:'<rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 21h8M12 17v4"/>'
+};
+const ic = n => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(P[n]||P.play)+'</svg>';
+const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let CTX = {skin:'猫鲸',skins:[],size:340,autostart:false,displays:[],currentIndex:-1,mirror:false,
+  states:[],actions:{},shadow:false,demoBackground:true,chatEmote:true,currentState:'待机'};
+let SAO = {cat:'interact',subRow:-1,subOpen:false,running:false,demoTask:false};
+const CATS = [
+  {id:'interact',label:'互动',icon:'hand'}, {id:'look',label:'外观',icon:'pic'},
+  {id:'action',label:'动作',icon:'play'}, {id:'tools',label:'工具',icon:'search'},
+  {id:'system',label:'设置',icon:'gear'}
+];
+const EMOTES = [['happy','开心'],['shy','害羞'],['angry','生气'],['sad','难过'],
+  ['surprised','惊讶'],['think','思考'],['proud','得意'],['wave','打招呼']];
+const elSao = document.getElementById('sao'), elCats = document.getElementById('saoCats');
+const elList = document.getElementById('saoList'), elSub = document.getElementById('saoSub');
+let SAO_METRICS = null, taskTimer = 0;
+const SYS = {started:false,pending:false};
+
+function act(action,arg) {
+  return invoke('sao_action',{action,arg}).catch(e => {console.warn('sao_action',action,e);return null;});
+}
+function currentDisplay() {
+  let d = CTX.displays.find(x => Number(x.index) === Number(CTX.currentIndex));
+  return d || CTX.displays.find(x => x.current === true || x.active === true) || null;
+}
+function screenName() {
+  const d = currentDisplay();
+  return d ? String(d.name || ('显示器 '+d.index)).replace(/\\\\.\\/g,'') : '—';
+}
+function emoteItems() {
+  return EMOTES.filter(([key]) => CTX.states.some(a => a.id === 'emo_'+key && a.file && !a.missing && !a.__missing && a.available !== false))
+    .map(([key,label]) => ({icon:'play',label,run:() => act('play','emo_'+key)}));
+}
+function displayItems() {
+  if (!CTX.displays.length) return [{icon:'screen',label:'未检测到显示器',disabled:() => true,run:() => {}}];
+  return CTX.displays.map(d => ({icon:'screen',label:String(d.name || ('显示器 '+d.index)).replace(/\\\\.\\/g,'')+(d.primary?' ·主':''),
+    selected:() => Number(d.index) === Number(CTX.currentIndex),run:async () => {
+      CTX.currentIndex = Number(d.index); render(); await act('display',d.index); await refresh();
+    }}));
+}
+function openPanel(panel) {return invoke('open_panel',{panel}).catch(e => console.warn('open_panel',panel,e));}
+
+/* 第三级 sub 在功能列原位置替换，不增加第五列。 */
+function menuOf(cat) {
+  if (cat === 'interact') return [
+    {icon:'wave',label:'打个招呼',run:() => act('play','tail_open')},
+    {icon:'tail',label:'摇摇尾巴',run:() => act('play','tail_closed')},
+    {icon:'chat',label:'和它说话',run:() => openPanel('chat')},
+    {icon:'spark',label:'随机动作',run:() => act('random')},
+    {icon:'rice',label:'吃点米饭',run:() => act('play','eat')}
+  ];
+  if (cat === 'look') return [
+    {icon:'ruler',label:'显示大小',state:() => CTX.size+'px',sub:[
+      {icon:'ruler',label:'小  240',selected:() => CTX.size === 240,run:() => setSize(240)},
+      {icon:'ruler',label:'中  340',selected:() => CTX.size === 340,run:() => setSize(340)},
+      {icon:'ruler',label:'大  460',selected:() => CTX.size === 460,run:() => setSize(460)},
+      {icon:'ruler',label:'超大 620',selected:() => CTX.size === 620,run:() => setSize(620)}
+    ]},
+    {keepOpen:true,icon:'moon',label:'脚下阴影',state:() => CTX.shadow?'开':'关',run:() => {
+      CTX.shadow = !CTX.shadow;render();return act('shadow',CTX.shadow);
+    }},
+    {keepOpen:true,icon:'pic',label:'演示背景',state:() => CTX.demoBackground?'开':'关',run:() => {
+      CTX.demoBackground = !CTX.demoBackground;render();return act('demoBackground',CTX.demoBackground);
+    }}
+  ];
+  if (cat === 'action') return [
+    {icon:'home',label:'回待机',run:() => act('play','idle')},
+    {icon:'play',label:'再摇一次尾',run:() => act('tailAgain')},
+    {icon:'play',label:'表情',state:() => emoteItems().length+' 项',disabled:() => !emoteItems().length,sub:() => emoteItems()},
+    {keepOpen:true,icon:'chat',label:'聊天时演表情',state:() => CTX.chatEmote?'开':'关',run:() => {
+      CTX.chatEmote = !CTX.chatEmote;render();return act('chatEmote',CTX.chatEmote);
+    }},
+    {keepOpen:true,icon:'task',label:'陪它忙起来',state:() => SAO.demoTask?'进行中':'10秒',disabled:() => SAO.demoTask,run:startDemoTask}
+  ];
+  if (cat === 'tools') return [
+    {icon:'search',label:'文件搜索',run:() => openPanel('search')},
+    {icon:'chat',label:'DeepSeek 聊天',run:() => openPanel('chat')},
+    {icon:'panel',label:'控制面板',run:() => openPanel('control')},
+    {icon:'gear',label:'设置',run:() => openPanel('settings')}
+  ];
+  return [
+    {keepOpen:true,icon:'power',label:'开机自启',state:() => CTX.autostart?'开':'关',run:async () => {
+      CTX.autostart = !CTX.autostart;render();await act('autostart');await refresh();
+    }},
+    {keepOpen:true,icon:'screen',label:'所在屏幕',state:screenName,sub:displayItems},
+    {icon:'reload',label:'重新加载界面',run:() => act('reload')},
+    {icon:'power',label:'退出桌宠',run:() => act('quit')}
+  ];
+}
+function setSize(size) {CTX.size = size;render();return act('size',size);}
+function startDemoTask() {
+  if (SAO.demoTask) return;
+  SAO.demoTask = true;clearTimeout(taskTimer);act('task',10000);
+  taskTimer = setTimeout(() => {SAO.demoTask = false;render();},10000);render();
+}
+function resolvedSub(item) {
+  if (!item) return null;
+  try {const raw = typeof item.sub === 'function' ? item.sub() : item.sub;return Array.isArray(raw) && raw.length ? raw : null;}
+  catch(e) {return null;}
+}
+function rowHtml(item,index) {
+  const selected = item.selected ? !!item.selected() : item.on ? !!item.on() : false;
+  const disabled = item.disabled ? !!item.disabled() : false, branch = resolvedSub(item);
+  const right = branch ? '<span class="sub-arw">▸</span>' : selected ? '<span class="state">✓</span>' :
+    item.state ? '<span class="state">'+esc(item.state())+'</span>' : '';
+  return '<button type="button" role="'+(item.selected || item.on?'menuitemradio':'menuitem')+'"'+
+    (item.selected || item.on?' aria-checked="'+selected+'"':'')+(branch?' aria-haspopup="menu"':'')+
+    ' class="row'+(selected?' on':'')+'" data-i="'+index+'"'+(disabled?' disabled':'')+'>'+
+    ic(item.icon)+'<span class="lbl">'+esc(item.label)+'</span>'+right+'</button>';
+}
+function focusSafe(el) {if (!el) return;try {el.focus({preventScroll:true});} catch(e) {try {el.focus();} catch(_) {}}}
+function renderAxis() {
+  elCats.querySelectorAll('.cat').forEach(n => n.remove());
+  CATS.forEach(c => {
+    const b = document.createElement('button');b.type = 'button';b.className = 'cat'+(c.id === SAO.cat?' on':'');
+    b.dataset.cat = c.id;b.title = c.label;b.setAttribute('aria-label',c.label);
+    b.setAttribute('aria-pressed',String(c.id === SAO.cat));b.innerHTML = ic(c.icon);elCats.appendChild(b);
+  });
+}
+function renderList() {
+  elList.innerHTML = CATS.map((c,i) => '<button type="button" role="menuitem" aria-haspopup="menu" aria-expanded="'+
+    (c.id === SAO.cat)+'" class="row'+(c.id === SAO.cat?' on':'')+'" data-cat="'+c.id+'" data-i="'+i+'">'+
+    ic(c.icon)+'<span class="lbl">'+c.label+'</span><span class="sub-arw">▸</span></button>').join('');
+}
+function renderSub() {
+  const items = menuOf(SAO.cat), parent = items[SAO.subRow], branch = resolvedSub(parent);
+  SAO.subOpen = !!branch;if (!branch) SAO.subRow = -1;
+  const cat = CATS.find(c => c.id === SAO.cat);
+  const header = branch ? '<button type="button" class="sub-head" data-back="branch">‹ '+esc(cat.label)+' / '+esc(parent.label)+'</button>' :
+    elSao.classList.contains('stack') ? '<button type="button" class="sub-head" data-back="categories">‹ '+esc(cat.label)+' · 切换分类</button>' : '';
+  elSub.innerHTML = header+(branch || items).map(rowHtml).join('');elSub.classList.add('show');
+  elSub.setAttribute('aria-label',cat.label+(branch?' / '+parent.label:''));
+}
+function renderCardState() {
+  document.getElementById('cdName').textContent = CTX.skin;
+  document.getElementById('cdState').textContent = CTX.currentState || '待机';
+}
+function render() {
+  const active = document.activeElement;
+  const area = active && active.closest ? active.closest('#saoSub')?'sub':active.closest('#saoList')?'list':active.closest('#saoCats')?'cats':'' : '';
+  const index = active && active.dataset ? active.dataset.i : undefined, cat = active && active.dataset ? active.dataset.cat : undefined;
+  elSao.classList.toggle('mirror',!!CTX.mirror);renderAxis();renderList();renderSub();renderCardState();renderCardMetrics();layout();
+  if (area) {
+    const box = area === 'sub'?elSub:area === 'list'?elList:elCats;
+    let target = index !== undefined ? box.querySelector('[data-i="'+index+'"]') : null;
+    if (!target && cat) target = box.querySelector('[data-cat="'+cat+'"]');focusSafe(target);
+  }
+}
+
+/* 原版详情卡：立绘左侧，CPU/GPU/内存/硬盘在右侧紧凑排列。 */
+function saoPctText(pct) {return pct === null || pct === undefined || !isFinite(Number(pct))?'—':Math.round(Number(pct))+'%';}
+function renderCardMetrics() {
+  const m = SAO_METRICS || {};
+  const valid = v => v !== null && v !== undefined && isFinite(Number(v));
+  const num = (v,d=1) => valid(v)?String(Number(Number(v).toFixed(d))):'—';
+  const cpuFreq = valid(m.cpuFreqMHz) && Number(m.cpuFreqMHz)>0?num(Number(m.cpuFreqMHz)/1000,2)+'G':'—';
+  const cpuUse = valid(m.cpu)?num(m.cpu,1)+'%':'—';
+  const gClock = m.gpu && valid(m.gpu.clockMHz) && Number(m.gpu.clockMHz)>0?Math.round(Number(m.gpu.clockMHz))+'M':'—';
+  const gUse = m.gpu && valid(m.gpu.util)?Math.round(Number(m.gpu.util))+'%':'—';
+  const memOk = valid(m.memUsedGB) && valid(m.memTotalGB) && Number(m.memTotalGB)>0;
+  const disks = Array.isArray(m.disks)?m.disks:[];
+  const cards = [
+    {key:'cpu',text:'CPU '+cpuFreq+' · '+cpuUse,empty:cpuFreq === '—' && cpuUse === '—'},
+    {key:'gpu',text:'GPU '+gClock+' · '+gUse,empty:gClock === '—' && gUse === '—'},
+    {key:'mem',text:memOk?'内存 '+num(m.memUsedGB,1)+'/'+Math.round(Number(m.memTotalGB))+'G':'内存 —',empty:!memOk},
+    {key:'disk',text:disks.length?'硬盘 '+disks.map(d => String(d.drive || '')+' '+saoPctText(d.usedPct)).join(' · '):'硬盘 —',empty:!disks.length}
+  ];
+  document.getElementById('cdMarks').innerHTML = cards.map(c =>
+    '<div class="mk mk-'+c.key+(c.empty?' empty':'')+'" title="'+esc(c.text)+'">'+esc(c.text)+'</div>').join('');
+}
+
+/* 原版 responsive class：compact → narrow → mini → stack。 */
+function layout() {
+  if (!elSao.classList.contains('show')) return;
+  elSao.classList.remove('compact','narrow','mini','stack');
+  elSao.style.setProperty('--sao-card-h',Math.min(374,Math.max(200,window.innerHeight || 374))+'px');
+  const available = Math.max(160,window.innerWidth || 708);
+  if (elSao.offsetWidth>available) elSao.classList.add('compact');
+  if (elSao.offsetWidth>available) elSao.classList.add('narrow');
+  if (elSao.offsetWidth>available) elSao.classList.add('mini');
+  if (elSao.offsetWidth>available) elSao.classList.add('stack');
+  const expected = elSao.classList.contains('stack') && SAO.subRow<0;
+  if (!!elSub.querySelector('[data-back="categories"]') !== expected) renderSub();
+  placeTriangles();placeSub();
+}
+function placeTriangles() {
+  const c = elCats.querySelector('[data-cat="'+SAO.cat+'"]');if (!c) return;
+  const center = c.offsetTop+c.offsetHeight/2, card = document.getElementById('saoCard');
+  document.getElementById('saoCatTri').style.top = Math.round(center-6)+'px';
+  document.getElementById('saoCardTri').style.top = Math.max(10,Math.min(center-9+elCats.offsetTop-card.offsetTop,card.offsetHeight-28))+'px';
+}
+function placeSub() {
+  const row = elList.querySelector('[data-cat="'+SAO.cat+'"]');
+  if (!row || elSao.classList.contains('stack')) {elSub.style.top = '0px';return;}
+  const rowTop = elList.offsetTop+row.offsetTop-elList.scrollTop, y = Math.max(0,Math.min(rowTop,elSao.offsetHeight-elSub.offsetHeight));
+  elSub.style.top = Math.round(y)+'px';
+  const br = document.getElementById('saoBridge');br.style.top = Math.min(rowTop,y)+'px';
+  br.style.height = Math.max(rowTop+row.offsetHeight,y+elSub.offsetHeight)-Math.min(rowTop,y)+'px';
+  const a = CTX.mirror?elSub.offsetLeft+elSub.offsetWidth:elList.offsetLeft+elList.offsetWidth;
+  const b = CTX.mirror?elList.offsetLeft:elSub.offsetLeft;br.style.left = (a-1)+'px';br.style.width = Math.max(0,b-a+2)+'px';
+}
+function selectCat(cat) {
+  if (!CATS.some(c => c.id === cat)) return;SAO.cat = cat;SAO.subRow = -1;SAO.subOpen = false;render();
+}
+function back() {
+  if (SAO.subRow>=0) {const i = SAO.subRow;SAO.subRow = -1;SAO.subOpen = false;render();focusSafe(elSub.querySelector('[data-i="'+i+'"]'));return;}
+  closeMenu();
+}
+async function runItem(index) {
+  const items = menuOf(SAO.cat), branch = resolvedSub(items[SAO.subRow]), item = (branch || items)[index];
+  if (!item || SAO.running || (item.disabled && item.disabled())) return;
+  if (resolvedSub(item)) {SAO.subRow = index;SAO.subOpen = true;render();focusSafe(elSub.querySelector('.row:not(:disabled)'));return;}
+  const keep = !!branch || !!item.keepOpen;SAO.running = true;
+  try {
+    /* 工具及其它一级执行项先 close_sao，再执行动作或 open_panel。 */
+    if (!keep) await closeMenu();
+    if (item.run) await item.run();render();
+  } catch(e) {console.warn('SAO action failed',e);} finally {SAO.running = false;}
+}
+async function closeMenu() {
+  await metricsStop();try {await invoke('close_sao');} catch(e) {console.warn('close_sao',e);}
+}
+async function metricsStart() {
+  if (SYS.pending) return;SYS.pending = true;
+  if (!SYS.started) {try {await invoke('sysinfo_start');SYS.started = true;} catch(e) {SYS.started = false;console.warn('sysinfo_start',e);}}
+  try {const data = await invoke('sysinfo_get');if (data) {SAO_METRICS = data.data || data;renderCardMetrics();}}
+  catch(e) {console.warn('sysinfo_get',e);}SYS.pending = false;
+}
+async function metricsStop() {
+  if (!SYS.started) return;SYS.started = false;try {await invoke('sysinfo_stop');} catch(e) {console.warn('sysinfo_stop',e);}
+}
+function handleEscape() {if (SAO.subRow>=0) back();else closeMenu();}
+
+function setPreview(skin) {
+  const video = document.getElementById('cdChar');
+  try {
+    const idle = skin && skin.actions && skin.actions.idle, file = idle && (idle.file || idle.video || idle.src);
+    if (!skin || !skin.dir || !file || !T.core || typeof T.core.convertFileSrc !== 'function') throw 'no-preview';
+    let path = String(file).replace(/\\/g,'/');
+    if (!/^(?:[a-zA-Z]:\/|\/)/.test(path)) path = String(skin.dir).replace(/\\/g,'/').replace(/\/$/,'')+'/'+(path.indexOf('videos/') === 0?path:'videos/'+path);
+    const src = /^(?:[a-zA-Z]:\/|\/)/.test(path)?T.core.convertFileSrc(path):path;
+    if (video.getAttribute('src') !== src) video.src = src;
+    video.hidden = false;video.onerror = () => {video.hidden = true;};const p = video.play();if (p && p.catch) p.catch(() => {});
+  } catch(e) {video.hidden = true;video.removeAttribute('src');}
+}
+function normalizeContext(c) {
+  c = c || {};Object.assign(CTX,c);
+  if (c.currentIndex !== undefined) CTX.currentIndex = Number(c.currentIndex);
+  else if (c.current_index !== undefined) CTX.currentIndex = Number(c.current_index);
+  else {
+    const d = CTX.displays.find(x => x.current === true || x.active === true);
+    if (d) CTX.currentIndex = Number(d.index);
+    else if (!currentDisplay()) {const primary = CTX.displays.find(x => x.primary);if (primary) CTX.currentIndex = Number(primary.index);}
+  }
+  if (c.demoBackground === undefined) {
+    if (c.demo_background !== undefined) CTX.demoBackground = !!c.demo_background;
+    else if (c.bg !== undefined) CTX.demoBackground = c.bg === 'desktop';
+  }
+  if (c.chatEmote === undefined && c.chat_emote !== undefined) CTX.chatEmote = !!c.chat_emote;
+}
+async function refresh() {
+  try {
+    normalizeContext(await invoke('sao_context'));window.__ctxOk = (window.__ctxOk || 0)+1;
+    try {
+      const skin = await invoke('skin_load');
+      if (skin && skin.ok) {
+        CTX.actions = skin.actions || {};CTX.states = Object.keys(CTX.actions).map(id => {
+          const a = CTX.actions[id] || {};
+          return {id,name:a.name || id,mode:a.mode === 'once'?'once':'loop',role:a.role || '',file:a.file || '',
+            missing:a.missing === true || a.available === false,__missing:a.__missing === true,available:a.available};
+        });setPreview(skin);
+      } else {CTX.actions = {};CTX.states = [];setPreview(null);}
+    } catch(e) {console.warn('skin_load',e);}render();
+  } catch(e) {window.__ctxErr = String(e);console.warn('sao_context failed',e);throw e;}
+}
+
+elSao.addEventListener('click',e => {
+  const backButton = e.target.closest('[data-back]');
+  if (backButton) {
+    if (backButton.dataset.back === 'categories') {const i = CATS.findIndex(c => c.id === SAO.cat);selectCat(CATS[(i+1)%CATS.length].id);}
+    else back();return;
+  }
+  const catButton = e.target.closest('[data-cat]');if (catButton) {selectCat(catButton.dataset.cat);return;}
+  const row = e.target.closest('#saoSub .row');if (row && !row.disabled) runItem(Number(row.dataset.i));
+});
+elList.addEventListener('scroll',placeSub);window.addEventListener('resize',layout);
+document.addEventListener('keydown',e => {
+  if (e.defaultPrevented || ['Escape','ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Home','End','Enter'].indexOf(e.key)<0) return;
+  e.preventDefault();e.stopPropagation();if (e.key === 'Escape') {handleEscape();return;}
+  const focused = document.activeElement;
+  if (e.key === 'Enter') {
+    if (focused && focused.closest && focused.closest('#sao') && focused.tagName === 'BUTTON') focused.click();
+    else focusSafe(elList.querySelector('[data-cat="'+SAO.cat+'"]'));return;
+  }
+  const inSub = !!(focused && focused.closest && focused.closest('#saoSub')), inCats = !!(focused && focused.closest && focused.closest('#saoCats'));
+  const box = inSub?elSub:inCats?elCats:elList, buttons = Array.from(box.querySelectorAll('button:not(:disabled)')), index = buttons.indexOf(focused);
+  if (['ArrowDown','ArrowUp','Home','End'].indexOf(e.key)>=0) {
+    if (!buttons.length) return;
+    const i = e.key === 'Home'?0:e.key === 'End'?buttons.length-1:index<0?0:(index+(e.key === 'ArrowDown'?1:-1)+buttons.length)%buttons.length;
+    focusSafe(buttons[i]);return;
+  }
+  const forward = CTX.mirror?'ArrowLeft':'ArrowRight';
+  if (e.key === forward) {
+    if (inCats) focusSafe(elList.querySelector('[data-cat="'+SAO.cat+'"]'));
+    else if (!inSub) {
+      if (focused && focused.dataset && focused.dataset.cat) selectCat(focused.dataset.cat);
+      focusSafe(elSub.querySelector('.row:not(:disabled)'));
+    } else if (SAO.subRow<0 && focused && focused.dataset) {
+      const item = menuOf(SAO.cat)[Number(focused.dataset.i)];if (item && resolvedSub(item)) runItem(Number(focused.dataset.i));
+    }
+  } else {
+    if (SAO.subRow>=0) back();else if (inSub) focusSafe(elList.querySelector('[data-cat="'+SAO.cat+'"]'));
+    else if (!inCats) focusSafe(elCats.querySelector('[data-cat="'+SAO.cat+'"]'));
+  }
+});
+function listen(name,handler) {
+  if (!T || !T.event || typeof T.event.listen !== 'function') return;
+  T.event.listen(name,handler).catch(e => console.warn('listen '+name,e));
+}
+listen('sao:refresh',() => {refresh().then(metricsStart).catch(() => {});});
+listen('sao:open',() => {refresh().then(metricsStart).catch(() => {});});
+listen('sao:closed',() => {metricsStop();});listen('sao:escape',handleEscape);
+listen('sysinfo',e => {if (e && e.payload) {SAO_METRICS = e.payload.data || e.payload;renderCardMetrics();}});
+listen('pet:state',e => {
+  if (!e || !e.payload) return;
+  CTX.currentState = typeof e.payload === 'string'?e.payload:e.payload.name || e.payload.state || CTX.currentState;
+  const s = document.getElementById('cdState');if (s) s.textContent = CTX.currentState;
+});
+window.addEventListener('pagehide',() => {metricsStop();clearTimeout(taskTimer);});
+/* 保留全局测试入口，并显式支持 CDP 的 window.CATS/window.SAO 读取。 */
+Object.assign(window,{CATS,SAO,menuOf,render});
+(async function boot() {
+  try {await refresh();elSao.classList.add('show');render();await metricsStart();focusSafe(elList.querySelector('[data-cat="'+SAO.cat+'"]'));}
+  catch(e) {elSao.classList.add('show');render();}
+  window.__saoReady = true;
+})();
+</script>
+</body>
+</html>
