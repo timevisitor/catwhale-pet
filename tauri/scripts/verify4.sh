@@ -2,16 +2,16 @@
 # 第四轮验收：原版四列 SAO + 左右侧角色镜像 + 独立搜索/聊天浮窗 + 最终交付 exe。
 # 真实右键/Esc/失焦/拖动走 Win32；菜单项操作用 DOM；前后端与截图交叉核对。
 set -u
-DIR="<本地交付目录>/猫鲸桌宠-体积瘦身/tauri-pet"
-EXE="$DIR/catwhale-poc.exe"
-P="$DIR/sao_probe.py"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+EXE="${EXE:-$DIR/catwhale-poc.exe}"
+P="$DIR/scripts/sao_probe.py"
 cd "$DIR" || exit 1
 FAIL=0
-M() { python "$DIR/ev.py" M "$1"; }
-S() { python "$DIR/ev.py" S "$1"; }
-PANEL() { python "$DIR/ev.py" P "$1"; }
-F() { python "$DIR/ev.py" F "$1"; }
-C() { python "$DIR/ev.py" C "$1"; }
+M() { python "$DIR/scripts/ev.py" M "$1"; }
+S() { python "$DIR/scripts/ev.py" S "$1"; }
+PANEL() { python "$DIR/scripts/ev.py" P "$1"; }
+F() { python "$DIR/scripts/ev.py" F "$1"; }
+C() { python "$DIR/scripts/ev.py" C "$1"; }
 chk() {
   case "$2" in
     *'"ok":true'*|*'"ok": true'*) echo "PASS $1 $2" ;;
@@ -57,10 +57,10 @@ PY
 echo "===== 2. 左右边缘 SAO 镜像、变换中轴与命中网格 ====="
 MIRROR=$(python - <<'PY'
 import sys,time,json,ctypes,ctypes.wintypes as w,subprocess
-sys.path.insert(0,r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet')
+sys.path.insert(0,os.path.dirname(os.path.abspath(sys.argv[0])))
 import sao_probe
 u=ctypes.windll.user32;u.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-D=r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet'
+D=os.path.dirname(os.path.abspath(sys.argv[0]))
 def ev(mode,js):
   r=subprocess.run(['python',D+r'\ev.py',mode,js],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
   try:return json.loads(r.stdout)
@@ -76,7 +76,7 @@ def cycle(side,x,expect):
     st=ev('M',js)
     if st.get('ok'):break
     time.sleep(.2)
-  geom=json.loads(subprocess.run(['python',D+r'\sao_probe.py','geom'],capture_output=True,text=True,encoding='utf-8',errors='replace').stdout)
+  geom=json.loads(subprocess.run(['python',D+'/scripts/sao_probe.py','geom'],capture_output=True,text=True,encoding='utf-8',errors='replace').stdout)
   subprocess.run(['python',D+r'\ev.py','shotM',D+r'\shots\verify4_main_'+side+'.png'],capture_output=True,text=True,encoding='utf-8',errors='replace')
   subprocess.run(['python',D+r'\ev.py','shotS',D+r'\shots\verify4_sao_'+side+'.png'],capture_output=True,text=True,encoding='utf-8',errors='replace')
   u.keybd_event(0x1b,0,0,0);u.keybd_event(0x1b,0,2,0)
@@ -98,7 +98,7 @@ chk "structure" "$(S '(()=>{const counts=Object.fromEntries(CATS.map(c=>[c.id,me
 trychk "main menuOpen" 6 M '(()=>({ok:M.menuOpen===true,menuOpen:M.menuOpen}))()'
 chk "geometry" "$(python "$P" geom)"
 trychk "hardware metrics" 12 S '(()=>{const m=[...document.querySelectorAll("#cdMarks .mk")];return {ok:m.length===4&&!document.querySelector("#cdMarks .empty")&&m.every(e=>e.textContent&&!e.textContent.includes("—")),rows:m.length}})()'
-python "$DIR/ev.py" shotS "$DIR/shots/verify4_menu.png"
+python "$DIR/scripts/ev.py" shotS "$DIR/shots/verify4_menu.png"
 
 echo "===== 4. 分类、三级原位替换与键盘 ====="
 chk "third level" "$(S '(()=>{document.querySelector("#saoList [data-cat=look]").click();document.querySelector("#saoSub [data-i=\"0\"]").click();return {ok:SAO.cat==="look"&&SAO.subRow===0&&SAO.subOpen&&document.querySelectorAll("#saoSub .row").length===4&&!!document.querySelector("#saoSub [data-back=branch]")&&document.querySelectorAll("#saoList .row").length===5,rows:document.querySelectorAll("#saoSub .row").length}})()')"
@@ -126,7 +126,7 @@ chk "blur close" "$(python "$P" blur)"
 trychk "blur flag reset" 6 M '(()=>({ok:M.menuOpen===false,menuOpen:M.menuOpen}))()'
 FG=$(python - <<'PY'
 import sys,ctypes,json
-sys.path.insert(0,r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet')
+sys.path.insert(0,os.path.dirname(os.path.abspath(sys.argv[0])))
 import sao_probe
 u=ctypes.windll.user32
 before=u.GetForegroundWindow()
@@ -142,7 +142,7 @@ chk "close after foreground test" "$(python "$P" esc)"
 
 echo "===== 8. Everything 与 Unicode 剪贴板 ====="
 chk "everything search" "$(M "window.__TAURI__.core.invoke('everything_search',{query:'catwhale-poc.exe',limit:4}).then(r=>({ok:r.ok===true&&((r.results||r.items||[]).length>0),count:(r.results||r.items||[]).length,instance:r.instance||r.esVersion||''})).catch(e=>({ok:false,error:String(e)}))")"
-M "window.__TAURI__.core.invoke('everything_copy',{text:'<本地源码盘>/catwhale-poc/验证-clip'})" >/dev/null
+M "window.__TAURI__.core.invoke('everything_copy',{text:'/tmp/catwhale-验证-clip'})" >/dev/null
 CLIP=$(python - <<'PY'
 import ctypes,json
 u=ctypes.windll.user32;k=ctypes.windll.kernel32
@@ -156,9 +156,9 @@ if u.OpenClipboard(None):
     if p:
       try:text=ctypes.wstring_at(p)
       finally:k.GlobalUnlock(h)
-    ok=text=='<本地源码盘>/catwhale-poc/验证-clip' and not text.startswith(chr(0xfeff))
+    ok=text=='/tmp/catwhale-验证-clip' and not text.startswith(chr(0xfeff))
   finally:u.CloseClipboard()
-print(json.dumps({'ok':ok,'hasBom':text.startswith(chr(0xfeff)),'exact':text=='<本地源码盘>/catwhale-poc/验证-clip'},ensure_ascii=True))
+print(json.dumps({'ok':ok,'hasBom':text.startswith(chr(0xfeff)),'exact':text=='/tmp/catwhale-验证-clip'},ensure_ascii=True))
 PY
 )
 chk "unicode clipboard" "$CLIP"
@@ -168,10 +168,10 @@ echo "===== 9. 独立搜索 / 聊天浮窗与拖动跟随 ====="
 M "window.__TAURI__.core.invoke('open_panel',{panel:'search'})" >/dev/null
 trychk "search independent window" 8 F '(()=>({ok:window.__searchTest?.ready===true&&innerWidth===470,ready:window.__searchTest?.ready,width:innerWidth,height:innerHeight}))()'
 trychk "search results and dynamic height" 8 F "(async()=>{const i=document.querySelector('#sinput');i.value='catwhale-poc.exe';i.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,1600));return {ok:window.__searchTest.results.length>0&&document.querySelectorAll('#slist .srow').length===window.__searchTest.results.length&&innerHeight>190,count:window.__searchTest.results.length,height:innerHeight}})()"
-python "$DIR/ev.py" shotF "$DIR/shots/verify4_search.png"
+python "$DIR/scripts/ev.py" shotF "$DIR/shots/verify4_search.png"
 SEARCH_KEYS=$(python - <<'PY'
 import subprocess,json,ctypes,time
-D=r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet'
+D=os.path.dirname(os.path.abspath(sys.argv[0]))
 def ev(mode,js):
   r=subprocess.run(['python',D+r'\ev.py',mode,js],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
   return json.loads(r.stdout)
@@ -198,7 +198,7 @@ M "window.__TAURI__.core.invoke('open_panel',{panel:'chat'})" >/dev/null
 trychk "chat reopens independent" 8 C '(()=>({ok:window.__chatTest?.ready===true&&innerWidth===470&&innerHeight===570,width:innerWidth,height:innerHeight}))()'
 CHAT=$(python - <<'PY'
 import subprocess,json,time,ctypes
-D=r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet'
+D=os.path.dirname(os.path.abspath(sys.argv[0]))
 def ev(mode,js):
   r=subprocess.run(['python',D+r'\ev.py',mode,js],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
   return json.loads(r.stdout)
@@ -215,13 +215,13 @@ print(json.dumps({'ok':p['ok'] and pclosed['ok'] and closed['ok'] and reopened['
 PY
 )
 chk "chat persona Esc and retained draft" "$CHAT"
-python "$DIR/ev.py" shotC "$DIR/shots/verify4_chat.png"
+python "$DIR/scripts/ev.py" shotC "$DIR/shots/verify4_chat.png"
 FLOAT_DRAG=$(python - <<'PY'
 import sys,ctypes,ctypes.wintypes as w,time,json,subprocess
-sys.path.insert(0,r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet')
+sys.path.insert(0,os.path.dirname(os.path.abspath(sys.argv[0])))
 import sao_probe
 u=ctypes.windll.user32;u.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-D=r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet'
+D=os.path.dirname(os.path.abspath(sys.argv[0]))
 def chat_rect():
   h=u.FindWindowW(None,'猫鲸 · DeepSeek 聊天');r=w.RECT();u.GetWindowRect(h,ctypes.byref(r))
   return [r.left,r.top,r.right-r.left,r.bottom-r.top]
@@ -261,7 +261,7 @@ case "$US_LAST" in *PASS*) echo "PASS user scenario" ;; *) echo "FAIL user scena
 echo "===== 11. 真实拖动并原位恢复 ====="
 DRAG=$(python - <<'PY'
 import sys,ctypes,time,json
-sys.path.insert(0,r'<本地交付目录>\猫鲸桌宠-体积瘦身\tauri-pet')
+sys.path.insert(0,os.path.dirname(os.path.abspath(sys.argv[0])))
 import sao_probe
 u=ctypes.windll.user32;u.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 def drag(dx,dy):

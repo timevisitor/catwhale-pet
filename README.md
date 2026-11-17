@@ -10,6 +10,10 @@
 | **网页版演示** | 双击 `web/启动桌宠.bat`，或直接打开 `web/index.html`（网页版与桌面版共用同一套素材与状态机） |
 | **许可证** | MIT |
 
+> **并行分支**：仓库里另有一条 Rust / Tauri 重写分支 `feat/tauri-rust`（目录 `tauri/`），
+> 与本文档描述的 Electron 主线功能对齐，但完全独立构建与运行，两者共用 `%APPDATA%\桌宠\skins` 皮肤目录。
+> 切过去看：`git checkout feat/tauri-rust`，说明见 `tauri/README.md`。
+
 运行环境：Windows 10/11 x64。**安装包不含任何 API key** —— key 由用户自己在设置面板里填，只存在本机
 `%APPDATA%\桌宠\settings.json`（Windows 凭据加密）。
 

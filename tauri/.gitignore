@@ -1,0 +1,13 @@
+# 回落视频复用主线 web/assets/video（构建时由 build.sh 复制），不重复入库
+frontend/assets/
+
+# 构建产物
+frontend-embed/
+src-tauri/target/
+src-tauri/gen/schemas/history/
+*.exe
+*.pdb
+
+# 本机验收中间产物
+tmp/
+work/
