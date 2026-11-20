@@ -80,6 +80,8 @@ const BUILTIN = {
   stretch:       { name: '伸懒腰', file: 'assets/stretch.webm',         mode: 'once', role: 'idle_act', weight: 25, react: 15 },
   read:          { name: '看书',   file: 'assets/read.webm',            mode: 'loop', role: 'lounge',   weight: 20, react: 20 },
   run:           { name: '跑动',   file: 'assets/run.webm',             mode: 'loop', role: 'lounge',   weight: 12 },
+  walk_left:     { name: '向左走', file: 'assets/walk_left.webm',      mode: 'loop', role: 'walk',     width: 576, height: 960, weight: 0 },
+  walk_right:    { name: '向右走', file: 'assets/walk_right.webm',     mode: 'loop', role: 'walk',     width: 576, height: 960, weight: 0 },
   working:       { name: '工作',   file: 'assets/working.webm',         mode: 'loop', role: 'work',     weight: 12 },
   sing_mic:      { name: '唱歌',   file: 'assets/sing_mic.webm',      mode: 'once', role: 'media',    weight: 0 },
   watch_tv:      { name: '看视频', file: 'assets/watch_tv.webm',      mode: 'once', role: 'media',    weight: 0 },
@@ -129,8 +131,11 @@ async function loadSkin() {
     if (!builtinDir) {
       try { builtinDir = await invoke('builtin_asset_dir'); } catch (e) { console.warn('builtin_asset_dir failed', e); }
     }
-    // 内置动作与皮肤动作逐项合并。内置 WebM 从 exe 旁 frontend/assets 外置读取，
-    // 不进入 Tauri 内嵌资源；用户皮肤仍使用自己的绝对目录。
+    // 内置动作与皮肤动作逐项合并。`builtin_asset_dir` 返回的是 **frontend 目录**，
+    // BUILTIN 的 file 字段再拼一层 `assets/…`（两边都拼一次就会变成
+    // `assets/assets/…` 而全部 404，v0.7.0 第一次打包就是这样）。用户皮肤带着
+    // 自己的绝对目录进来，同名动作覆盖内置，皮肤优先不变。
+    if (!builtinDir) console.warn('builtin_asset_dir 为空：内置动作会退化成相对路径，必然 404');
     states = buildStates(BUILTIN, builtinDir);
     if (r && r.ok && r.actions && Object.keys(r.actions).length) {
       buildStates(r.actions, r.dir, states);
@@ -334,8 +339,16 @@ function play(id, opts) {
 }
 
 /* 与原版 videoTransform 同构：整体缩放 × 分轴比例 + 百分比平移。
-   菜单在角色右侧时水平翻转角色，并沿用原版的角色中轴而非元素中心。 */
+   菜单在角色右侧时水平翻转角色，并沿用原版的角色中轴而非元素中心。
+   v0.7.0：walk_left / walk_right 自带朝向，不受菜单/浮窗镜像影响，避免走动时被翻反。 */
 const MIRROR_AXIS = 413 / 900;
+function isWalkStateId(id) { return id === 'walk_left' || id === 'walk_right'; }
+function effectiveMirror(id) {
+  if (isWalkStateId(id)) return false;
+  // 素材未就位时的兜底：临时用 run 并按走动方向镜像。
+  if (id === 'run' && M.walking) return M.walkDir === 'left';
+  return M.petMirror;
+}
 function videoTransform(st) {
   const sc = (st.scale != null) ? st.scale : 1;
   const sx = sc * (st.scaleX != null ? st.scaleX : 1);
@@ -343,13 +356,13 @@ function videoTransform(st) {
   const ox = st.offX || 0, oy = st.offY || 0;
   let t = '';
   if (ox || oy) t += 'translate(' + ox + '%,' + oy + '%) ';
-  t += 'scaleX(' + (M.petMirror ? -sx : sx) + ') scaleY(' + sy + ')';
+  t += 'scaleX(' + (effectiveMirror(st.id) ? -sx : sx) + ') scaleY(' + sy + ')';
   return t;
 }
 
 function applyVideoTransform(v, st) {
   v.style.transform = videoTransform(st);
-  v.style.transformOrigin = (M.petMirror ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
+  v.style.transformOrigin = (effectiveMirror(st.id) ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
 }
 
 function applyVideoMirror() {
@@ -428,6 +441,8 @@ const M = {
   taskId: null,
   taskUntil: 0,
   taskSeq: 0,
+  walking: false,
+  walkDir: 'right',
   media: { playing: false, kind: null, id: null, repeats: 0, restUntil: 0 },
   gameMode: false,
   chatEmote: true,
@@ -541,9 +556,19 @@ function byRole(role) {
 }
 function idleState() { return states.idle ? 'idle' : order[0]; }
 
+/* 走动动画：优先独立朝向素材；素材未就位时退回 run（按方向镜像）保证有位移反馈。 */
+function walkVisual() {
+  const want = M.walkDir === 'left' ? 'walk_left' : 'walk_right';
+  if (usable(want)) return want;
+  if (states.run && usable('run')) return 'run';
+  return idleState();
+}
+
 function resolveState() {
   if (M.gameMode) return idleState();
   if (M.dragging) return byRole('drag') || idleState();
+  // 桌面走动优先于待机动作；手动拖动/游戏模式仍然在上方截断。
+  if (M.walking) return walkVisual();
   if (M.taskId && now() < M.taskUntil && usable(M.taskId)) return M.taskId;
   // 固定表情、任务和拖动均高于菜单；stand_arms 不会截断这些动作。
   if (M.react && now() < M.reactUntil && usable(M.react)) return M.react;
@@ -614,7 +639,7 @@ function tick(force) {
     M.media.restUntil = 0;
   }
   if (skinPending && !skinLoading && !userActionActive()) requestSkinLoad();
-  const canRoll = M.opts.auto && !M.dragging && !M.menuOpen && !M.react && !M.taskId &&
+  const canRoll = M.opts.auto && !M.dragging && !M.menuOpen && !M.walking && !M.react && !M.taskId &&
     !M.media.playing && (now() - M.lastInteract >= IDLE_HOLD_MS) && (now() >= M.loungeUntil);
   if (canRoll) rollLounge();
   const want = resolveState();
@@ -673,7 +698,8 @@ function sampleHitGrid() {
     }
     hitCtx.clearRect(0, 0, GW, GH);
     hitCtx.save();
-    if (M.petMirror) {
+    const mirrored = effectiveMirror(v._stateId);
+    if (mirrored) {
       hitCtx.translate(GW, 0);
       hitCtx.scale(-1, 1);
     }
@@ -701,7 +727,7 @@ function sampleHitGrid() {
       (vr.left + ((x1 + 1) / GW) * vr.width) / wr.w,
       (vr.top + ((y1 + 1) / GH) * vr.height) / wr.h,
     ];
-    const sig = (M.petMirror ? 'mirror|' : 'normal|') + cur + '|' + bbox.map(function (n2) { return n2.toFixed(3); }).join(',');
+    const sig = (mirrored ? 'mirror|' : 'normal|') + cur + '|' + bbox.map(function (n2) { return n2.toFixed(3); }).join(',');
     if (sig === lastGridSig) return;
     lastGridSig = sig;
     invoke('set_hit_grid', {
@@ -898,6 +924,7 @@ T.event.listen('pet:gamemode', function (e) {
   M.react = null;
   M.taskId = null;
   M.taskSeq++;
+  M.walking = false;
   M.lounge = idleState();
   M.loungeUntil = now() + IDLE_HOLD_MS;
   if (on) {
@@ -969,6 +996,29 @@ T.event.listen('harness:event', function (e) {
 }).then(function () { window.__listenHarness = 'ok'; })
   .catch(function (err) { window.__listenHarness = 'fail: ' + err; });
 
+T.event.listen('walk:state', function (e) {
+  const p = e && e.payload ? e.payload : {};
+  const walking = !!p.walking;
+  if (p.dir === 'left' || p.dir === 'right') M.walkDir = p.dir;
+  M.walking = walking;
+  M.lastInteract = now();
+  if (walking) {
+    // 走动优先：打断固定表情/任务，避免停在原地演动作。
+    M.react = null;
+    M.taskId = null;
+    M.taskSeq++;
+    M.media.repeats = 0;
+    M.media.restUntil = 0;
+  } else {
+    M.lounge = idleState();
+    M.loungeUntil = now() + 8000;
+  }
+  applyVideoMirror();
+  tick(true);
+  setTimeout(sampleHitGrid, 0);
+}).then(function () { window.__listenWalk = 'ok'; })
+  .catch(function (err) { window.__listenWalk = 'fail: ' + err; });
+
 T.event.listen('pet:mirror', function (e) {
   const p = e && e.payload;
   if (p && typeof p === 'object') {
@@ -1012,6 +1062,13 @@ T.event.listen('skin:changed', function (e) {
   try {
     const r = await invoke('animation_loop_get');
     if (r && r.ok && r.config) animationLoop = Object.assign({}, animationLoop, r.config);
+  } catch (e) {}
+  try {
+    const w = await invoke('walk_get');
+    if (w && w.ok) {
+      M.walking = !!w.walking;
+      if (w.dir === 'left' || w.dir === 'right') M.walkDir = w.dir;
+    }
   } catch (e) {}
   await loadSkin();
   M.lastInteract = now();

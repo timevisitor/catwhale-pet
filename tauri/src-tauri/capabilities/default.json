@@ -7,7 +7,8 @@
     "sao",
     "panel",
     "search",
-    "chat"
+    "chat",
+    "walk-select"
   ],
   "permissions": [
     "core:default",

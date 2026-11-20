@@ -12,6 +12,7 @@ mod media;
 mod persona;
 mod sysinfo;
 mod update;
+mod walk;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -145,6 +146,13 @@ impl Grid {
 fn save_cfg(pet: &Pet) {
     if let Ok(s) = serde_json::to_string_pretty(&*pet.cfg.lock().unwrap()) {
         let _ = std::fs::write(&pet.cfg_path, s);
+    }
+}
+
+/// 框选等临时窗口关闭后强制穿透轮询重判（-1 = 未定），避免光标不动就一直不可点。
+pub(crate) fn reset_hit_state(app: &AppHandle) {
+    if let Some(pet) = app.try_state::<Pet>() {
+        pet.hit_state.store(-1, Ordering::SeqCst);
     }
 }
 
@@ -332,21 +340,43 @@ fn self_exe() -> String {
 }
 
 /// Fallback videos ship beside the executable instead of being embedded in the
-/// Tauri asset archive. This keeps 26 WebM files out of the PE read-only data.
+/// Tauri asset archive. This keeps 28 WebM files out of the PE read-only data.
+///
+/// 路径约定：**返回 frontend 目录（不是里面那层 assets/）**。前端 BUILTIN 表的
+/// file 字段写成 `assets/walk_left.webm`，由 `fileUrl(dir, rel)` 拼成绝对路径后
+/// 交给 asset 协议；以前这里返回的是 `…/frontend/assets`，于是实际请求变成
+/// `…/frontend/assets/assets/walk_left.webm`，一律 404，走动只会静默退回 run 动画
+/// （curl 探针实测 404、video.error.code=4）。
+///
+/// 候选顺序：
+/// 1. `<exe 所在目录>/frontend` —— 便携/发布包布局（exe 与 frontend/ 同级）。
+/// 2. 再往上找几级，覆盖 `target/<profile>/` 与直接在 target 根跑的情况。
+/// 3. `CARGO_MANIFEST_DIR/../frontend` —— 源码树，`cargo run` 且没有复制过资源时。
+///
+/// 判定以 `assets/idle.webm` 真实存在为准：只判目录存在会命中空目录，同样静默 404。
+fn pick_asset_dir(candidates: Vec<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    candidates
+        .into_iter()
+        .find(|path| path.join("assets").join("idle.webm").is_file())
+}
+
 #[tauri::command]
 fn builtin_asset_dir() -> String {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("frontend").join("assets"));
+        let mut dir = exe.parent().map(|p| p.to_path_buf());
+        while let Some(d) = dir {
+            candidates.push(d.join("frontend"));
+            dir = d.parent().map(|p| p.to_path_buf());
+            if candidates.len() >= 4 {
+                break;
+            }
         }
     }
     if let Some(source) = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
-        candidates.push(source.join("frontend").join("assets"));
+        candidates.push(source.to_path_buf());
     }
-    candidates
-        .into_iter()
-        .find(|path| path.is_dir())
+    pick_asset_dir(candidates)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
@@ -465,8 +495,7 @@ fn sao_position(app: &AppHandle) -> (i32, i32, bool) {
 /// 设置 additional_browser_args 会整体替换 wry 默认参数，所以必须把
 /// wry 默认禁的 msWebOOUI/msPdfOOUI/msSmartScreenProtection 和自动播放策略一并带上。
 /// CalculateNativeWinOcclusion：见 main() 里的注释——被遮挡的桌宠渲染进程不能被挂起。
-const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
-
+pub(crate) const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
 /// 预建菜单窗口（启动时调用一次，隐藏状态）。之后右键只是「定位 + 显示」，秒开。
 /// 为什么必须预建：WebView2 第二个实例冷启动实测约 3.5 秒，期间窗口是空白透明的，
 /// 用户看到的就是「右键没反应」；而且一失焦就关，再右键又重新建，永远等不到。
@@ -648,6 +677,7 @@ fn win_has_focus(win: &WebviewWindow) -> bool {
 
 #[tauri::command]
 async fn open_sao(app: AppHandle) -> Result<(), String> {
+    walk::pause_for_interaction(&app, "menu");
     let win = ensure_sao(&app)?;
     if let Some(pet) = app.try_state::<Pet>() {
         pet.menu_open.store(true, Ordering::SeqCst);
@@ -1408,10 +1438,13 @@ fn sao_action(app: AppHandle, action: String, arg: Option<serde_json::Value>) ->
                             let x = a.position.x + a.size.width as i32 - ww - MARGIN;
                             let y = a.position.y + a.size.height as i32 - hh - MARGIN;
                             let _ = w.set_position(PhysicalPosition::new(x, y));
+                            walk::clamp_window(&app);
                             if let Some(pet) = app.try_state::<Pet>() {
                                 let mut c = pet.cfg.lock().unwrap();
-                                c.x = x;
-                                c.y = y;
+                                if let Ok(p) = w.outer_position() {
+                                    c.x = p.x;
+                                    c.y = p.y;
+                                }
                                 drop(c);
                                 save_cfg(&pet);
                             }
@@ -1457,6 +1490,7 @@ fn sao_action(app: AppHandle, action: String, arg: Option<serde_json::Value>) ->
 
 /// 游戏模式只改变主程序资源，不重复向前端发 pet:gamemode（gamemode.rs 已发）。
 fn apply_game_mode(app: &AppHandle, on: bool) {
+    walk::set_game_mode(app, on);
     if on {
         close_sao_now(app);
         media::media_stop();
@@ -1538,6 +1572,7 @@ fn set_aspect(win: WebviewWindow, pet: tauri::State<'_, Pet>, a: f64) {
     set_aspect_val(a);
     let h = pet.cfg.lock().unwrap().h;
     apply_size(&win, h);
+    walk::clamp_window(win.app_handle());
     sync_float_mirror(win.app_handle());
 }
 
@@ -1557,6 +1592,7 @@ fn force_wave(app: AppHandle) {
 fn set_pet_size(win: WebviewWindow, pet: tauri::State<'_, Pet>, h: i32) {
     let h = h.clamp(120, 620);
     apply_size(&win, h);
+    walk::clamp_window(win.app_handle());
     pet.cfg.lock().unwrap().h = h;
     if let Ok(p) = win.outer_position() {
         let mut c = pet.cfg.lock().unwrap();
@@ -1574,6 +1610,7 @@ fn drag_begin(win: WebviewWindow, pet: tauri::State<'_, Pet>) {
     if dragging.swap(true, Ordering::SeqCst) {
         return; // 已在拖
     }
+    walk::cancel_motion(&win.app_handle());
     let w = win.clone();
     let app = win.app_handle().clone();
     std::thread::spawn(move || {
@@ -1607,6 +1644,8 @@ fn drag_begin(win: WebviewWindow, pet: tauri::State<'_, Pet>) {
             // 那样会绕过轮询缓存，导致"光标不离角色就永远点不到桌宠"（用户实测 2026-11-17）。
             pet.dragging.store(false, Ordering::SeqCst);
             pet.hit_state.store(-1, Ordering::SeqCst);
+            // 手动拖动优先，但落点仍要落在活动范围内（全角色画布不越界）。
+            walk::clamp_window(&app);
             if let Ok(p) = w.outer_position() {
                 let mut c = pet.cfg.lock().unwrap();
                 c.x = p.x;
@@ -1715,14 +1754,11 @@ fn main() {
                     });
                 });
             }
-            let log_path = app
-                .path()
-                .app_config_dir()
-                .map(|d| {
-                    let _ = std::fs::create_dir_all(&d);
-                    d.join("startup.log")
-                })
-                .unwrap_or_else(|_| std::path::PathBuf::from("startup.log"));
+            let log_path = {
+                let d = chat::config_dir();
+                let _ = std::fs::create_dir_all(&d);
+                d.join("startup.log")
+            };
             let lg = log_path.clone();
             macro_rules! logf {
                 ($($a:tt)*) => {{
@@ -1732,7 +1768,7 @@ fn main() {
             logf!("--- start v{} ---", env!("CARGO_PKG_VERSION"));
 
             // ---- 读配置
-            let dir = app.path().app_config_dir().expect("config dir");
+            let dir = chat::config_dir();
             let _ = std::fs::create_dir_all(&dir);
             let cfg_path = dir.join("config.json");
             let cfg: Config = std::fs::read_to_string(&cfg_path)
@@ -1762,6 +1798,14 @@ fn main() {
             let drag_flag = pet.dragging.clone();
             let hit_state = pet.hit_state.clone();
             app.manage(pet);
+            // 桌面走动：权威位置在 Rust，配置单独 walk.json；默认关闭。
+            let (walk_engine, walk_warn) =
+                walk::WalkEngine::new(walk::walk_config_path());
+            if let Some(warn) = walk_warn {
+                logf!("[walk] {warn}");
+            }
+            app.manage(walk_engine.clone());
+            walk::walk_init(app.handle().clone(), walk_engine);
             #[cfg(windows)]
             install_keyboard_hook(app.handle());
             media::media_init(app.handle());
@@ -1814,11 +1858,7 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, e| {
-                    let lp = app
-                        .path()
-                        .app_config_dir()
-                        .map(|d| d.join("startup.log"))
-                        .unwrap_or_else(|_| std::path::PathBuf::from("startup.log"));
+                    let lp = chat::config_dir().join("startup.log");
                     wlog(&lp, &format!("[menu] id={}", e.id().as_ref()));
                     match e.id().as_ref() {
                     "quit" => app.exit(0),
@@ -1970,19 +2010,11 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(600));
                 match ensure_sao(&app_h) {
                     Ok(_) => {
-                        let lp = app_h
-                            .path()
-                            .app_config_dir()
-                            .map(|d| d.join("startup.log"))
-                            .unwrap_or_else(|_| std::path::PathBuf::from("startup.log"));
+                        let lp = chat::config_dir().join("startup.log");
                         wlog(&lp, "[sao] prebuilt hidden ok");
                     }
                     Err(e) => {
-                        let lp = app_h
-                            .path()
-                            .app_config_dir()
-                            .map(|d| d.join("startup.log"))
-                            .unwrap_or_else(|_| std::path::PathBuf::from("startup.log"));
+                        let lp = chat::config_dir().join("startup.log");
                         wlog(&lp, &format!("[sao] prebuild ERR {e}"));
                     }
                 }
@@ -1998,6 +2030,16 @@ fn main() {
             set_aspect,
             set_pet_size,
             force_wave,
+            walk::walk_get,
+            walk::walk_set_enabled,
+            walk::walk_clear_bounds,
+            walk::walk_begin_selection,
+            walk::walk_selection_context,
+            walk::walk_selection_commit,
+            walk::walk_selection_cancel,
+            walk::walk_command,
+            walk::walk_stop,
+            walk::walk_debug,
             drag_begin,
             skin_list,
             skin_load,
@@ -2088,6 +2130,7 @@ fn main() {
 fn resize_cmd(app: &AppHandle, h: i32) {
     if let Some(w) = app.get_webview_window("main") {
         apply_size(&w, h);
+        walk::clamp_window(app);
         if let Some(pet) = app.try_state::<Pet>() {
             pet.cfg.lock().unwrap().h = h;
             if let Ok(p) = w.outer_position() {
@@ -2098,5 +2141,52 @@ fn resize_cmd(app: &AppHandle, h: i32) {
             save_cfg(&pet);
         }
         sync_float_mirror(app);
+    }
+}
+
+/// 内置素材目录解析的单测：只认「真的放着 assets/idle.webm」的目录。
+/// 返回的是 frontend 目录而不是 assets 目录——前端再把 `assets/<name>` 拼上去；
+/// 两边都带一层 assets 就是 v0.7.0 那个 `assets/assets/…` 404 的成因。
+#[cfg(test)]
+mod builtin_asset_dir_tests {
+    use super::pick_asset_dir;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "catwhale-assetdir-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn picks_dir_that_contains_assets_idle_webm() {
+        let empty = scratch("empty");
+        let full = scratch("full");
+        std::fs::create_dir_all(full.join("assets")).unwrap();
+        std::fs::write(full.join("assets").join("idle.webm"), b"x").unwrap();
+        let picked = pick_asset_dir(vec![empty.clone(), full.clone()]);
+        assert_eq!(picked.as_deref(), Some(full.as_path()));
+        let _ = std::fs::remove_dir_all(&empty);
+        let _ = std::fs::remove_dir_all(&full);
+    }
+
+    #[test]
+    fn rejects_layout_that_would_double_the_assets_segment() {
+        // 老约定：候选本身就是 assets 目录（里面有 idle.webm，没有 assets/ 子目录）。
+        let assets = scratch("assets-dir");
+        std::fs::write(assets.join("idle.webm"), b"x").unwrap();
+        assert!(pick_asset_dir(vec![assets.clone()]).is_none());
+        let _ = std::fs::remove_dir_all(&assets);
+    }
+
+    #[test]
+    fn none_when_no_candidate_has_videos() {
+        let empty = scratch("none");
+        assert!(pick_asset_dir(vec![empty.clone()]).is_none());
+        assert!(pick_asset_dir(Vec::new()).is_none());
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }

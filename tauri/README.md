@@ -1,9 +1,9 @@
 # 猫鲸桌宠 · Tauri (Rust) 版
 
-> 这是与 Electron 主线**并行**的 Rust 分支：功能对齐 v0.6.1，独立构建、独立运行，
+> 这是与 Electron 主线**并行**的 Rust 分支：功能对齐 v0.7.0，独立构建、独立运行，
 > 不改动主线的 `app/`、`web/`、`skin-editor/`。主线仍在 `main`，本目录只存在于 `feat/tauri-rust`。
 
-当前 exe 为 **5.23 MiB（5,488,640 字节）**。SAO 菜单已按原版重做为四列、五分类 21 项；文件搜索和聊天使用原版风格独立浮窗，综合面板保留系统监控、环境自检、角色卡和 Agent 看板等功能。
+当前 exe 为 **5.30 MiB（5,561,856 字节）**。SAO 菜单已按原版重做为四列、五分类 21 项；文件搜索和聊天使用原版风格独立浮窗，综合面板保留系统监控、环境自检、角色卡和 Agent 看板等功能。
 
 双击 `catwhale-poc.exe` 运行。目标机需要 WebView2 Runtime，Windows 11 通常已自带。
 
@@ -27,7 +27,7 @@ tauri/
 │  ├─ src/envcheck.rs       环境自检
 │  ├─ src/feature_config.rs 功能开关
 │  └─ src/update.rs         更新检查
-├─ frontend/                五个 HTML（构建时内嵌进 exe）
+├─ frontend/                六个 HTML（构建时内嵌进 exe，含 walk-select.html）
 ├─ scripts/                 verify4.sh 验收基线 + ev.py CDP 选择器
 ├─ reference/shots/         验收截图
 └─ build.sh                 构建入口
@@ -41,15 +41,21 @@ tauri/
 catwhale-poc.exe          主程序
 WebView2Loader.dll        必须与 exe 同目录（Tauri 依赖）
 assets/es.exe             Everything 搜索组件（不入库，发布包内附）
-frontend/assets/          26 个外置内置回落 WebM（复用主线 web/assets/video，逐字节相同）
+frontend/assets/          28 个外置内置回落 WebM（其中 walk_left/walk_right 随仓库入库）
 ```
+
+`builtin_asset_dir()` 返回的是 **frontend 目录本身**，前端再拼 `assets/<name>`。
+两边各拼一层就会变成 `frontend/assets/assets/walk_left.webm`（404，走动静默退回 run）——
+v0.7.0 第一次打包就是这个错。判定以「该目录下真的有 `assets/idle.webm`」为准，
+空目录会被跳过；`cargo test` 里 `builtin_asset_dir_tests` 专门钉住这条约定。
 
 HTML 已嵌入 exe，回落视频没有内嵌（内嵌会让 PE 增加约 65 MiB）。移动程序时请移动整个目录。
 
 最终 exe SHA-256：
 
 ```text
-1072a1728a39ecc2399a948d06497720fe596e65e4fb99a90c57ed4053ea001d
+1072a1728a39ecc2399a948d06497720fe596e65e4fb99a90c57ed4053ea001d  （v0.6.1 历史值）
+f21b01e99fb8c9eb423b3741ebc4dbbedbbf0b4e67c9cfd7b0574e478c23343d  （v0.7.0 交付包内 exe）
 ```
 
 ## 二、桌宠操作
@@ -64,6 +70,34 @@ HTML 已嵌入 exe，回落视频没有内嵌（内嵌会让 PE 增加约 65 MiB
 | 托盘右键 | 显示/隐藏、互动、换肤、皮肤目录、自启、尺寸和退出 |
 
 皮肤继续读取 `%APPDATA%\桌宠\skins`，与 Electron 版共用。该目录是用户资产，测试或构建流程不应改写。
+
+## 二·二、桌面走动（v0.7.0）
+
+- 设置 → **桌面走动**：默认关闭；可框选当前屏幕的活动范围，范围持久化到 `walk.json`。
+- 框选使用按需创建的临时透明窗 `walk-select`（覆盖当前显示器工作区），选完 / Esc / 失焦立即销毁，不做常驻全屏窗；结束后恢复主窗点击穿透。
+- 范围是二维矩形，窗口整体被夹在范围内；反向拖拽（从右下往左上）同样有效。换屏、缩放、拖动、游戏模式都会重新检查边界。
+- 聊天里发送 **「向左走」「往右走 200 像素」「停下」**（也支持上/下、`px`、省略距离默认 200）由 Rust 本地解析执行，不依赖 API；只有用户本次输入会进入解析，AI 输出与历史重放没有入口。「停下」会同时暂停巡游，设置页可再次开启。
+- 动画使用独立朝向 `walk_left` / `walk_right`（576×960、24fps、32 帧 / 1.333s、VP9+alpha），文件在 `frontend/assets/walk_left.webm`、`walk_right.webm`，**随仓库入库**（`tauri/.gitignore` 只放行这两个）。walk 动画不受菜单/浮窗镜像影响，不会被翻反。
+- **手动交互优先是每拍判定的**：`tick` 每 33ms 检查 `Pet.dragging` / `Pet.menu_open`，为真就清掉在途目标并跳过本拍；只在 `drag_begin` 取消一次不够（长按 1.8 秒后巡游会重新抽目标，把按着的窗口搬走）。
+- **范围装不下角色画布时不再静默改用整屏**：`area_fit` 返回 `TooSmall`，巡游暂停、走动指令被拒绝并回一条可读原因（含「范围已保留」），范围本身不动；尺寸变大导致范围失效时在途目标立即作废。设置页显示「范围小于角色画布」并变红。
+
+测试隔离：设置 `CATWHALE_CONFIG_DIR` 可把整个应用配置目录（config.json / walk.json / 设置 / 聊天记录）
+指到临时目录；只隔离走动时也可用 `CATWHALE_WALK_DIR` 单独指定 `walk.json`。默认路径来自
+`app_config_dir()`，在 Windows 上是 KnownFolder `RoamingAppData`
+（当前用户 RoamingAppData 下的 `com.hermes.catwhalepoc\walk.json`），**不受 `%APPDATA%`
+环境变量影响**；需要不写真实档案时必须用上述环境变量。
+
+一键构建与验收：
+
+```bash
+cd tauri
+# 先设置 CATWHALE_TOOLCHAIN 为含 cargo、rustup、mingw64 的 GNU 工具链目录。
+bash scripts/build-walk.sh     # 产物：tauri-src/tmp/dist/（构建前逐个核对 index.html 引用的 webm）
+CATWHALE_WALK_DIR="$(cygpath -w "$(pwd)/../tmp/walk-profile")" \
+  bash scripts/verify-walk.sh  # 13 段 79 项断言
+bash scripts/pack-walk.sh      # 便携包 + ZIP → 主题目录 交付-v0.7.0/、*.zip
+python scripts/verify-walk-media.py   # 素材文件级回验（解码两片 webm，量 alpha/鞋底/头顶/朝向）
+```
 
 ## 三、SAO 菜单
 
@@ -115,6 +149,23 @@ python ev.py C 'window.__chatTest.ready'
 
 `verify3.sh` 及更早脚本只作历史资料；旧脚本中的 15 项、660×372 和旧 DOM 断言不适用于当前版本。
 
+### 走动（v0.7.0）验收结果
+
+`verify-walk.sh` 在本轮 exe 上 13 段 **79 项全 PASS**，从交付 ZIP 解压后的副本重跑同样全 PASS。要点：
+
+| 断言 | 实测 |
+|---|---|
+| 素材请求路径 | `builtin_asset_dir` 返回 `…rontend`，两个 walk URL 都只有一层 `assets`，`fetch` 200（417/421 KB） |
+| 真实播放 | `readyState=4`、`videoWidth=576`、`duration=1.334`、`currentTime` 0.5s 内推进 0.3~0.72s |
+| 透明 | canvas 采样 alpha 覆盖 0.297~0.327（不是整幅不透明，也不是黑底） |
+| 朝向 | 左片前景重心 76.1/144、右片 64.8/144，相差 11.8px —— 两片是不同画面，非同一段镜像 |
+| 长按拖动 | 真实 SendInput 按住 1.65s，窗口位移 0px，巡游未启动；按住期间打开巡游也不抢控制；松手后拖动位移 +60px |
+| 小范围 | `boundsFit=too_small`，范围保留、巡游暂停、指令被拒并回原因、窗口不动；清除范围后指令恢复 |
+| 走动中改尺寸 | 620 逻辑高度下 1400×640 范围装不下 → 目标作废、`walking=false`、范围保留 |
+
+`cargo test --release`：11 项通过（walk 几何/指令/配置 8 项 + 内置素材目录 3 项）。
+真实窗口截图与主窗录屏在主题目录 `演示源-Tauri/`。
+
 ### 仍需外部条件的验收
 
 - **Harness 真实回复尚未通过**：本机 Harness 凭据文件中的 `version` 类型错误会使子进程退出；本轮只确认仓库、Node 和普通路径探测正常，未擅自修改用户凭据。
@@ -131,19 +182,14 @@ python ev.py C 'window.__chatTest.ready'
 mkdir -p tauri/frontend/assets
 cp web/assets/video/*.webm tauri/frontend/assets/
 
-# 2) 构建（build.sh 会把五个 HTML 复制到 frontend-embed 供内嵌）
-cd tauri && bash build.sh
+# 2) 一键构建（复制 HTML 到 frontend-embed、映射临时盘符、输出 tmp/dist）
+cd tauri && bash scripts/build-walk.sh
 ```
 
-产物在 `src-tauri/target/release/`。`build.sh` 默认把工具链和 target 放在本机 H 盘路径下，
-在本仓库直接构建时请改掉脚本头部的 `RUSTUP_HOME / CARGO_HOME / CARGO_TARGET_DIR` 三行，
-或直接用：
-
-```bash
-cd tauri/src-tauri && cargo build --release
-```
-
-**构建路径必须是纯 ASCII**：mingw 的 ld 处理中文路径会报 `cannot open output file`。
+`build.sh` 会把六个 HTML 复制到 `tauri/frontend-embed/` 供内嵌。
+`scripts/build-walk.sh` 使用 `CATWHALE_TOOLCHAIN` 指定的 GNU 工具链目录，
+把中文仓库路径临时映射成盘符（mingw ld 不能处理中文输出路径），产物落到
+`tauri-src/tmp/dist/`；target 复用工具链既有的 ASCII 缓存目录。
 
 ## 七、维护注意事项
 
