@@ -61,6 +61,16 @@
   }
   #shadow.hidden{display:none;}
 
+  /* ---------- 走动范围框选（全屏遮罩：只在框选期间出现） ---------- */
+  #walksel{position:fixed;inset:0;z-index:85;display:none;cursor:crosshair;background:rgba(16,20,28,.30);}
+  #walksel.show{display:block;}
+  #walkselRect{position:absolute;display:none;border:2px dashed rgba(246,198,46,.95);
+    background:rgba(246,198,46,.16);box-shadow:0 0 0 9999px rgba(8,11,16,.30);}
+  #walkselRect.show{display:block;}
+  #walksel .wshint{position:absolute;left:50%;top:16px;transform:translateX(-50%);
+    padding:6px 13px;border-radius:8px;background:rgba(20,24,32,.86);color:#f3efe4;font-size:13px;
+    box-shadow:0 8px 22px rgba(0,0,0,.35);white-space:nowrap;}
+
   /* ---------- 占位菜单（以后换成正式菜单） ---------- */
   #menu{
     position:fixed; z-index:50; display:none;
@@ -522,6 +532,23 @@
   <div class="sbox"><span>⚙</span><b style="font-size:13px">设置</b>
     <span class="scount" id="setStatus"></span></div>
   <div class="sform">
+    <div class="albox" id="walkBox">
+      <div class="alhead"><span>🚶 桌面走动</span><span class="albadge" id="walkBadge">未开启</span></div>
+      <label style="margin-top:0"><input type="checkbox" id="walkCruise"> 自由巡游（在范围内自己溜达）</label>
+      <div class="hint" id="walkRectInfo">范围：读取中…</div>
+      <div class="albtns">
+        <button id="walkSelectBtn" type="button">框选走动范围</button>
+        <button id="walkClearBtn" type="button">清除范围</button>
+        <button id="walkTestBtn" type="button">试走 200 像素</button>
+        <button id="walkStopBtn" type="button">停下</button>
+      </div>
+      <div class="hint" id="walkOut"></div>
+      <div class="hint">
+        点「框选走动范围」后在屏幕上<b>拖一个矩形</b>，<b>Esc 取消</b>。范围会记住，重启后仍在；不框选时范围 = 整个工作区。<br>
+        巡游默认关闭。聊天里说「向左走」「往右走 200 像素」「停下」也能直接指挥它——
+        这类指令由桌宠本地执行、<b>不经过 AI</b>，巡游关着也能用，说了「停下」会顺带暂停巡游。
+      </div>
+    </div>
     <div class="albox" id="mediaBox">
       <div class="alhead"><span>🎬 媒体演出</span><span class="albadge" id="mediaBadge">未开启</span></div>
       <label style="margin-top:0"><input type="checkbox" id="mediaEnabled"> 看视频 / 听音乐时，让它跟着演一段</label>
@@ -699,9 +726,15 @@
     按 H 隐藏面板 · 闲置 12 秒后自己摇尾/忙起来
   </div>
 </div>
+<div id="walksel" aria-hidden="true">
+  <div class="wshint">拖拽框选走动范围 · Esc 取消</div>
+  <div id="walkselRect"></div>
+</div>
 <div id="toast"></div>
 
 <script src="director.js"></script>
+<script src="walk-geom.js"></script>
+<script src="walk-command.js"></script>
 <script src="animation-loop.js"></script>
 <script src="emotion.js"></script>
 <script src="media-show-page.js"></script>
@@ -749,7 +782,12 @@ const DEFAULT_STATES = {
        role='media' 不进空闲随机池、也不参与点击互动——凭空唱歌很奇怪。
        mode='loop'：媒体放多久就循环演多久，节奏由 web/media-show-page.js 控制。 */
   watch_tv:      { name:'看电视', file:'watch_tv.webm',      mode:'loop', role:'media', scale:1.0 },
-  sing_mic:      { name:'唱歌',   file:'sing_mic.webm',      mode:'loop', role:'media', scale:1.0 }
+  sing_mic:      { name:'唱歌',   file:'sing_mic.webm',      mode:'loop', role:'media', scale:1.0 },
+  /* ↓ 桌面走动（2026-11）：只在走动/巡游时被状态机主动选中，
+       role='walk' 不进空闲随机池、也不参与点击互动。素材缺失时走动仍然执行（退回待机动作），
+       见 walkStateFor()：两个方向素材只到一个时，用镜像凑出另一个方向。 */
+  walk_left:     { name:'向左走', file:'walk_left.webm',     mode:'loop', role:'walk', scale:1.0, duration:1.3333, frames:32, bytes:416537 },
+  walk_right:    { name:'向右走', file:'walk_right.webm',    mode:'loop', role:'walk', scale:1.0, duration:1.3333, frames:32, bytes:421313 }
 };
 const VIDEO_DIR = 'assets/video/';
 const CANVAS_ASPECT = 900 / 1500;     // 统一画布宽高比
@@ -787,7 +825,9 @@ let pet, videos = {}, els = {}, alphaSampler = null, alphaOK = null;
 /* 常演状态：启动即 preload='auto'；其余状态只取元数据，第一次要演它时才 load()。
    同时存在的 video 元素数 = 状态数（各 1~2MB 的 900x1500 VP9-alpha），
    全部 auto 会让不常演的那几路也一直备着解码缓冲。 */
-const EAGER_STATES = ['idle', 'stand_arms', 'grabbed', 'working'];
+const EAGER_STATES = ['idle', 'stand_arms', 'grabbed', 'working', 'walk_left', 'walk_right'];
+/*  ↑ walk_left/walk_right 也预载：走动是「立刻要看见动作」的交互，只给 metadata 的话
+     第一段走动会先黑一下再出画（本地文件也有几十毫秒的解码准备），两个片段合计 ~840KB。 */
 /* 错误/异常类文案集中一处（同一个说法只写一遍）。
    不引 i18n 框架：本界面只有中文一种语言，全量抽离收益为零且会引入回归风险。 */
 const ERR_TEXT = {
@@ -822,6 +862,34 @@ const M = {                       // 各种锁，共同决定该演哪个状态
 };
 let cur = null;
 
+/* ===================== 桌面走动：运行态 =====================
+   放在状态机之前声明，因为 resolveState()（挑动作）与 videoTransform()（朝向）
+   都要读它。行为实现见后面「桌面走动」一节；几何/指令解析在独立文件里（有单测）。
+     state  正在演的动作 id（''=不介入状态机）
+     flip   走路素材只有一个方向时，按行进方向镜像（与菜单镜像叠加，不覆盖）
+     target 走动目标（左上角坐标）；null = 没在走
+     cfg    范围/巡游开关（主进程 walk.json），默认「不巡游、范围=工作区」 */
+const WALK = {
+  cfg: { enabled:false, rect:null, win:null, displayId:null, speed:130 },
+  ready: false,
+  state: '',
+  flip: false,
+  facing: 'right',
+  target: null,
+  origin: null,
+  pending: null,          // 一次走动结束时要 resolve 的 Promise
+  bounded: false,         // 目标被范围夹过（= 走到边界了）
+  fromCruise: false,      // 这一段走动是巡游发起的（面板一开就让路）
+  stallMs: 0,             // 停滞计时：走不动超过阈值就收敛，别把 Promise 吊死
+  raf: 0,
+  lastTs: 0,
+  cruiseUntil: 0,
+  wa: null,               // 工作区（窗口内坐标，来自主进程）
+  lastErr: '',
+  selGuardUntil: 0,       // 刚退出框选的短窗口：同一记 Esc 不再连带关面板
+  sel: { active:false, a:null, b:null }
+};
+
 function now(){ return performance.now(); }
 
 /* 每个状态可以有自己的播放速率(states.json 的 rate)，最终速率 = 速度滑块 × rate。
@@ -847,7 +915,11 @@ function pickWeighted(list){
 }
 
 function resolveState(){
-  if (M.dragging) return 'grabbed';                        // 1 拖动中
+  if (M.dragging) return 'grabbed';                        // 1 拖动中（手动拖动永远优先）
+  /* 1.1 桌面走动 / 巡游：走动期间演 walk_left / walk_right。
+       WALK.state 由走动循环维护（停下、被面板/游戏模式打断时置空 → 这条整段不生效）。
+       放在固定片段之前：用户刚下的走动命令必须看得见。 */
+  if (WALK.state) return WALK.state;
   /* 1.4 用户开启的固定片段：盖住菜单抬手 / Agent 看板 / 长任务 / 空闲自动。
      一次性动作（点击互动、松手落下）仍允许短暂插播，播完回同一片段。
      普通模式（AL.run 为空）这条分支整段不生效，原有优先级一行未动。 */
@@ -988,7 +1060,11 @@ function tick(){
   if (M.emote && now() >= M.emoteUntil) M.emote = null;
   if (MEDIA.m) { try{ mediaTick(); }catch(e){} }   // 媒体演出：数循环遍数 / 结束休息
   if (SET.open) { try{ mvRender(); }catch(e){} }   // 设置面板开着时实时刷新「当前：…」
+  try{ walkCruiseTick(); }catch(e){}               // 自由巡游：空闲时自己挑个点走过去（默认关闭）
+  /* 巡游开着时不让「空闲随机」再来抢动作：两者都是"没人管时自己在动"，
+     同时生效就会互相打断（测试里表现为走走停停、起步间隔忽长忽短）。 */
   if (!AL.run && !M.emote && opt.auto && !M.dragging && !M.menuOpen && !M.searchOpen && !M.chatOpen && !M.envOpen && !M.chatBusy && M.taskCount === 0 && !M.react &&
+      !WALK.cfg.enabled &&
       now() - M.lastInteract >= IDLE_HOLD_MS && now() >= M.loungeUntil){
     rollLounge();
   }
@@ -1613,7 +1689,7 @@ function uiHitAt(x, y){
   const el = document.elementFromPoint(x, y);
   if (!el || !el.closest) return false;
   if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#envwiz') || el.closest('#sao')
-      || el.closest('#dockpan') || el.closest('#dockchip')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单/Agent看板可交互
+      || el.closest('#dockpan') || el.closest('#dockchip') || el.closest('#walksel')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单/Agent看板/框选遮罩可交互
   if (el.closest('#pet')){
     const r = pet.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
@@ -1628,7 +1704,7 @@ function initHostBridge(){
   let lastPos=null,lastInter=null,disposed=false,pollBusy=false;
   const evaluate=()=>{
     if(disposed)return;
-    const inter=M.dragging?true:lastPos?uiHitAt(lastPos.x,lastPos.y):false;
+    const inter=M.dragging?true:(walkSelecting?true:(lastPos?uiHitAt(lastPos.x,lastPos.y):false));
     if(inter!==lastInter){
       try{host.setInteractive(inter);lastInter=inter;}catch(e){}
     }
@@ -1700,9 +1776,12 @@ function videoTransform(id){
   const sx = s * ((st.scaleX != null) ? st.scaleX : 1);
   const sy = s * ((st.scaleY != null) ? st.scaleY : 1);
   const ox = st.offX || 0, oy = st.offY || 0;
+  /* 朝向：菜单镜像（petMirror）与走路镜像（WALK.flip）叠加而不是互相覆盖——
+     只在「只有一个走路素材」时 flips，两条独立来源各管一件事。 */
+  const flip = (petMirror !== !!WALK.flip);
   let t = '';
   if (ox || oy) t += 'translate(' + ox + '%,' + oy + '%) ';
-  t += 'scaleX(' + (petMirror ? -sx : sx) + ') scaleY(' + sy + ')';
+  t += 'scaleX(' + (flip ? -sx : sx) + ') scaleY(' + sy + ')';
   return t;
 }
 function applyVideoMirror(){
@@ -1720,6 +1799,508 @@ function setPetMirror(on){
   pet.classList.toggle('mirror', on);
   applyVideoMirror();
   return changed;
+}
+
+/* =====================================================================
+   桌面走动 / 自由巡游
+   ---------------------------------------------------------------------
+   验收口径（每条都有对应的自动断言，见 tests/ 与 tests/e2e-walk.cjs）：
+     · 范围：设置里鼠标拖框 → 持久化到 walk.json；不框选 = 整个工作区
+     · 二维有界：随机目标 + 命令行位移都夹在范围内，**整块画布**不越界
+     · 朝向：只看水平分量；往左演 walk_left，往右演 walk_right；
+             两个素材只到一个时用镜像凑另一个方向
+     · 优先级：手动拖动 / 菜单 / 搜索 / 自检 / 游戏模式 / 框选中 → 走动立即停
+     · 巡游：默认关闭；「停下」指令会把它关掉（设置里可再打开）
+     · 框选：整窗临时可交互，结束/取消/Esc/失焦一律恢复点击穿透
+   ==================================================================== */
+const GEOM = window.CatwhaleWalkGeom || null;
+const WCMD = window.CatwhaleWalkCommand || null;
+let walkSelecting = false;          // 供 hostBridge 用：框选期间整窗保持可交互
+
+function walkEls(){
+  const g = (id)=>document.getElementById(id);
+  return { cruise:g('walkCruise'), badge:g('walkBadge'), info:g('walkRectInfo'), out:g('walkOut'),
+           sel:g('walksel'), selRect:g('walkselRect') };
+}
+function walkHost(){ return (window.petHost && window.petHost.walk) || null; }
+function walkSize(){ return { w: opt.size * CANVAS_ASPECT, h: opt.size }; }
+function walkPos(){ return { x: parseFloat(pet && pet.style.left) || 0, y: parseFloat(pet && pet.style.top) || 0 }; }
+function walkUsable(id){ return !!(states[id] && !states[id].__missing); }
+function walkAreaNow(){ return WALK.wa || { x:0, y:0, width: innerWidth, height: innerHeight, displayId: null }; }
+
+/** 生效范围（窗口内坐标）：框选过就用框，否则整个工作区；两者都与工作区求交 */
+function walkArea(){
+  const wa = walkAreaNow();
+  const clipped = WALK.cfg.rect ? GEOM.intersectRect(WALK.cfg.rect, wa) : null;
+  if (clipped) return { source:'rect', displayId: wa.displayId, rect: clipped };
+  return { source:'workarea', displayId: wa.displayId,
+           rect: { x: wa.x, y: wa.y, width: wa.width, height: wa.height } };
+}
+function walkBox(){ const s = walkSize(); return GEOM.petBox(walkArea().rect, s.w, s.h); }
+/** 当前范围放得下整块画布吗？（放不下 = 走就别启动；范围本身保留，用户可重框） */
+function walkFits(){
+  const s = walkSize();
+  return GEOM.fitsRect(walkArea().rect, s.w, s.h);
+}
+/** 范围太小的统一说法（设置面板 / 聊天回复 / toast 共用一句） */
+function walkTooSmallMsg(){
+  const f = walkFits();
+  return (f && f.error ? f.error : '走动范围比角色还小') +
+         '，先在「设置 → 🚶 桌面走动」里重新框选（或点「清除范围」用整个工作区）';
+}
+
+/** 把角色夹回范围（resize / 换屏 / 写完新范围后都要跑）
+ *  范围比画布还小时不硬钉在框中心（那会让头被屏幕边裁掉），
+ *  退回「整个工作区」的包围盒，保证整块画布在屏幕里。 */
+function walkClampAll(animate){
+  if (!pet || !GEOM) return false;
+  const p = walkPos();
+  const s = walkSize();
+  const box = walkFits().ok ? walkBox() : GEOM.petBox(walkAreaNow(), s.w, s.h);
+  const c = GEOM.clampPet(p.x, p.y, box);
+  if (c.clamped) place(c.x, c.y, !!animate); else updateShadow();
+  return c.clamped;
+}
+
+async function walkRefreshArea(){
+  const host = window.petHost;
+  if (host && host.workArea){
+    try{
+      const wa = await host.workArea();
+      if (wa && wa.width > 0) WALK.wa = wa;
+    }catch(e){ /* 拿不到就退回整窗 */ }
+  }
+  if (!WALK.wa) WALK.wa = { x:0, y:0, width: innerWidth, height: innerHeight, displayId: null };
+  return WALK.wa;
+}
+
+/* ---------------- 配置读写（walk.json） ---------------- */
+async function walkLoad(){
+  const host = walkHost();
+  if (host){
+    try{
+      const r = await host.get();
+      if (r && r.config) WALK.cfg = Object.assign({}, WALK.cfg, r.config);
+      WALK.lastErr = (r && r.error) ? String(r.error) : '';
+    }catch(e){ WALK.lastErr = '读取走动设置失败：' + ((e && e.message) || e); }
+  } else {
+    // 浏览器 Demo：没有宿主就用 localStorage，行为可用但仍以桌面版为验收对象
+    try{ const raw = localStorage.getItem('petWalk'); if (raw) WALK.cfg = Object.assign({}, WALK.cfg, JSON.parse(raw)); }catch(e){}
+  }
+  WALK.ready = true;
+  await walkRefreshArea();
+  walkClampAll(false);
+  walkRender();
+  return WALK.cfg;
+}
+function walkSave(patch){
+  WALK.cfg = Object.assign({}, WALK.cfg, patch || {});
+  WALK.cfg.win = { width: innerWidth, height: innerHeight };   // 记下坐标系，换屏后按比例搬
+  WALK.cfg.speed = Math.max(40, Math.min(600, Number(WALK.cfg.speed) || 130));
+  const host = walkHost();
+  if (host){
+    host.set(WALK.cfg).then((r)=>{
+      if (r && r.ok === false){ WALK.lastErr = r.error || '保存走动设置失败'; }
+      else if (r && r.config){ WALK.cfg = Object.assign({}, WALK.cfg, r.config); }
+      walkRender();
+    }).catch((e)=>{ WALK.lastErr = '保存走动设置失败：' + ((e && e.message) || e); walkRender(); });
+  } else {
+    try{ localStorage.setItem('petWalk', JSON.stringify(WALK.cfg)); }catch(e){}
+  }
+  walkRender();
+  return WALK.cfg;
+}
+function walkRender(){
+  const e = walkEls();
+  if (!e.cruise) return;
+  e.cruise.checked = !!WALK.cfg.enabled;
+  if (e.badge){
+    e.badge.textContent = WALK.cfg.enabled ? '巡游中' : '未开启';
+    e.badge.classList.toggle('on', !!WALK.cfg.enabled);
+  }
+  if (e.info){
+    const a = walkArea(), r = a.rect;
+    const where = a.source === 'rect' ? '自定义框选' : '整个工作区';
+    const f = walkFits();
+    e.info.textContent = '范围：' + where + ' · 左上 (' + Math.round(r.x) + ',' + Math.round(r.y) +
+      ') · ' + Math.round(r.width) + '×' + Math.round(r.height) +
+      (a.source === 'rect' && WALK.cfg.rect && !GEOM.rectOk(WALK.cfg.rect) ? '（已失效）' : '') +
+      (f.ok ? '' : '（比角色画布小，走不了：至少 ' + f.need.w + '×' + f.need.h + '）');
+  }
+  if (e.out){
+    const t = WALK.lastErr || (WALK.state ? ('正在走：' + (states[WALK.state] ? states[WALK.state].name : WALK.state)) : '');
+    if (e.out.textContent !== t) e.out.textContent = t;
+  }
+}
+
+function walkSetCruise(on){
+  /* 范围比画布还小：不允许开巡游——开了只会在框外/屏幕边被裁。
+     框选值原样保留（用户要对照着重框），把原因写在面板上并当场提示。 */
+  if (on && !walkFits().ok){
+    const f = walkFits();
+    WALK.lastErr = walkTooSmallMsg();
+    toast('范围太小，开不了巡游：至少 ' + f.need.w + '×' + f.need.h + '，请重新框选');
+    walkSave({ enabled: false });
+    walkRender();
+    return { ok:false, error: WALK.lastErr, enabled: false };
+  }
+  walkSave({ enabled: !!on });
+  if (!on) walkStop('cruise-off');
+  else {
+    WALK.cruiseUntil = 0;
+    WALK.lastErr = '';
+    /* 用户刚把巡游开关打开 = 明确想让它动：把「刚操作完先待机 12 秒」这道门让开，
+       否则勾上开关后要干等 12 秒才迈第一步，看起来像没生效。 */
+    M.lastInteract = Math.min(M.lastInteract, now() - IDLE_HOLD_MS - 1);
+  }
+  walkRender();
+  return { enabled: !!WALK.cfg.enabled };
+}
+
+/* ---------------- 范围框选 ---------------- */
+function walkSelStart(){
+  if (!GEOM){ toast('走动模块未加载'); return { ok:false }; }
+  /* 游戏模式：窗口已隐藏、鼠标钩子已卸，这时候拉遮罩会变成一块"看不见又点不动"的层 */
+  if (M.gameMode){ toast('游戏模式中不能框选，先退出游戏'); return { ok:false, error:'gamemode' }; }
+  if (WALK.sel.active) return { ok:true, already:true };
+  walkStop('select');                       // 先停下再框，避免边拖边跑
+  WALK.sel.active = true; walkSelecting = true;
+  WALK.sel.a = null; WALK.sel.b = null;
+  const e = walkEls();
+  if (e.sel){ e.sel.classList.add('show'); e.sel.setAttribute('aria-hidden','false'); }
+  if (e.selRect){ e.selRect.classList.remove('show'); e.selRect.style.width = '0px'; e.selRect.style.height = '0px'; }
+  try{ const h = walkHost(); if (h && h.selecting) h.selecting(true); }catch(err){}
+  applyState();
+  return { ok:true };
+}
+function walkSelDraw(){
+  const e = walkEls();
+  if (!e.selRect || !WALK.sel.a || !WALK.sel.b) return;
+  const r = GEOM.rectFromDrag(WALK.sel.a, WALK.sel.b);
+  e.selRect.style.left = r.x + 'px'; e.selRect.style.top = r.y + 'px';
+  e.selRect.style.width = r.width + 'px'; e.selRect.style.height = r.height + 'px';
+  e.selRect.classList.add('show');
+}
+function walkSelEnd(){
+  WALK.sel.active = false; walkSelecting = false;
+  WALK.sel.a = null; WALK.sel.b = null;
+  const e = walkEls();
+  if (e.sel){ e.sel.classList.remove('show'); e.sel.setAttribute('aria-hidden','true'); }
+  if (e.selRect) e.selRect.classList.remove('show');
+  /* 恢复穿透：这条是「全屏透明窗不能吞鼠标」的红线，任何退出路径都必须走到 */
+  try{ const h = walkHost(); if (h && h.selecting) h.selecting(false); }catch(err){}
+  walkRender();
+  applyState();
+}
+function walkSelCancel(reason){
+  const was = WALK.sel.active;
+  walkSelEnd();
+  /* 一次 Esc 会走两条路（页面 keydown + 主进程全局 Esc 兜底），第二条到达时遮罩已经收了。
+     记一个短窗口，让"刚退出框选的这一下 Esc"不再去关下面的面板。 */
+  WALK.selGuardUntil = Date.now() + 350;
+  if (was) toast('已取消框选，范围没变');
+  return { ok:true, canceled:true, reason: reason || '' };
+}
+function walkSelFinish(){
+  const a = WALK.sel.a, b = WALK.sel.b || WALK.sel.a;
+  const raw = GEOM.rectFromDrag(a, b);
+  walkSelEnd();
+  if (!GEOM.rectOk(raw)){ toast('框选太小（至少 ' + GEOM.MIN_SIZE + '×' + GEOM.MIN_SIZE + '），已取消'); return { ok:false, error:'too-small' }; }
+  const clipped = GEOM.intersectRect(raw, walkAreaNow());
+  if (!clipped){
+    toast('框选在工作区外，已取消');
+    return { ok:false, error:'outside-workarea' };
+  }
+  walkSave({ rect: clipped, displayId: walkAreaNow().displayId, win: { width: innerWidth, height: innerHeight } });
+  walkClampAll(true);
+  const f = walkFits();
+  toast(f.ok ? ('走动范围已保存 · ' + Math.round(clipped.width) + '×' + Math.round(clipped.height))
+             : ('范围已保存，但比角色画布小，暂时走不了：至少 ' + f.need.w + '×' + f.need.h));
+  if (!f.ok) WALK.lastErr = walkTooSmallMsg();
+  walkRender();
+  return { ok:true, rect: clipped, fits: f.ok };
+}
+/** 程序化设定范围（自检 / e2e 用；与手工框选走同一条保存路径） */
+function walkSetRect(rect){
+  if (rect === null || rect === undefined){ return walkClearRect(); }
+  const r = GEOM.normalizeRect(rect);
+  if (!GEOM.rectOk(r)) return { ok:false, error:'too-small' };
+  const clipped = GEOM.intersectRect(r, walkAreaNow());
+  if (!clipped) return { ok:false, error:'outside-workarea' };
+  walkSave({ rect: clipped, displayId: walkAreaNow().displayId, win: { width: innerWidth, height: innerHeight } });
+  walkClampAll(true);
+  return { ok:true, rect: clipped };
+}
+function walkClearRect(){
+  walkSave({ rect: null, displayId: null });
+  walkClampAll(true);
+  toast('走动范围已清除（= 整个工作区）');
+  return { ok:true, rect: null };
+}
+
+/* ---------------- 走动 ---------------- */
+function walkPaused(){
+  return !!(M.dragging || M.gameMode || M.menuOpen || M.searchOpen || M.envOpen || WALK.sel.active);
+}
+/** 巡游的额外暂停条件：设置面板 / 聊天一打开就让路（用户在看/在打字时别在背后溜达）。
+ *  只影响「巡游自己发起」的那一段；聊天指令这类显式动作照常执行。 */
+function cruisePaused(){
+  return !!(SET.open || C.open || M.chatOpen || M.searchOpen);
+}
+/** 该演哪个走路动作：优先真素材，缺一个就用另一个镜像凑方向 */
+function walkStateFor(facing){
+  const want = facing === 'left' ? 'walk_left' : 'walk_right';
+  if (walkUsable(want)) return { id: want, flip: false };
+  const other = facing === 'left' ? 'walk_right' : 'walk_left';
+  if (walkUsable(other)) return { id: other, flip: true };
+  return { id: '', flip: false };            // 两个都没到货：走动照走，动作退回状态机默认
+}
+function walkApplyPose(){
+  const s = walkStateFor(WALK.facing);
+  WALK.flip = s.flip;
+  WALK.state = s.id;
+  applyState();
+}
+function walkSettle(extra){
+  const p = walkPos(), o = WALK.origin || p;
+  const out = Object.assign({ ok:true, moved: Math.hypot(p.x - o.x, p.y - o.y),
+                              from: o, to: p, bounded: !!WALK.bounded }, extra || {});
+  WALK.origin = null; WALK.bounded = false;
+  const done = WALK.pending; WALK.pending = null;
+  if (done){ try{ done(out); }catch(e){} }
+  return out;
+}
+function walkStop(reason){
+  const was = !!WALK.target;
+  if (WALK.raf){ try{ cancelAnimationFrame(WALK.raf); }catch(e){} WALK.raf = 0; }
+  WALK.target = null; WALK.lastTs = 0; WALK.stallMs = 0;
+  WALK.state = ''; WALK.flip = false; WALK.fromCruise = false;
+  const out = walkSettle({ stopped:true, reason: reason || '' });
+  if (was){ touch(); applyState(); }
+  else applyState();
+  return out;
+}
+/** 开始走向一个点；返回 {ok, move, ...}。move=false 表示已经在目标上（不启动循环） */
+function walkStart(cmd){
+  if (!GEOM || !pet) return { ok:false, error:'走动模块未加载' };
+  /* 被更高优先级的状态占着时直接拒绝：这样"下命令"当场就知道结果，
+     不会留下一个永远等不到的 Promise（窗口隐藏、rAF 不跑的情况真会挂住）。 */
+  if (walkPaused()) return { ok:false, error:'现在走不了（游戏模式 / 菜单打开 / 正在框选）' };
+  /* 范围比画布还小：走一步就出框、还会被屏幕边裁头。直接拒绝并说清楚怎么办，
+     范围本身不动（用户要留着它对照着重框）。 */
+  if (!walkFits().ok){ WALK.lastErr = walkTooSmallMsg(); walkRender(); return { ok:false, error: walkTooSmallMsg() }; }
+  const box = walkBox();
+  const p = GEOM.clampPet(walkPos().x, walkPos().y, box);
+  const c = GEOM.clampPet(p.x, p.y, box);
+  if (c.clamped) place(c.x, c.y, false);     // 起点先夹回范围（可能上次停在范围外）
+  const from = { x: c.x, y: c.y };
+  const dist = Math.max(0, Number(cmd.distance) || 0);
+  const len = Math.hypot(Number(cmd.dx) || 0, Number(cmd.dy) || 0) || 1;
+  const want = { x: from.x + ((Number(cmd.dx) || 0) / len) * dist,
+                 y: from.y + ((Number(cmd.dy) || 0) / len) * dist };
+  const target = GEOM.clampPet(want.x, want.y, box);
+  WALK.origin = from;
+  WALK.bounded = target.clamped;
+  WALK.lastTs = 0;
+  WALK.stallMs = 0;
+  WALK.fromCruise = false;                    // 显式指令：面板打开也照走
+  const remain = Math.hypot(target.x - from.x, target.y - from.y);
+  if (remain < 0.5){                          // 一步都走不了（贴边/距离为 0）
+    WALK.target = null; WALK.state = ''; WALK.flip = false;
+    return { ok:true, move:false, moved:0, bounded: target.clamped, target };
+  }
+  WALK.target = { x: target.x, y: target.y };
+  const face = GEOM.facingOf(target.x - from.x);
+  if (face) WALK.facing = face;
+  walkApplyPose();
+  /* 走动算一次用户交互：重置空闲计时，走完不会立刻被"空闲随机"抢走 */
+  M.lastInteract = now();
+  WALK.raf = requestAnimationFrame(walkLoop);
+  return { ok:true, move:true, target, remain, bounded: target.clamped };
+}
+function walkLoop(ts){
+  WALK.raf = 0;
+  if (!WALK.target) return;
+  /* 巡游是"背景行为"：设置面板/聊天一打开就停；显式指令（WALK.fromCruise=false）照走。 */
+  if (walkPaused() || (WALK.fromCruise && cruisePaused())){ walkStop('paused'); return; }
+  const dt = WALK.lastTs ? Math.min(0.05, Math.max(0, (ts - WALK.lastTs) / 1000)) : 0.016;
+  WALK.lastTs = ts;
+  const box = walkBox();
+  /* 走到一半画布被放大，范围已经放不下它了：立刻收尾（否则 petBox 会把画布钉在框中心，
+     竖向可能压到屏幕外、头被裁）。范围保留，面板上写明原因。 */
+  if (!walkFits().ok){
+    WALK.bounded = true;
+    WALK.lastErr = walkTooSmallMsg();
+    walkStop('too-small');
+    walkRender();
+    return;
+  }
+  /* 走到一半窗口缩了/换了框：目标可能已经在**新**包围盒外。
+     不重算的话每帧都差一点点，永远走不到、Promise 永远不 resolve —— 必须先按当前 box 重算目标。 */
+  const rt = GEOM.clampTarget(WALK.target, box);
+  if (rt.moved){
+    WALK.target = { x: rt.x, y: rt.y };
+    WALK.bounded = true;
+  }
+  const p = walkPos();
+  const speed = Math.max(40, Math.min(600, Number(WALK.cfg.speed) || 130));
+  const st = GEOM.stepToward(p.x, p.y, WALK.target.x, WALK.target.y, speed * dt);
+  const c = GEOM.clampPet(st.x, st.y, box);
+  place(c.x, c.y, false);
+  const face = GEOM.facingOf(WALK.target.x - c.x);
+  if (face && face !== WALK.facing){ WALK.facing = face; walkApplyPose(); }
+  else if (!WALK.state) walkApplyPose();
+  const left = Math.hypot(WALK.target.x - c.x, WALK.target.y - c.y);
+  if (st.arrived || left < 0.5){ walkArrive(); return; }
+  /* 停滞兜底：位置几乎没动（被夹住/被别的逻辑挡住）超过 400ms 就当场收敛，
+     绝不把 walking 状态和 Promise 一起吊死。 */
+  const moved = Math.hypot(c.x - p.x, c.y - p.y);
+  WALK.stallMs = moved < 0.05 ? (WALK.stallMs || 0) + dt * 1000 : 0;
+  if (WALK.stallMs > 400){
+    WALK.bounded = true;
+    walkArrive();
+    return;
+  }
+  WALK.raf = requestAnimationFrame(walkLoop);
+}
+function walkArrive(){
+  const fromCruise = WALK.fromCruise;
+  WALK.target = null; WALK.state = ''; WALK.flip = false;
+  WALK.fromCruise = false; WALK.stallMs = 0;
+  const out = walkSettle({ arrived:true });
+  /* 巡游自己走到目的地不算「用户操作」：不刷 lastInteract，否则每段之间要多等 12 秒
+     （IDLE_HOLD_MS）才会再动一次，看起来像卡住了。歇多久由 cruiseUntil 单独控制。 */
+  if (!fromCruise) touch();
+  applyState();
+  if (WALK.cfg.enabled) WALK.cruiseUntil = now() + 2200 + Math.random() * 3800;   // 巡游：到点歇一会儿
+  return out;
+}
+/** 走一段（Promise 在到达 / 被停下 / 被打断时 resolve），命令行反馈要的是"实际走了多远" */
+function walkMove(cmd){
+  return new Promise((resolve)=>{
+    if (WALK.pending){ walkStop('superseded'); }
+    const r = walkStart(cmd || {});
+    if (!r.ok){ resolve({ ok:false, error:r.error }); return; }
+    if (!r.move){ resolve({ ok:true, moved:0, bounded:!!r.bounded, target:r.target }); return; }
+    WALK.pending = resolve;
+  });
+}
+/** 巡游：每隔一会儿在范围内随机挑一个点走过去（只在空闲且没被别的状态占着时） */
+function walkCruiseTick(){
+  if (!WALK.cfg.enabled || !WALK.ready || WALK.target || WALK.pending) return;
+  if (walkPaused() || cruisePaused()) return;
+  if (now() < WALK.cruiseUntil) return;
+  if (now() - M.lastInteract < IDLE_HOLD_MS) return;       // 刚操作完先待机
+  if (M.react || M.emote) return;
+  /* 范围比画布还小：不巡游、不越界；把原因留在设置面板上，框选值原样保留。 */
+  if (!walkFits().ok){ WALK.lastErr = walkTooSmallMsg(); walkRender(); return; }
+  const box = walkBox();
+  const t = GEOM.cruiseTarget(box, Math.random);
+  const keepInteract = M.lastInteract;      // walkStart 会把它刷成 now()（那是给显式指令用的）
+  const r = walkStart({ dx: t.x - walkPos().x, dy: t.y - walkPos().y,
+                        distance: Math.hypot(t.x - walkPos().x, t.y - walkPos().y) });
+  if (r && r.ok && r.move){
+    WALK.fromCruise = true;                 // 面板一开就让路
+    M.lastInteract = keepInteract;          // 巡游不是用户操作：别把空闲计时往后推 12 秒
+  }
+}
+
+function walkInfo(){
+  return { cfg: Object.assign({}, WALK.cfg), area: walkArea(), box: walkBox(),
+           fits: walkFits(), cruiseFromWalk: !!WALK.fromCruise,
+           state: WALK.state, facing: WALK.facing, flip: !!WALK.flip,
+           moving: !!WALK.target, target: WALK.target, paused: walkPaused(),
+           selecting: !!WALK.sel.active, speed: WALK.cfg.speed,
+           pet: walkPos(), size: walkSize(), lastErr: WALK.lastErr };
+}
+/** 立刻触发一次巡游决策：正常路径要等 12 秒空闲，验收等不起；走的是同一个 walkCruiseTick */
+function walkCruiseNow(){
+  M.lastInteract = now() - IDLE_HOLD_MS - 1;
+  WALK.cruiseUntil = 0;
+  walkCruiseTick();
+  return walkInfo();
+}
+
+/** 执行一条聊天指令，返回给用户看的中文回复（不经过任何后端） */
+async function runWalkCommand(cmd){
+  if (!WCMD) return '走动模块没加载，指令没法执行。';
+  if (cmd.type === 'stop'){
+    const wasCruise = !!WALK.cfg.enabled;
+    walkStop('command');
+    if (wasCruise) walkSetCruise(false);        // 停下 = 暂停巡游（设置里可再打开）
+    toast('停下了');
+    walkRender();
+    return WCMD.describe(cmd, null) + (wasCruise ? '巡游也先暂停了，想让它继续溜达可以在设置里重新打开。' : '');
+  }
+  const distance = cmd.distance == null ? WCMD.DEFAULT_DISTANCE : cmd.distance;
+  const r = await walkMove({ dx: cmd.dx, dy: cmd.dy, distance });
+  if (!r || r.ok === false) return '现在走不动：' + ((r && r.error) || '未知原因');
+  return WCMD.describe(cmd, { moved: r.moved || 0, clamped: !!r.bounded });
+}
+
+/* ---------------- 初始化 / 事件 ---------------- */
+function walkBindUi(){
+  const e = walkEls();
+  if (e.cruise && !e.cruise.__bound){
+    e.cruise.__bound = true;
+    e.cruise.addEventListener('change', ()=> walkSetCruise(e.cruise.checked));
+  }
+  const btn = (id, fn)=>{
+    const el = document.getElementById(id);
+    if (!el || el.__bound) return;
+    el.__bound = true;
+    el.addEventListener('click', fn);
+  };
+  btn('walkSelectBtn', ()=> walkSelStart());
+  btn('walkClearBtn', ()=> walkClearRect());
+  btn('walkStopBtn', ()=> { walkStop('button'); walkSetCruise(false); toast('停下了'); });
+  btn('walkTestBtn', async ()=>{
+    const r = await walkMove({ dx: 1, dy: 0, distance: 200 });
+    toast(r && r.ok ? ('试走完成，位移 ' + Math.round(r.moved || 0) + ' 像素') : '走不动：' + ((r && r.error) || '未知'));
+  });
+
+  const sel = e.sel;
+  if (sel && !sel.__bound){
+    sel.__bound = true;
+    sel.addEventListener('pointerdown', (ev)=>{
+      if (!WALK.sel.active) return;
+      if (ev.button !== 0){ walkSelCancel('right-button'); return; }
+      WALK.sel.a = { x: ev.clientX, y: ev.clientY };
+      WALK.sel.b = WALK.sel.a;
+      walkSelDraw();
+      try{ sel.setPointerCapture(ev.pointerId); }catch(err){}
+      ev.preventDefault();
+    });
+    sel.addEventListener('pointermove', (ev)=>{
+      if (!WALK.sel.active || !WALK.sel.a) return;
+      WALK.sel.b = { x: ev.clientX, y: ev.clientY };
+      walkSelDraw();
+    });
+    sel.addEventListener('pointerup', (ev)=>{
+      if (!WALK.sel.active || !WALK.sel.a) return;
+      WALK.sel.b = { x: ev.clientX, y: ev.clientY };
+      walkSelFinish();
+    });
+    sel.addEventListener('contextmenu', (ev)=>{ ev.preventDefault(); walkSelCancel('contextmenu'); });
+    /* 失焦退出框选：窗口一旦不再是焦点，用户就按不到这只遮罩了，必须收掉并恢复穿透 */
+    addEventListener('blur', ()=>{ if (WALK.sel.active) walkSelCancel('blur'); });
+  }
+  if (window.petHost && window.petHost.walk && window.petHost.walk.onSelectCancel){
+    /* 游戏模式等主进程侧硬切断时，同步收遮罩（否则页面还以为在框选） */
+    window.petHost.walk.onSelectCancel((v)=>{ if (WALK.sel.active) walkSelCancel((v && v.reason) || 'host'); });
+  }
+  /* 窗口尺寸/屏幕变了：范围重新夹一次（不改用户框选值，只夹进新工作区） */
+  let rt = 0;
+  addEventListener('resize', ()=>{
+    if (rt) clearTimeout(rt);
+    rt = setTimeout(()=>{ rt = 0; walkRefreshArea().then(()=>{ walkClampAll(true); walkRender(); }).catch(()=>{}); }, 200);
+  });
+}
+async function walkInit(){
+  walkBindUi();
+  await walkLoad();
+  walkRender();
+  return { ok:true, cfg: WALK.cfg, area: walkArea() };
 }
 function placeMenu(){                              // 菜单永远开在"抬手指向"的那一侧
   const m = els.menu;
@@ -2346,6 +2927,7 @@ function openSettings(){
   placePanel(els.settings);
   alEnsurePanel();                           // 片段循环区：列动作 + 同步已保存配置
   mvBind(); mvLoad();                        // 媒体演出区：绑事件 + 读已保存开关
+  try{ walkLoad(); }catch(e){}               // 桌面走动区：读范围/巡游开关（默认关）
   if (cHostOk() && window.petHost.getConfig){
     try{ window.petHost.focusWindow(true); }catch(e){}
     loadSettingsForm();
@@ -2763,9 +3345,24 @@ function onHarnessStatus(st){
 }
 
 async function sendChat(){
-  if (!cHostOk()) return;
   const text = els.cinput.value.trim();
   if (!text) return;
+  /* 本地走动指令：整句就是明确指令才走这里（解析器见 web/walk-command.js，有单测）。
+     命中就**不发给任何后端**——不需要 API key，也不会把"向左走"写进 AI 的上下文。
+     AI 回复文本与历史重放都不经过这里（不解析它们），所以不会被带偏。 */
+  const cmd = WCMD ? WCMD.parse(text) : null;
+  if (cmd){
+    els.cinput.value = '';
+    C.msgs.push({ role:'user', text, at: Date.now() });
+    renderChat();
+    const reply = await runWalkCommand(cmd);
+    C.msgs.push({ role:'assistant', text: reply, at: Date.now() });
+    renderChat();
+    saveChatToStorage();
+    if (els.cmsg) els.cmsg.scrollTop = els.cmsg.scrollHeight;
+    return;
+  }
+  if (!cHostOk()) return;
   if (C.busy){ toast('上一条还在处理，稍等或点"取消当前请求"'); return; }
   els.cinput.value = '';
   els.cmsg.scrollTop=els.cmsg.scrollHeight;
@@ -2943,6 +3540,9 @@ async function init(){
   /* 恢复片段循环：放在 init 末尾（DOM/video/状态机全部就绪），
      失败会写到设置面板的状态行，不会因为恢复过早静默失败。 */
   await alRestoreConfig();
+  /* 桌面走动：读范围/巡游开关（默认关），框选与设置区一并就绪。
+     放在最后：它要读真实工作区尺寸并可能把角色夹回范围内。 */
+  await walkInit();
   window.__petInitOK = true;
   toast('拖动我 · 单击互动 · 右键菜单');
 }
@@ -3044,6 +3644,7 @@ function bindEvents(){
     const r = pet.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
     if (alphaOK !== false && !hitTest(px, py)) return;      // 点在透明处不响应
+    if (WALK.target) walkStop('drag');                       // 手动拖动优先：先停住再抓
     closeMenu();
     dragging = true; moved = 0;
     sx = e.clientX; sy = e.clientY;
@@ -3086,7 +3687,7 @@ function bindEvents(){
   on(document, 'pointerdown', (e)=>{
     const t = e.target;
     if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao')
-        || t.closest('#dockpan') || t.closest('#dockchip'))) return;
+        || t.closest('#dockpan') || t.closest('#dockchip') || t.closest('#walksel'))) return;
     if (window.DockUI && DockUI.isOpen()) DockUI.close();
     closeMenu();
     if (SET.open) closeSettings();
@@ -3152,16 +3753,33 @@ function bindEvents(){
   });
   on(document, 'keydown', (e)=>{         // 面板开着但焦点不在输入框时，Esc 也要能关
     if (e.key !== 'Escape') return;
+    if (WALK.sel.active){ walkSelCancel('esc'); return; }    // 框选遮罩优先：Esc 只退框选
+    if (Date.now() < WALK.selGuardUntil) return;             // 同一次 Esc 的后半程，别再关面板
     if (SET.open) closeSettings();
     else if (window.PersonaUI && PersonaUI.isOpen()) PersonaUI.close();
     else if (C.open) closeChat();
     else if (S.open) closeSearch();
   });
   if (window.petHost && window.petHost.onEsc) window.petHost.onEsc(()=>{   // 窗口失焦时由全局 Esc 兜底
+    if (WALK.sel.active){ walkSelCancel('esc-global'); return; }         // 框选遮罩优先
+    if (Date.now() < WALK.selGuardUntil) return;                        // 同一次 Esc 的后半程
     if (window.DockUI && DockUI.isOpen()) DockUI.close();
     else if (SET.open) closeSettings(); else if (ENV.open) closeEnv(); else if (window.PersonaUI && PersonaUI.isOpen()) PersonaUI.close(); else if (C.open) closeChat(); else if (S.open) closeSearch(); else if (SAO.open) saoBack();
   });
   bindEnvPanel();      // 环境自检向导：按钮 / 勾选 / 日志流
+  /* 游戏模式在页面加载之前就已生效时（例如开着游戏启动桌宠），上面那条事件不会再来一次。
+     主动读一次主进程状态，否则页面会一直以为自己在正常模式：视频照解、走动照跑、框选照拉。 */
+  try{
+    if (window.petHost && window.petHost.gameMode) window.petHost.gameMode().then((g)=>{
+      if (!(g && g.active)) return;
+      M.gameMode = true;
+      try{ if (MEDIA.m) { MEDIA.m.setPaused(true); M.mediaKind = ''; } }catch(e){}
+      for (const id in videos){ try{ videos[id].pause(); }catch(e){} }
+      try{ if (hostBridge && hostBridge.dispose) hostBridge.dispose(); hostBridge = null; }catch(e){}
+      try{ if (window.DockUI && DockUI.close) DockUI.close(); }catch(e){}
+      applyState();
+    }).catch(()=>{});
+  }catch(e){}
   /* ---- 聊天面板：输入 / 键盘 / 按钮 ---- */
   on(els.cinput, 'keydown', (e)=>{
     if (e.isComposing || e.keyCode===229) return;
@@ -3352,6 +3970,8 @@ function bindEvents(){
 
   on(window, 'keydown', (e)=>{
     if(e.defaultPrevented || e.target.closest?.('input,textarea,select,[contenteditable=true]')) return;
+    if (WALK.sel.active){ walkSelCancel('esc'); return; }   // 框选遮罩优先（与下面那条 Esc 链同一个语义）
+    if (Date.now() < WALK.selGuardUntil) return;            // 同一次 Esc 已被框选吃掉，别再关面板
     if (e.key === 'Escape'){                 // 面板打开时 Esc 必须先关面板（原来被下面的 return 吃掉，只能重开再关）
       if (SET.open){ closeSettings(); return; }
       if (C.open){ closeChat(); return; }
@@ -3838,6 +4458,32 @@ window.petAPI = {
   /* ---- 固定片段循环：只读状态（主验收用；改配置一律走设置面板/主进程桥） ---- */
   animationLoop: {
     info: ()=> alInfo()
+  },
+  /* ---- 桌面走动：验收/自检用的调试接口（用户路径是设置面板与聊天指令）----
+     只做"读状态 / 下一条命令 / 设范围 / 开关巡游"，不绕过任何校验：
+     设范围与手工框选走同一条保存路径（walkSetRect → walkSave → walk.json）。 */
+  walk: {
+    info: ()=> walkInfo(),
+    cruiseNow: ()=> walkCruiseNow(),
+    to: (dx, dy, distance)=> walkMove({ dx, dy, distance }),
+    stop: ()=> walkStop('api'),
+    cruise: (on)=> walkSetCruise(on),
+    setRect: (rect)=> walkSetRect(rect),
+    clearRect: ()=> walkClearRect(),
+    clear: ()=> walkClearRect(),
+    /* 面板开关（验收用）：走的都是 Esc / 关闭按钮的同一条 closeSettings/closeChat，
+       用来证明「巡游在面板打开时让路、显式指令照走」 */
+    panels: ()=> ({ settings: !!SET.open, chat: !!C.open, search: !!S.open }),
+    closePanels: ()=>{ try{ if (SET.open) closeSettings(); }catch(e){}
+                       try{ if (C.open) closeChat(); }catch(e){}
+                       return { settings: !!SET.open, chat: !!C.open }; },
+    selectStart: ()=> walkSelStart(),
+    selectFinish: (a, b)=>{ WALK.sel.a = a; WALK.sel.b = b; return walkSelFinish(); },
+    cancel: (reason)=> walkSelCancel(reason),
+    reload: ()=> walkLoad(),
+    /* 命令解析单独暴露：验收要证明"普通聊天不会被劫持" */
+    parse: (text)=> (WCMD ? WCMD.parse(text) : null),
+    runCommand: (text)=> (WCMD && WCMD.parse(text) ? runWalkCommand(WCMD.parse(text)) : null)
   },
   /* ---- 作息导演层的验证接口（tools/ 下的无头探针用，也可在 devtools 里手动调）---- */
   director: {
