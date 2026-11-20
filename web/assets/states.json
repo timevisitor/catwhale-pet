@@ -314,5 +314,27 @@
     "duration": 5.0,
     "frames": 120,
     "bytes": 2244440
+  },
+  "walk_left": {
+    "id": "walk_left",
+    "name": "向左走",
+    "mode": "loop",
+    "role": "walk",
+    "scale": 1.0,
+    "file": "walk_left.webm",
+    "duration": 1.3333,
+    "frames": 32,
+    "bytes": 416537
+  },
+  "walk_right": {
+    "id": "walk_right",
+    "name": "向右走",
+    "mode": "loop",
+    "role": "walk",
+    "scale": 1.0,
+    "file": "walk_right.webm",
+    "duration": 1.3333,
+    "frames": 32,
+    "bytes": 421313
   }
 }

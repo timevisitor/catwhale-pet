@@ -191,8 +191,10 @@ def copy_app_tree(app_dir, APP):
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
-    required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "agent-dock.js", "media-response.js", "animation-loop-config.js", "llm-client.js", "character-card.js", "persona-store.js", "renderer/persona.js", "renderer/persona.css",
-                "package.json", "renderer/index.html", "renderer/animation-loop.js", "renderer/emotion.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml",
+    required = ["main.js", "preload.js", "harness-client.js", "updater.js", "sysinfo.js", "agent-dock.js", "media-response.js", "animation-loop-config.js", "walk-config.js", "llm-client.js", "character-card.js", "persona-store.js", "renderer/persona.js", "renderer/persona.css",
+                "package.json", "renderer/index.html", "renderer/animation-loop.js", "renderer/emotion.js", "renderer/walk-geom.js", "renderer/walk-command.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml",
+                # 桌面走动：素材（两方向）+ 几何/指令模块（缺任一 → 走动退化成默认动作或整段失效）
+                "renderer/assets/video/walk_left.webm", "renderer/assets/video/walk_right.webm",
                 # 本地媒体演出：探测脚本 + 判定模块（缺任一 → 功能静默失效，所以放进硬性断言）
                 "media-detect.js", "media-show.js", "renderer/media-show-page.js",
                 "media-probe/media_probe.ps1", "media-probe/WasapiProbe.cs"]

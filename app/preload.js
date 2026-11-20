@@ -132,6 +132,18 @@ contextBridge.exposeInMainWorld('petHost', {
     set: (cfg) => ipcRenderer.invoke('animation-loop:set', cfg)
   },
 
+  /* ---- 桌面走动（范围 / 巡游开关落 walk.json；框选期间整窗可交互，结束必须 restore）---- */
+  walk: {
+    get: () => ipcRenderer.invoke('walk:get'),
+    set: (cfg) => ipcRenderer.invoke('walk:set', cfg),
+    selecting: (on) => ipcRenderer.send('pet:walkselect', !!on),
+    onSelectCancel: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('pet:walksel-cancel', h);
+      return () => ipcRenderer.removeListener('pet:walksel-cancel', h);
+    }
+  },
+
   /* ---- 本地媒体演出：看视频/听音乐时自动演 ----
      开关落在 settings.json 的 media.show；探测进程由主进程按开关起停。 */
   media: {
