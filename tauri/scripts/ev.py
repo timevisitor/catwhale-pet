@@ -28,6 +28,10 @@ elif mode in ("C", "shotC"):
     pat = "chat.html"
     want = "chat.html"
     exact = False
+elif mode in ("W", "shotW"):
+    pat = "walk-select.html"
+    want = "walk-select.html"
+    exact = False
 else:
     print("unknown mode " + mode)
     raise SystemExit(1)
@@ -42,7 +46,8 @@ def targets(base):
 
 
 def find_base():
-    for base in ("http://127.0.0.1:9223", "http://[::1]:9223"):
+    port = os.environ.get("CDP_PORT", "9223")
+    for base in ("http://127.0.0.1:" + port, "http://[::1]:" + port):
         for t in targets(base):
             u = t.get("url", "")
             if exact:
@@ -51,15 +56,23 @@ def find_base():
                     return base
             elif want in u:
                 return base
-    return "http://127.0.0.1:9223"
+    return "http://127.0.0.1:" + port
 
 
 base = find_base()
 env = dict(os.environ, CDP_BASE=base, CDP_URL=pat)
 cmd = ["node", CDP, "shot" if mode.startswith("shot") else "eval", arg]
-r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                   errors="replace", env=env, timeout=30)
-sys.stdout.write(r.stdout)
-if r.returncode != 0:
-    sys.stderr.write(r.stderr)
-raise SystemExit(r.returncode)
+last_err = None
+for _ in range(2):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=12)
+    except subprocess.TimeoutExpired as e:
+        last_err = e
+        continue
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+    raise SystemExit(r.returncode)
+sys.stderr.write("ev.py: CDP eval timed out twice\n")
+raise SystemExit(1)

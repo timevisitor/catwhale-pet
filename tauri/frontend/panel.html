@@ -95,6 +95,12 @@ pre{white-space:pre-wrap;word-break:break-word;user-select:text;font:10px/1.5 va
     </section>
 
     <section id="page-settings" class="page" hidden>
+      <div class="card"><h2>桌面走动 <span id="walkBadge" class="right badge">读取中</span></h2>
+        <div class="actions"><label class="check"><input id="walkEnabled" type="checkbox"> 开启自由巡游（默认关闭）</label></div>
+        <div id="walkRange" class="status">正在读取活动范围…</div>
+        <div class="actions"><button type="button" id="walkSelect" class="primary">框选活动范围</button><button type="button" id="walkClear">清除范围</button><button type="button" id="walkRefresh">刷新</button></div>
+        <div class="hint">框选时拖出矩形即可；反向拖拽同样有效。Esc 或点出框选窗会取消并恢复点击穿透。范围会持久化；换屏 / 缩放后自动夹回可见区域。聊天里发送「向左走」「往右走 200 像素」「停下」由桌宠本地执行，不经过 API；「停下」也会暂停巡游。</div>
+      </div>
       <div class="card"><h2>对话与 Harness 设置 <span id="configVersion" class="right"></span></h2>
         <div class="two"><div class="field"><label>对话后端</label><select id="cfgBackend"><option value="harness">DeepSeek Harness（工具）</option><option value="api">直连 API</option></select></div><div class="field"><label>你的称呼</label><input id="cfgUserName" type="text" placeholder="用户"></div></div>
         <div id="cfgHarnessFields" class="form-section">
@@ -204,7 +210,7 @@ function showPage(page,focus){
   if(page==='search')renderSearch();
   if(page==='chat'){renderChat();refreshHarnessStatus();if(!loaded.chat)refreshChat();}
   if(page==='control')startControl();
-  if(page==='settings'&&!loaded.settings)loadConfig();
+  if(page==='settings'){if(!loaded.settings)loadConfig();loadWalk();}
   if(page==='persona')refreshPersonas();
   if(page==='dock')refreshDock();
   if(page==='env'){if(!loaded.env)refreshEnv();}
@@ -480,6 +486,56 @@ async function dockCycle(dir){await invokeCmd('dock_cycle',{dir});refreshDock();
 async function dockClear(){const n=await invokeCmd('dock_clear_ended');toast(typeof n==='number'?'已清理 '+n+' 个结束会话':failText(n,'清理完成'),'ok');refreshDock();}
 async function saveDockConfig(){const patch={enabled:$('dockEnabled').checked,port:Number($('dockPort').value),keepDoneSec:Number($('dockKeep').value)};DK.configLoaded=false;const r=await invokeCmd('dock_config',{patch});renderDock(r);toast(r&&r.sessions?'看板配置已保存':failText(r,'配置失败'),r&&r.sessions?'ok':'bad');}
 
+/* 桌面走动（v0.7.0）：范围持久化、框选临时窗、巡游开关。 */
+const WK={status:null,busy:false};
+function renderWalk(s){
+  if(s&&s.ok!==false)WK.status=s;
+  const st=WK.status||{};
+  const on=!!st.enabled;
+  const tooSmall=st.boundsFit==='too_small';
+  $('walkEnabled').checked=on;
+  setBadge('walkBadge',tooSmall?'范围太小':st.walking?'巡游中':on?'已开启':'已关闭',tooSmall?'bad':st.walking?'ok':on?'ok':'');
+  let text='未设置活动范围（巡游/走动按当前屏幕工作区限制）。';
+  if(st.boundsRel){
+    const b=st.boundsRel;
+    text='活动范围：'+b.x+', '+b.y+' · '+b.w+'×'+b.h+' 逻辑像素（相对屏幕 '+(b.monitor||'当前')+'）';
+  }
+  if(tooSmall){
+    // 范围比角色画布小：范围原样保留，但绝不越界走、也不偷偷改用整屏。
+    text+='\n范围小于角色画布（需要至少 '+st.needW+'×'+st.needH+' 逻辑像素）：巡游与走动指令已暂停，'+
+          '范围保留着，请重新框大一点或点「清除范围」。';
+  }
+  if(st.file)text+='\n配置文件：'+st.file;
+  $('walkRange').textContent=text;
+  $('walkRange').className='status'+(tooSmall?' bad':'');
+}
+async function loadWalk(){
+  const r=await invokeCmd('walk_get');
+  if(!r||r.ok===false){$('walkRange').textContent=failText(r,'走动配置读取失败');$('walkRange').className='status bad';return;}
+  renderWalk(r);
+}
+async function setWalkEnabled(on){
+  const r=await invokeCmd('walk_set_enabled',{enabled:!!on});
+  if(!r||r.ok===false){toast(failText(r,'开关保存失败'),'bad');$('walkEnabled').checked=!on;return;}
+  renderWalk(r);
+  // 范围比角色小：开关能保存，但巡游实际是暂停的，必须当场说清楚。
+  if(on&&r.boundsFit==='too_small')toast('已开启，但活动范围比角色小，巡游暂停中：请框大范围','bad');
+  else toast(on?'已开启自由巡游':'已关闭自由巡游','ok');
+}
+async function beginWalkSelect(){
+  if(WK.busy)return;
+  WK.busy=true;
+  const r=await invokeCmd('walk_begin_selection');
+  WK.busy=false;
+  if(!r||r.ok===false){toast(failText(r,'无法打开框选窗'),'bad');return;}
+  toast('拖拽框选活动范围，Esc 取消','ok');
+}
+async function clearWalkBounds(){
+  const r=await invokeCmd('walk_clear_bounds');
+  if(!r||r.ok===false){toast(failText(r,'清除失败'),'bad');return;}
+  renderWalk(r);toast('已清除活动范围','ok');
+}
+
 function bindEvents(){
   $$('.nav [data-page]').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));
   $('searchInput').addEventListener('input',scheduleSearch);$('searchInput').addEventListener('keydown',e=>{
@@ -497,6 +553,7 @@ function bindEvents(){
   $$('[data-game]').forEach(b=>b.addEventListener('click',()=>setGame(b.dataset.game)));$('gameReload').addEventListener('click',loadGame);
   $('updateCheck').addEventListener('click',checkUpdate);$('updateOpenRelease').addEventListener('click',()=>openUpdate('release'));$('updateOpenDownload').addEventListener('click',()=>openUpdate('download'));
   $('cfgBackend').addEventListener('change',toggleBackend);$('cfgSave').addEventListener('click',saveConfig);$('cfgTest').addEventListener('click',testConfig);$('cfgReload').addEventListener('click',loadConfig);$('cfgEnv').addEventListener('click',()=>{if(!$('envHarnessDir').value)$('envHarnessDir').value=$('cfgRepo').value;showPage('env');});$('cfgDetect').addEventListener('click',()=>detectHarness(false));$('cfgBrowse').addEventListener('click',()=>detectHarness(true));
+  $('walkEnabled').addEventListener('change',()=>setWalkEnabled($('walkEnabled').checked));$('walkSelect').addEventListener('click',beginWalkSelect);$('walkClear').addEventListener('click',clearWalkBounds);$('walkRefresh').addEventListener('click',loadWalk);
   $('envCheck').addEventListener('click',refreshEnv);$('envBack').addEventListener('click',()=>showPage('settings'));$('envCancel').addEventListener('click',cancelEnv);$('envDeployHarness').addEventListener('click',()=>deployEnv('harness'));$('envDeployEverything').addEventListener('click',()=>deployEnv('everything'));$('envLaunchEverything').addEventListener('click',launchEverything);$('envHarnessSite').addEventListener('click',()=>openEnvUrl('https://github.com/deepseek-ai/deepseek-harness'));$('envEverythingSite').addEventListener('click',()=>openEnvUrl('https://www.voidtools.com/zh-cn/downloads/'));
   $('envNoAsk').addEventListener('change',async()=>{const r=await invokeCmd('env_dismiss',{on:$('envNoAsk').checked});if(!r||r.ok===false)toast(failText(r,'保存失败'),'bad');});$('envAuto').addEventListener('change',async()=>{const r=await invokeCmd('env_everything_auto',{on:$('envAuto').checked});toast(r&&r.ok?'自动启动设置已保存':failText(r,'保存失败'),r&&r.ok?'ok':'bad');});
   $('personaNew').addEventListener('click',newPersona);$('personaImport').addEventListener('click',()=>$('personaFile').click());$('personaFile').addEventListener('change',async()=>{await importPersona($('personaFile').files[0]);$('personaFile').value='';});$('personaDefault').addEventListener('click',()=>usePersona(''));$('personaReveal').addEventListener('click',async()=>{const r=await invokeCmd('persona_reveal');$('personaStatus').textContent=r&&r.ok?'角色目录：'+r.path:failText(r,'打开目录失败');});$('personaReload').addEventListener('click',refreshPersonas);$('personaSave').addEventListener('click',savePersona);$('personaCancelEdit').addEventListener('click',()=>{$('personaForm').hidden=true;P.editingId='';});$('personaDelete').addEventListener('click',()=>deletePersona(P.editingId));$('personaExport').addEventListener('click',exportPersona);
@@ -511,6 +568,9 @@ function init(){
   bindEvents();
   listen('panel:show',payload=>{const p=typeof payload==='string'?payload:payload&&(payload.p||payload.panel||payload.page||payload.view);if(PAGES.includes(p))showPage(p);});
   listen('harness:event',onHarnessEvent);listen('harness:status',onHarnessStatus);listen('sysinfo',renderSys);listen('media:state',renderMediaState);listen('pet:gamemode',e=>{if(active==='control')loadGame();});listen('env:log',onEnvLog);listen('dock:update',renderDock);
+  listen('walk:config',p=>{if(p&&p.ok!==false)renderWalk(p);});
+  listen('walk:state',p=>{if(!p||!WK.status)return;WK.status.walking=!!p.walking;if(p.dir)WK.status.dir=p.dir;renderWalk(WK.status);});
+  listen('walk:selection',p=>{if(!p)return;if(p.ok){loadWalk();toast('活动范围已保存','ok');}else{toast('已取消框选','bad');}});
   const query=new URLSearchParams(location.search).get('p');showPage(PAGES.includes(query)?query:'control',false);
   window.__panelReady=true;
   window.addEventListener('beforeunload',()=>{clearInterval(SYS.timer);for(const un of listeners){try{un();}catch(e){}}});

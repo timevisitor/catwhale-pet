@@ -48,7 +48,15 @@ fn init_config_dir(app: &AppHandle) {
 }
 
 /// App config directory, also usable before the first Tauri command.
+/// `CATWHALE_CONFIG_DIR` is an explicit test/portable override: Windows
+/// KnownFolder(RoamingAppData) ignores the `%APPDATA%` environment variable,
+/// so isolated acceptance runs must set this instead.
 pub fn config_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("CATWHALE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     APP_CONFIG_DIR.get().cloned().unwrap_or_else(|| {
         std::env::var_os("APPDATA")
             .map(PathBuf::from)

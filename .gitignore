@@ -16,6 +16,8 @@ app/renderer/
 dist/
 build/
 work/
+# 本主题构建/验收临时目录（隔离 walk.json、截图、dist）
+tmp/
 
 # 原始绿幕素材与参考件（体积大；自行放入后运行 key_clips.py）
 素材/

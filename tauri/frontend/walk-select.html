@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>框选桌宠活动范围</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
+    -webkit-user-select:none;user-select:none;cursor:crosshair;font-family:"Microsoft YaHei UI","Segoe UI",sans-serif}
+  #cv{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #hint{position:fixed;left:50%;top:22px;transform:translateX(-50%);
+    padding:9px 16px;border-radius:3px;background:rgba(17,24,34,.86);
+    border:1px solid rgba(246,198,46,.55);color:#f4e8c4;font-size:13px;line-height:1.5;
+    box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none;white-space:nowrap}
+  #hint b{color:#f6c62e;font-weight:600}
+  #msg{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+    padding:8px 14px;border-radius:3px;background:rgba(140,36,32,.92);
+    color:#fff;font-size:12px;line-height:1.5;pointer-events:none;white-space:nowrap}
+  #msg[hidden]{display:none}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hint">拖拽框选桌宠活动范围 · <b>Esc</b> 或点出窗口取消</div>
+<div id="msg" hidden></div>
+<script>
+(function(){
+'use strict';
+const T=window.__TAURI__;
+const invoke=(c,a)=>T.core.invoke(c,a||{});
+const cv=document.getElementById('cv');
+const ctx=cv.getContext('2d');
+const hint=document.getElementById('hint');
+const msgEl=document.getElementById('msg');
+let dpr=1, W=0, H=0;
+let ctxInfo=null, sel=null, dragStart=null, busy=false, ready=false;
+const MIN=40;
+window.__walkSelect={ready:false, sel:null, msg:'', ctx:null};
+
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=window.innerWidth; H=window.innerHeight;
+  cv.width=Math.max(1,Math.round(W*dpr));
+  cv.height=Math.max(1,Math.round(H*dpr));
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  draw();
+}
+function norm(a,b,c,d){
+  return {x:Math.min(a,c),y:Math.min(b,d),w:Math.abs(c-a),h:Math.abs(d-b)};
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // 半透明蒙层：选中区域 clear 掉，保留桌面原样，方便看清范围。
+  ctx.fillStyle='rgba(10,16,24,0.38)';
+  ctx.fillRect(0,0,W,H);
+  const s=sel||dragStart;
+  if(!s)return;
+  const r=norm(s.x,s.y,s.w,s.h);
+  ctx.clearRect(r.x,r.y,r.w,r.h);
+  if(r.w<1||r.h<1)return;
+  ctx.save();
+  ctx.strokeStyle='#f6c62e';
+  ctx.lineWidth=2;
+  ctx.setLineDash([]);
+  ctx.strokeRect(r.x+0.5,r.y+0.5,r.w-1,r.h-1);
+  // 四角把手
+  ctx.fillStyle='#f6c62e';
+  const h=5;
+  for(const [x,y] of [[r.x,r.y],[r.x+r.w,r.y],[r.x,r.y+r.h],[r.x+r.w,r.y+r.h]]){
+    ctx.fillRect(x-h/2,y-h/2,h,h);
+  }
+  // 尺寸标签
+  const label=Math.round(r.w)+' × '+Math.round(r.h);
+  ctx.font='12px "Microsoft YaHei UI","Segoe UI",sans-serif';
+  const tw=ctx.measureText(label).width+14;
+  let lx=r.x+r.w/2-tw/2, ly=r.y-26;
+  if(ly<4)ly=r.y+6;
+  ctx.fillStyle='rgba(17,24,34,.88)';
+  ctx.fillRect(lx,ly,tw,20);
+  ctx.strokeStyle='rgba(246,198,46,.6)';
+  ctx.lineWidth=1;
+  ctx.strokeRect(lx+0.5,ly+0.5,tw-1,19);
+  ctx.fillStyle='#f6e8bd';
+  ctx.fillText(label,lx+7,ly+14);
+  ctx.restore();
+}
+function showMsg(text){msgEl.textContent=String(text||'');msgEl.hidden=!text;window.__walkSelect.msg=String(text||'');}
+function setReady(v){ready=!!v;window.__walkSelect.ready=ready;}
+
+async function loadCtx(){
+  try{
+    const r=await invoke('walk_selection_context');
+    if(!r||r.ok===false){showMsg((r&&r.error)||'读取屏幕信息失败');return;}
+    ctxInfo=r;window.__walkSelect.ctx=r;
+    hint.innerHTML='拖拽框选桌宠活动范围 · 最小 '+Math.round(r.minW)+'×'+Math.round(r.minH)+' 逻辑像素 · <b>Esc</b> 取消';
+    if(r.bounds&&r.bounds.w>1&&r.bounds.h>1)sel=norm(r.bounds.x,r.bounds.y,r.bounds.x+r.bounds.w,r.bounds.y+r.bounds.h);
+    draw();
+    setReady(true);
+  }catch(e){showMsg('初始化失败：'+String(e&&e.message||e));}
+}
+
+function localPoint(ev){
+  const rect=cv.getBoundingClientRect();
+  return {x:ev.clientX-rect.left,y:ev.clientY-rect.top};
+}
+cv.addEventListener('pointerdown',function(ev){
+  if(ev.button!==0||!ready||busy)return;
+  ev.preventDefault();
+  const p=localPoint(ev);
+  dragStart={x:p.x,y:p.y,w:0,h:0};
+  sel=null;
+  showMsg('');
+  try{cv.setPointerCapture(ev.pointerId);}catch(e){}
+  draw();
+});
+cv.addEventListener('pointermove',function(ev){
+  if(!dragStart||busy)return;
+  const p=localPoint(ev);
+  dragStart.w=p.x-dragStart.x;
+  dragStart.h=p.y-dragStart.y;
+  const r=norm(dragStart.x,dragStart.y,p.x,p.y);
+  sel=r;
+  window.__walkSelect.sel=r;
+  draw();
+});
+async function finish(ev, cancelled){
+  if(!dragStart||busy)return;
+  busy=true;
+  const start=dragStart;
+  dragStart=null;
+  let r=sel;
+  if(!r||r.w<MIN||r.h<MIN){
+    if(!cancelled)showMsg('框选范围太小，请拖出至少 '+MIN+'×'+MIN+' 的矩形');
+    sel=null;window.__walkSelect.sel=null;draw();
+    busy=false;
+    return;
+  }
+  // 限制在窗口内
+  const x=Math.max(0,Math.min(r.x,W));
+  const y=Math.max(0,Math.min(r.y,H));
+  const w=Math.min(r.w,W-x);
+  const h=Math.min(r.h,H-y);
+  if(ctxInfo&&(w<ctxInfo.minW||h<ctxInfo.minH)){
+    showMsg('范围小于桌宠当前窗口（至少 '+Math.round(ctxInfo.minW)+'×'+Math.round(ctxInfo.minH)+'），请重新框选');
+    sel=null;window.__walkSelect.sel=null;draw();
+    busy=false;
+    return;
+  }
+  try{
+    const res=await invoke('walk_selection_commit',{x:x,y:y,w:w,h:h});
+    if(res&&res.ok!==false){setReady(false);return;}
+    showMsg((res&&res.error)||'保存失败，请重新框选');
+    sel=null;window.__walkSelect.sel=null;draw();
+  }catch(e){
+    showMsg('保存失败：'+String(e&&e.message||e));
+  }
+  busy=false;
+}
+cv.addEventListener('pointerup',function(ev){
+  if(ev.button!==0)return;
+  try{cv.releasePointerCapture(ev.pointerId);}catch(e){}
+  finish(ev,false);
+});
+cv.addEventListener('pointercancel',function(ev){finish(ev,true);});
+window.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    e.preventDefault();
+    invoke('walk_selection_cancel').catch(function(){});
+  }
+});
+window.addEventListener('resize',resize);
+// 自测入口：直接预览反向框选（不提交）。
+window.__walkTest={
+  preview:function(x0,y0,x1,y1){sel=norm(x0,y0,x1,y1);window.__walkSelect.sel=sel;draw();return sel;},
+  state:function(){return {ready:ready,sel:sel,msg:window.__walkSelect.msg,ctx:!!ctxInfo,busy:busy};},
+  cancel:function(){return invoke('walk_selection_cancel');}
+};
+resize();
+loadCtx();
+setTimeout(()=>{try{window.focus();}catch(e){}},30);
+})();
+</script>
+</body>
+</html>

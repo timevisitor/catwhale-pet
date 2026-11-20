@@ -1,5 +1,9 @@
-# 回落视频复用主线 web/assets/video（构建时由 build.sh 复制），不重复入库
-frontend/assets/
+# 回落视频复用主线 web/assets/video（构建时由 build.sh 复制），不重复入库；
+# 例外：走路素材由「猫鲸桌宠-走动功能/素材成品」产出，主线没有对应源，
+# 而 build.sh 会逐个核对 index.html 引用的 webm 是否存在——这两条必须入库。
+frontend/assets/*
+!frontend/assets/walk_left.webm
+!frontend/assets/walk_right.webm
 
 # 构建产物
 frontend-embed/
