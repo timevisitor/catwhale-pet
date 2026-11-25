@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('petHost', {
   /* ---- 键盘输入：搜索框打开时抢焦点，关闭时还回去 ---- */
   focusWindow: (on) => ipcRenderer.send('pet:focus', !!on),
 
+  /* ---- 灵动岛开着时收起旧的浮动小窗（Agent 看板 / 信息卡）---- */
+  islandPanelsState: () => ipcRenderer.invoke('island:panels-state'),
+  onIslandPanelsOff: (cb) => {
+    const h = (_e, off) => { try { cb(!!off); } catch (e) {} };
+    ipcRenderer.on('island:panels-off', h);
+    return () => ipcRenderer.removeListener('island:panels-off', h);
+  },
+
   /* ---- 灵动岛：把「桌宠头顶」锚点喂给主进程（岛挂在头顶靠它定位）---- */
   islandAnchor: (a) => ipcRenderer.send('island:anchor-raw', a),
 
@@ -133,6 +141,18 @@ contextBridge.exposeInMainWorld('petHost', {
   animationLoop: {
     get: () => ipcRenderer.invoke('animation-loop:get'),
     set: (cfg) => ipcRenderer.invoke('animation-loop:set', cfg)
+  },
+
+  /* ---- 桌面走动（范围 / 巡游开关落 walk.json；框选期间整窗可交互，结束必须 restore）---- */
+  walk: {
+    get: () => ipcRenderer.invoke('walk:get'),
+    set: (cfg) => ipcRenderer.invoke('walk:set', cfg),
+    selecting: (on) => ipcRenderer.send('pet:walkselect', !!on),
+    onSelectCancel: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('pet:walksel-cancel', h);
+      return () => ipcRenderer.removeListener('pet:walksel-cancel', h);
+    }
   },
 
   /* ---- 本地媒体演出：看视频/听音乐时自动演 ----

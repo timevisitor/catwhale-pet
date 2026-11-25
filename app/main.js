@@ -28,6 +28,8 @@ const CC = require('./character-card.js');                // 酒馆角色卡（V
 const { createPersonaStore } = require('./persona-store.js');   // 详情卡四角标注的实时硬件数据   // 长驻 harness SDK 客户端（流式）
 /* 动画片段循环配置：纯 Node 模块（不认 Electron），主进程只负责传 userData 路径 */
 const { createStore: createAnimationLoopStore } = require('./animation-loop-config.js');
+/* 桌面走动配置：范围/巡游开关落 walk.json（独立于 settings.json，改它不重启 harness） */
+const { createStore: createWalkStore, rescaleConfig: walkRescale, sameConfig: walkSameConfig } = require('./walk-config.js');
 /* 本地媒体演出：SMTC 元数据 + WASAPI 出声进程 → 「在看视频 / 在听音乐」 */
 const { createMediaShow, probeScript, probeCs } = require('./media-show.js');
 const { createIsland } = require('./island.js');     // 灵动岛（头顶气泡）
@@ -70,7 +72,7 @@ const ENVDEPLOY = (() => {
 })();
 // 任何自检模式：跳过"启动弹向导"这类打扰用户的行为
 const TESTMODE = ['--envcheck', '--envdeploy=', '--detecttest', '--mirrortest', '--searchtest=',
-                  '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest', '--startuptest'].some((p) => process.argv.some((a) => a.startsWith(p)));
+                  '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest', '--startuptest', '--walktest'].some((p) => process.argv.some((a) => a.startsWith(p)));
 const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
@@ -92,6 +94,9 @@ function activeSkinDir(){
   return null;
 }
 const STATE_FILE = path.join(app.getPath('userData'), 'pet-state.json');
+/* 桌面走动：范围 + 巡游开关。独立文件，不碰 pet-state.json（它每 5 秒被页面整份覆盖写） */
+const WALK_FILE = path.join(app.getPath('userData'), 'walk.json');
+const walkStore = createWalkStore({ file: WALK_FILE });
 const CHAT_FILE = path.join(app.getPath('userData'), 'chat-history.json');   // 默认助手（未选角色）的聊天记录
 const personas = createPersonaStore(app.getPath('userData'));                  // 角色卡库；选了角色后聊天记录按角色分文件
 const DOCK_FILE = path.join(app.getPath('userData'), 'dock.json');           // Agent 看板配置
@@ -354,11 +359,13 @@ async function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true });     // 默认穿透；页面检测到角色才打开交互
 
   // A new renderer must never inherit a stale full-screen input state.
-  win.webContents.on('did-start-loading',()=>{ setMouseInteractive(false, true); setEscGuard(false); });
+  win.webContents.on('did-start-loading',()=>{ setMouseInteractive(false, true); setEscGuard(false); walkSelecting = false; });
 
   // ⚠ did-finish-load 必须在 loadURL 之前注册：await loadURL 返回时它已经触发过了
   win.webContents.once('did-finish-load', () => {
     bootGuard.phase('page-loaded');
+    /* 胶囊可能比页面先起来（启动顺序不定），加载完再补一次「收起旧浮层」 */
+    try { if (island && island.cfg().enabled) send('island:panels-off', true); } catch (e) {}
     if (PAGEMARK3) win.webContents.insertCSS('#pet{background:#ff0000 !important}').catch(()=>{});
     if (PAGEMARK2) win.webContents.executeJavaScript(`(()=>{const r=document.getElementById('pet').getBoundingClientRect();const d=document.createElement('div');d.style.cssText='position:fixed;z-index:9999;background:#ff0000;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px';document.body.appendChild(d);return 'ok';})()`).catch(()=>{});
     if (PAGEMARK) win.webContents.insertCSS('html,body{background:#ff0000 !important;}').catch(()=>{});
@@ -1000,6 +1007,8 @@ async function resolveEverythingZip() {
            ver: (EVERYTHING_FALLBACK_ZIP.match(/Everything-([0-9.]+[a-z]?)\.x64\.zip$/) || [])[1] || '1.5',
            from: '内置已知版本（下载页解析失败）' };
 }
+  /* 桌面页启动时拉一次：胶囊开着就把旧的浮动小窗收起来 */
+  ipcMain.handle('island:panels-state', () => { try { return !!island.cfg().enabled; } catch (e) { return false; } });
 ipcMain.handle('env:check', async (_e, opts) => envCheck(opts));
 ipcMain.handle('env:pickDir', async (_e, o) => {
   const home = app.getPath('home');
@@ -1740,7 +1749,10 @@ async function startAgentDock() {
       harnessRepo: (() => { try { return effectiveHarnessRepo(loadCfg(), loadState()).repo; } catch (e) { return ''; } })(),
       log: (line) => console.log(line),
     });
-    agentDock.on('update', (snap) => { try { send('dock:update', snap); } catch (e) { /* 窗口还没建好 */ } });
+    agentDock.on('update', (snap) => {
+      try { send('dock:update', snap); } catch (e) { /* 窗口还没建好 */ }
+      try { island.noteAgent(snap); } catch (e) {}
+    });
     await agentDock.start();
     agentDockErr = '';
     console.log('AGENT_DOCK ' + JSON.stringify(agentDock.info()));
@@ -1915,6 +1927,32 @@ const animationLoop = createAnimationLoopStore({
 ipcMain.handle('animation-loop:get', () => animationLoop.get());
 ipcMain.handle('animation-loop:set', (_e, cfg) => animationLoop.set(cfg));
 
+/* ---------- 桌面走动配置（<userData>/walk.json）----------
+   范围 + 巡游开关。默认「不巡游、范围=整个工作区」，没有文件也能跑。
+   读的时候顺手按当前窗口尺寸换算一次：换屏/改分辨率/DPI 变过之后，
+   旧坐标系里的范围会整块跑到窗口外，必须先按比例搬回来再交给页面。 */
+function walkGet() {
+  const got = walkStore.get();
+  if (!win || win.isDestroyed()) return got;
+  try {
+    const b = win.getContentBounds();
+    const scaled = walkRescale(got.config, { width: b.width, height: b.height });
+    /* 只有**值真的变了**才落盘。walkRescale 每次都返回新对象，按引用比较会让每次读都重写
+       walk.json（同值也写），既无谓改文件时间戳，也与「只读不写」的语义不符。 */
+    if (!walkSameConfig(got.config, scaled)) {
+      const w = walkStore.set(scaled);
+      if (w.ok) return Object.assign({}, got, { config: w.config, rescaled: true });
+    }
+  } catch (e) { /* 取不到窗口尺寸就原样返回，页面侧还有一次夹取 */ }
+  return got;
+}
+ipcMain.handle('walk:get', () => walkGet());
+ipcMain.handle('walk:set', (_e, cfg) => {
+  const r = walkStore.set(cfg);
+  if (r.ok) console.log('WALK_CFG ' + JSON.stringify({ enabled: r.config.enabled, rect: r.config.rect, speed: r.config.speed }));
+  return r;
+});
+
 /* ---------- 本地媒体演出（听音乐 / 看视频时自动演一段） ----------
    探测进程默认**不启动**：只有用户在设置里打开开关（settings.json 的 media.show.enabled）
    才会起那个常驻 PowerShell。默认关 = 默认零开销、零额外进程。
@@ -2054,6 +2092,24 @@ function setMouseInteractive(on, force = false){
 }
 ipcMain.on('pet:interactive', (_e, on) => setMouseInteractive(on));
 
+/* ---------- 走动范围框选（页面拉一个全屏遮罩让用户拖矩形）----------
+   框选期间必须**整窗可交互**（否则鼠标落在空白处仍被穿透，拖不出矩形），
+   这是继「拖动中」之后第二个允许强制可交互的场景，所以：
+     · 结束后一定 setMouseInteractive(false, true) 恢复穿透（页面取消/失焦/Esc 都走这条）
+     · 游戏模式统一切断，恢复穿透并通知页面收遮罩
+   用全局 Esc 兜底：窗口失焦时页面收不到 keydown，用户按 Esc 就再也退不出框选。 */
+let walkSelecting = false;
+function setWalkSelecting(on) {
+  on = !!on;
+  if (gameMode.active) on = false;
+  if (walkSelecting === on) return;
+  walkSelecting = on;
+  setMouseInteractive(on, true);
+  setEscGuard(on);
+  console.log('WALKSEL ' + on);
+}
+ipcMain.on('pet:walkselect', (_e, on) => setWalkSelecting(on));
+
 // Cursor sampling is independent of forwarded mouse events. After reload Windows
 // may no longer forward moves to the new renderer while the window is click-through.
 ipcMain.handle('pet:cursor', () => {
@@ -2174,6 +2230,8 @@ function applyGameMode(on, reason) {
     try { sysinfo.stop(); sysinfo.stopLight(); } catch (e) {}
     /* 媒体演出：游戏期间绝不留常驻 PowerShell，也不让页面继续演（反作弊场景要求最少钩子/进程） */
     try { mediaShow.suspend('gamemode'); } catch (e) {}
+    /* 走动框选：游戏期间不留整窗可交互的遮罩（必须先撤，否则吞鼠标） */
+    if (walkSelecting) { setWalkSelecting(false); send('pet:walksel-cancel', { reason: 'gamemode' }); }
     setMouseInteractive(false, true);                 // forward:false → 卸 WH_MOUSE_LL
     if (win && !win.isDestroyed()) {
       try { win.webContents.send('pet:gamemode', { on: true, reason: gameMode.reason }); } catch (e) {}
@@ -2241,6 +2299,26 @@ const island = createIsland({
       return !!(s && s.enabled);
     } catch (e) { return false; }
   },
+  /* 信息中枢摘要：待办 / 日程 / 未读邮件 / 天气，喂给胶囊里的「信息卡」态 */
+  getInfo: () => {
+    try {
+      const sn = (infoHub && infoHub.getSnapshots) ? (infoHub.getSnapshots() || {}) : {};
+      const todos = (sn.reminders && Array.isArray(sn.reminders.todos)) ? sn.reminders.todos : [];
+      const todoOpen = todos.filter((t) => !t.done).length;
+      const nextTodo = (todos.find((t) => !t.done) || {}).text || '';
+      const today = (sn.calendar && Array.isArray(sn.calendar.today)) ? sn.calendar.today : [];
+      const nextCal = today.length ? ((today[0].time ? today[0].time + ' ' : '') + (today[0].title || '')) : '';
+      const unread = (sn.mail && typeof sn.mail.unread === 'number') ? sn.mail.unread : 0;
+      const w = sn.weather || null;
+      return {
+        todoOpen: todoOpen, todoTotal: todos.length, nextTodo: nextTodo,
+        calCount: today.length, nextCal: nextCal,
+        unread: unread,
+        weather: w ? { city: w.city || '', temp: w.temp, text: w.text || '' } : null,
+      };
+    } catch (e) { return null; }
+  },
+  openHud: () => { try { sendToPage('petAPI.openHud()'); } catch (e) {} },
   log: (m) => console.log(m),
 });
 
@@ -2255,6 +2333,9 @@ function startIsland() {
       try { mediaShow.apply({ enabled: true, pollMs: 600 }); } catch (e) {}
     }
     if (c.enabled) island.start();
+    /* Agent 看板 / 信息卡原来各自贴在角色旁边，和胶囊抢同一片屏幕 ——
+       胶囊开着的时候让页面把这两个浮层收起来，内容改由胶囊呈现。 */
+    try { send('island:panels-off', !!c.enabled); } catch (e) {}
     console.log('ISLAND_READY ' + JSON.stringify(c));
   } catch (e) {
     console.log('ISLAND_INIT_ERR ' + ((e && e.message) || e));
@@ -2812,6 +2893,136 @@ if (!app.requestSingleInstanceLock()) {
           })()`);
           console.log('SETUITEST ' + JSON.stringify(r));
         } catch (e) { console.log('SETUITEST_ERR ' + e.message); }
+        if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 400);
+      }, 2500);
+    }
+
+    // --walktest：桌面走动自检（真实页面 + 真实 preload；包内 exe 上同样可跑）
+    //   打印 WALKTEST + JSON，判据在 Node 侧算，外部按这一行取数。
+    if (process.argv.includes('--walktest')) {
+      setTimeout(async () => {
+        try {
+          const r = await win.webContents.executeJavaScript(`(async () => {
+            const wait = (ms)=> new Promise(r=> setTimeout(r, ms));
+            const api = petAPI.walk;
+            const out = { ui:{}, rect:null, box:null, right:null, left:null, up:null,
+                          cruise:{ before:null, after:null, moved:false }, stop:null, parse:{}, err:null };
+            out.ui.cruise = !!document.getElementById('walkCruise');
+            out.ui.selectBtn = !!document.getElementById('walkSelectBtn');
+            out.ui.clearBtn = !!document.getElementById('walkClearBtn');
+            out.ui.stopBtn = !!document.getElementById('walkStopBtn');
+            out.ui.defaultOff = (document.getElementById('walkCruise')||{}).checked === false;
+            out.ui.rectText = (document.getElementById('walkRectInfo')||{}).textContent || '';
+            out.rect = api.setRect({ x: 200, y: 150, width: 500, height: 400 });
+            await wait(200);
+            out.box = api.info().box;
+            const r1 = await api.to(1, 0, 2000); await wait(120);
+            out.right = { moved: Math.round(r1.moved), bounded: !!r1.bounded, pet: api.info().pet, facing: api.info().facing };
+            const r2 = await api.to(-1, 0, 2000); await wait(120);
+            out.left = { moved: Math.round(r2.moved), bounded: !!r2.bounded, pet: api.info().pet, facing: api.info().facing };
+            const r3 = await api.to(0, -1, 2000); await wait(120);
+            out.up = { moved: Math.round(r3.moved), pet: api.info().pet };
+            out.cruise.before = api.info().cfg.enabled;
+            api.cruise(true);
+            const t0 = api.info().pet; api.cruiseNow(); await wait(700);
+            const t1 = api.info().pet;
+            out.cruise.after = api.info().cfg.enabled;
+            out.cruise.moved = Math.hypot(t1.x - t0.x, t1.y - t0.y) > 3 || api.info().moving;
+            out.cruise.inBox = (()=>{ const b = api.info().box, p = api.info().pet; return p.x >= b.minX-1 && p.x <= b.maxX+1 && p.y >= b.minY-1 && p.y <= b.maxY+1; })();
+            /* 用「停下」指令收尾：这是用户真实路径，也顺带验证它会暂停巡游 */
+            out.stopReply = await api.runCommand('停下');
+            await wait(150);
+            out.stop = { enabled: api.info().cfg.enabled, moving: api.info().moving };
+            /* 真实解码：两个方向都要真放出画面（不只是状态名对上）。
+               先把角色挪到反方向边缘，保证待测方向有 400px 余量，再采样两次 currentTime。 */
+            const dec = async (dx) => {
+              api.setRect({ x: 100, y: 150, width: 1200, height: 400 });
+              await api.to(-dx, 0, 1500); await wait(150);
+              api.to(dx, 0, 400);
+              await wait(700);
+              const pick = () => document.querySelector('#pet video.active');
+              const snap = (v) => v ? { src: (v.currentSrc || '').split('/').pop(), rs: v.readyState,
+                                        t: v.currentTime, vw: v.videoWidth, vh: v.videoHeight,
+                                        d: v.duration, paused: v.paused } : null;
+              const a = snap(pick());
+              await wait(500);
+              const b = snap(pick());
+              const i = api.info();
+              api.stop();
+              return { a, b, state: i.state, facing: i.facing, flip: i.flip };
+            };
+            out.decRight = await dec(1);
+            out.decLeft = await dec(-1);
+
+            /* 评审挡发布项：走动中改尺寸必须收敛（不能卡边界 + Promise 吊死） */
+            api.stop(); api.setRect({ x: 0, y: 0, width: 600, height: 600 });
+            petAPI.setSize(340);
+            petAPI.setPos(100, 60);
+            await wait(150);
+            let mvDone = false, mvRes = null;
+            api.to(1, 0, 200).then((r) => { mvDone = true; mvRes = r; });
+            await wait(320);
+            petAPI.setSize(620);                       // 画布变大 → 包围盒变小
+            window.dispatchEvent(new Event('resize'));
+            await wait(900);
+            out.midResize = { done: mvDone, res: mvRes, pet: api.info().pet, box: api.info().box,
+                              moving: api.info().moving, size: petAPI.getSize() };
+            petAPI.setSize(340);
+            await wait(200);
+
+            /* 评审挡发布项：范围比画布小 → 不走、不巡游、框选值保留 */
+            api.setRect({ x: 200, y: 150, width: 120, height: 200 });
+            await wait(250);
+            const smallMove = await api.to(1, 0, 120);
+            const smallCruise = api.cruise(true);
+            await wait(200);
+            out.small = { fits: api.info().fits, move: smallMove, cruise: smallCruise,
+                          enabled: api.info().cfg.enabled, rect: api.info().cfg.rect };
+
+            for (const s of ['向左走', '往右走 200 像素', '停下', '我今天向左走了两万步', '左边那个按钮是什么'])
+              out.parse[s] = api.parse(s);
+            api.cruise(false);
+            api.clearRect();
+            return out;
+          })()`);
+          const b = r.box || {}, pet = (r.right && r.right.pet) || {}, right = r.right || {}, left = r.left || {};
+          const adv = (x) => (!x || !x.a || !x.b) ? -1 : (x.b.t - x.a.t + (x.a.d || 1.3333)) % (x.a.d || 1.3333);
+          const dr = r.decRight || {}, dl = r.decLeft || {};
+          const pass = {
+            ui: r.ui.cruise && r.ui.selectBtn && r.ui.clearBtn && r.ui.stopBtn,
+            defaultOff: !!r.ui.defaultOff,
+            rectSaved: !!(r.rect && r.rect.ok),
+            boxOk: Math.abs(b.maxX - (200 + 500 - 204)) < 0.6 && Math.abs(b.maxY - (150 + 400 - 340)) < 0.6,
+            rightBounded: !!right.bounded && Math.abs((pet.x || 0) - b.maxX) < 1.2,
+            leftBounded: !!left.bounded && Math.abs((left.pet.x || 0) - b.minX) < 1.2,
+            facingLeft: left.facing === 'left',
+            upBounded: Math.abs(((r.up && r.up.pet.y) || 0) - b.minY) < 1.2,
+            cruiseDefaultOff: r.cruise.before === false,
+            cruiseWalked: !!r.cruise.moved,
+            cruiseInBox: !!r.cruise.inBox,
+            stopPausesCruise: r.stop && r.stop.enabled === false && r.stop.moving === false,
+            parsePositive: !!(r.parse['向左走'] && r.parse['往右走 200 像素'] && r.parse['停下']),
+            parseNoHijack: r.parse['我今天向左走了两万步'] === null && r.parse['左边那个按钮是什么'] === null,
+            walkRightVideo: !!(dr.a && dr.a.src === 'walk_right.webm' && dr.a.rs >= 2 && dr.a.paused === false &&
+                               dr.state === 'walk_right' && dr.flip === false && dr.a.vw === 576 && dr.a.vh === 960),
+            walkRightAdvance: adv(dr) > 0.05,
+            walkLeftVideo: !!(dl.a && dl.a.src === 'walk_left.webm' && dl.a.rs >= 2 && dl.a.paused === false &&
+                              dl.state === 'walk_left' && dl.flip === false && dl.facing === 'left'),
+            walkLeftAdvance: adv(dl) > 0.05,
+            /* 走动中改尺寸：Promise 收敛 + 停在新的包围盒内（评审挡发布项 ①） */
+            resizeSettles: !!(r.midResize && r.midResize.done === true && r.midResize.moving === false),
+            resizeInBox: !!(r.midResize && r.midResize.pet && r.midResize.box &&
+                            r.midResize.pet.x <= r.midResize.box.maxX + 1 &&
+                            r.midResize.pet.x >= r.midResize.box.minX - 1),
+            /* 范围比画布小：不走、不巡游、框选值保留（评审挡发布项 ②） */
+            smallRefused: !!(r.small && r.small.move && r.small.move.ok === false &&
+                             /比角色画布 \d+×\d+ 还小/.test(String(r.small.move.error || ''))),
+            smallNoCruise: !!(r.small && r.small.cruise && r.small.cruise.ok === false &&
+                              r.small.enabled === false && r.small.rect &&
+                              Math.abs(r.small.rect.width - 120) < 1.01)
+          };
+          console.log('WALKTEST ' + JSON.stringify({ pass, raw: r }));
+        } catch (e) { console.log('WALKTEST_ERR ' + ((e && e.message) || e)); }
         if (process.argv.includes('--exit-after-test')) setTimeout(() => { quitting = true; app.quit(); }, 400);
       }, 2500);
     }

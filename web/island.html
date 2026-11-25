@@ -31,8 +31,12 @@
     background:rgba(10,13,18,.82);opacity:0;transition:opacity .18s ease;pointer-events:none}
   #isl.open::after,#isl.idle::after{opacity:1}
   #isl.idle::after{width:10px;height:10px;margin-left:-5px;bottom:-3px}
+  /* 有未读/待办时球右上角一个小红点 */
+  #isl.has-badge:not(.open)::before{content:'';position:absolute;right:6px;top:6px;width:10px;height:10px;
+    border-radius:50%;background:#E4573D;box-shadow:0 0 0 2px rgba(10,13,18,.9);z-index:3}
 
-  #isl.open{width:600px;height:104px;border-radius:26px;
+  #isl.open{width:var(--w,600px);height:104px;border-radius:26px;
+    /* 每种状态需求不同：消息要宽、Agent 状态和情报卡窄一些，别让小人戴大帽子 */
     /* 只在胶囊态做玻璃模糊：球态是实心球，不需要也不会产生方形模糊边缘 */
     -webkit-backdrop-filter:blur(18px) saturate(1.2);
     backdrop-filter:blur(18px) saturate(1.2);
@@ -143,6 +147,17 @@
     /* 视频态：不要进度条（SMTC 给的位置不可靠，显示反而误导），只留标题 */
     #p-video .bar, #p-video .vrow { display: none !important; }
     #p-video .mid { justify-content: center; }
+  /* 每种状态需求不同：消息要宽，Agent 状态和情报卡窄一些 —— 别让小人戴大帽子 */
+  #isl[data-mode="agent"]{--w:420px}
+  #isl[data-mode="info"]{--w:452px}
+  #isl[data-mode="video"]{--w:520px}
+  #isl[data-mode="msg"]{--w:560px}
+  #isl[data-mode="music"]{--w:600px}
+  #isl[data-mode="agent"] .t1,#isl[data-mode="info"] .t1{font-size:15px}
+  #isl[data-mode="agent"] .t3,#isl[data-mode="info"] .body{font-size:12px}
+  #isl[data-mode="info"] .body{display:flex;flex-direction:column;gap:2px;line-height:1.35}
+  #isl[data-mode="info"] .body .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #isl[data-mode="info"] .body .more{opacity:.55}
 </style>
 </head>
 <body>
@@ -191,6 +206,31 @@
         </div>
         <div class="side">
           <span class="badge" id="vApp">播放器</span>
+        </div>
+      </section>
+
+      <!-- agent：Agent 看板（原来贴在角色旁边的小窗，现在并进胶囊） -->
+      <section class="panel" id="p-agent">
+        <div class="cover"><span class="glyph" id="aGlyph">⚙</span></div>
+        <div class="mid">
+          <div class="appline" id="aAgent">Agent</div>
+          <div class="t1" id="aTitle">正在干活</div>
+          <div class="t3" id="aDetail"></div>
+        </div>
+        <div class="side">
+          <span class="badge" id="aBadge">看板</span>
+        </div>
+      </section>
+
+      <!-- info：信息中枢摘要（待办/日程/邮件/天气），点右侧按钮打开完整面板 -->
+      <section class="panel" id="p-info">
+        <div class="cover"><span class="glyph">☰</span></div>
+        <div class="mid">
+          <div class="t1" id="iHead">情报</div>
+          <div class="body" id="iBody"></div>
+        </div>
+        <div class="side">
+          <span class="badge" id="iOpen" style="cursor:pointer">打开面板</span>
         </div>
       </section>
     </div>
@@ -442,8 +482,58 @@
     // 进度条已按用户要求去掉：浏览器的 SMTC 位置经常不更新，显示反而误导
   }
 
+  /* ---------------- Agent / 信息卡 ---------------- */
+  function renderAgent(a) {
+    a = a && typeof a === 'object' ? a : {};
+    var state = str(a.state, '');
+    var glyph = state === 'error' ? '!' : (a.busy ? '⚙' : '✓');
+    $('aGlyph').textContent = glyph;
+    $('aGlyph').style.color = state === 'error' ? '#F08A8A' : '';
+    $('aAgent').textContent = str(a.agent, 'Agent');
+    $('aTitle').textContent = str(a.label, '状态');
+    $('aDetail').textContent = str(a.detail, a.count ? ('共 ' + a.count + ' 个会话') : '');
+    $('aBadge').textContent = a.busy ? '进行中' : (state === 'error' ? '出错' : '完成');
+  }
+
+  function renderInfo(info, agent) {
+    info = info && typeof info === 'object' ? info : {};
+    var lines = [];
+    var todo = num(info.todoOpen) || 0;
+    if (todo > 0 || num(info.todoTotal) > 0) {
+      lines.push('待办 ' + todo + (info.nextTodo ? '：' + str(info.nextTodo) : ''));
+    }
+    var cal = num(info.calCount) || 0;
+    if (cal > 0) lines.push('日程 ' + cal + (info.nextCal ? '：' + str(info.nextCal) : ''));
+    var unread = num(info.unread) || 0;
+    if (unread > 0) lines.push('未读邮件 ' + unread);
+    var w = info.weather;
+    if (w && (w.city || w.text)) {
+      lines.push([w.city, (w.temp === null || w.temp === undefined) ? '' : (w.temp + '°C'), w.text]
+        .filter(Boolean).join(' '));
+    }
+    if (agent && agent.agent) lines.push('Agent：' + str(agent.agent) + ' · ' + str(agent.label, ''));
+    $('iHead').textContent = lines.length ? '情报' : '暂时没有情报';
+    /* 一行一条，窄胶囊里不要挤成一条长串（挤了就折行、把整块撑高） */
+    var box = $('iBody');
+    box.textContent = '';
+    var show = lines.slice(0, 3);
+    if (!show.length) show = ['点右侧「打开面板」看完整信息中枢'];
+    show.forEach(function (t) {
+      var d = document.createElement('div');
+      d.className = 'row';
+      d.textContent = t;
+      box.appendChild(d);
+    });
+    if (lines.length > show.length) {
+      var m = document.createElement('div');
+      m.className = 'row more';
+      m.textContent = '还有 ' + (lines.length - show.length) + ' 条';
+      box.appendChild(m);
+    }
+  }
+
   /* ---------------- 主渲染 ---------------- */
-  var MODES = ['idle', 'msg', 'music', 'video'];
+  var MODES = ['idle', 'msg', 'music', 'video', 'agent', 'info'];
   var lastOpen = 'music';     // 最近一次非 idle 的 mode（无宿主时点球展开用）
 
   function render(d) {
@@ -480,7 +570,11 @@
       wave.stop();
       if (mode === 'msg') renderMsg(d.msg);
       else if (mode === 'video') renderVideo(d.video);
+      else if (mode === 'agent') renderAgent(d.agent);
+      else if (mode === 'info') renderInfo(d.info, d.agent);
     }
+    /* 球上的小红点：有未读/待办时提示「点我」 */
+    if (isl) isl.classList.toggle('has-badge', Number(d.badge) > 0);
   }
   window.applyIsland = render;
 
@@ -498,6 +592,12 @@
   function singleClick() {
     var open = isl.classList.contains('open');
     if (!open) {
+      /* 点球 = 展开成「情报卡」（信息中枢 + Agent 摘要并进胶囊） */
+      var okInfo = cmd('info');
+      if (!okInfo) renderInfo({}, null);
+      return;
+    }
+    if (false) {
       var ok = cmd('expand');
       if (!ok) render(SAMPLE[lastOpen] || SAMPLE.music);
     } else {
@@ -508,6 +608,14 @@
       }
     }
   }
+
+  (function () {
+    var b = $('iOpen');
+    if (b) b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      cmd('hud');
+    });
+  })();
 
   isl.addEventListener('click', function () {
     if (clickTimer) return;

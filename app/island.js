@@ -109,7 +109,58 @@ function createIsland(deps) {
   let anchorRect = null;           // {sx,sy,rx,ry,rw,rh} 角色矩形（屏幕 DIP）
   let anchorMiss = 0;
   let pinned = false, hiddenUntil = 0;
+  /* 胶囊跟着桌宠大小缩放：桌宠缩到 200px 时胶囊还按 640 宽画，看着就是「小人戴大帽子」。
+     用 anchorRect 的角色高度比上基准高度算倍率，靠 webContents.setZoomFactor 整体缩放
+     （页面里的 CSS 像素空间不变，字号/圆角/波形一起等比缩，不用改样式）。 */
+  const REF_H = 430;      // 基准：默认大小下角色矩形高度（CSS px）—— 调大则默认胶囊更小
+  let zoom = 1;
+  /* Agent 看板快照 / 信息中枢摘要：这两块原来各有一个贴在角色旁边的小窗，
+     和胶囊抢同一片屏幕 —— 现在统一并进胶囊，页面里那两个浮层关掉。 */
+  let agentSnap = null, agentAt = 0, infoOpen = false;
   const lyricCache = new Map();    // key -> {lines:[[ms,text]]} | null
+
+  /* ---------------- Agent 看板 ---------------- */
+  const AGENT_BUSY = { working: '正在干活', speaking: '正在说话', waiting_user: '等你确认' };
+  function noteAgent(snap) {
+    if (!snap || typeof snap !== 'object') return;
+    agentSnap = snap;
+    agentAt = Date.now();
+  }
+  function agentView() {
+    if (!agentSnap) return null;
+    const list = Array.isArray(agentSnap.sessions) ? agentSnap.sessions : [];
+    const rank = (st) => (st === 'waiting_user' ? 3 : st === 'working' ? 2 : st === 'speaking' ? 2 : 0);
+    let pick = null, best = 0;
+    for (const it of list) {
+      const r = rank(it.state);
+      if (r > best) { best = r; pick = it; }
+    }
+    let fresh = false;
+    if (!pick) {
+      /* 刚干完的给一次露脸机会（12 秒内），别让「完成」一闪而过 */
+      const done = list.filter((it) => it.state === 'done' || it.state === 'error')
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+      if (done && Date.now() - Number(done.updatedAt || 0) < 12000) { pick = done; fresh = true; }
+    }
+    if (!pick) return null;
+    const name = pick.agent === 'claude-code' ? 'Claude Code'
+      : pick.agent === 'codex' ? 'Codex' : String(pick.agent || 'Agent');
+    const state = String(pick.state || '');
+    const label = AGENT_BUSY[state] || (state === 'done' ? '完成了' : state === 'error' ? '出错了' : '闲置');
+    const detail = String(pick.title || pick.lastText || pick.detail || '').replace(/\s+/g, ' ').slice(0, 120);
+    return {
+      agent: name, state: state, label: label, detail: detail,
+      busy: !!AGENT_BUSY[state], fresh: fresh,
+      count: list.length, at: Number(pick.updatedAt) || agentAt,
+    };
+  }
+
+  /* ---------------- 信息中枢摘要 ---------------- */
+  function infoView() {
+    let info = null;
+    try { info = o.getInfo ? o.getInfo() : null; } catch (e) { info = null; }
+    return info && typeof info === 'object' ? info : null;
+  }
 
   /* ---------------- 配置 ---------------- */
   function readCfg() {
@@ -331,7 +382,14 @@ function createIsland(deps) {
     const msgFresh = !!cfg.msg && !!lastMsg && (Date.now() - msgAt) < hold;
     const musicOn = !!cfg.music && m.kind === 'music' && !!m.title;
     const videoOn = !!cfg.video && m.kind === 'video' && !!m.title;
-    let next = msgFresh ? 'msg' : (videoOn ? 'video' : (musicOn ? 'music' : 'idle'));
+    const av = agentView();
+    const agentOn = !!av && !!av.busy;
+    const info = infoView();
+    let next = msgFresh ? 'msg'
+      : agentOn ? 'agent'
+        : videoOn ? 'video'
+          : musicOn ? 'music'
+            : (infoOpen ? 'info' : 'idle');
     if (pinned && next === 'idle') next = mode || 'idle';
     mode = next;
     return {
@@ -345,10 +403,13 @@ function createIsland(deps) {
         elapsed: elapsedMs / 1000,
       },
       msg: lastMsg,
+      agent: av,
+      info: info,
       video: {
         title: m.kind === 'video' ? m.title : '', appName: friendlyApp(m.proc),
         pos: pr.pos, dur: m.dur, estimated: pr.estimated,
       },
+      badge: (info && (info.unread || info.todoOpen)) || 0,
       tailX: lastTailX,
       cfg: Object.assign({}, cfg),
       ts: Date.now(),
@@ -393,6 +454,24 @@ function createIsland(deps) {
     try { return pet.getBounds(); } catch (e) { return null; }
   }
 
+  function wantZoom() {
+    if (!anchorRect || !(anchorRect.rh > 0)) return 1;
+    const raw = anchorRect.rh / REF_H;
+    const z = Math.min(1, Math.max(0.5, raw));
+    return Math.round(z * 50) / 50;      // 量化到 0.02，避免每帧都在改
+  }
+  function applyZoom() {
+    if (!win || win.isDestroyed()) return;
+    const z = wantZoom();
+    if (Math.abs(z - zoom) < 0.015) return;
+    zoom = z;
+    try { win.webContents.setZoomFactor(z); } catch (e) {}
+    const b = win.getBounds();
+    const w = Math.round(W * z), h = Math.round(H * z);
+    if (Math.abs(b.width - w) > 1 || Math.abs(b.height - h) > 1) win.setBounds({ x: b.x, y: b.y, width: w, height: h });
+    log('ISLAND_ZOOM ' + JSON.stringify({ rh: anchorRect && anchorRect.rh, zoom }));
+  }
+
   function islandPos() {
     const b = petBounds();
     if (!b) return null;
@@ -408,15 +487,16 @@ function createIsland(deps) {
       cxScreen = b.x + a.cx * b.width;
       headScreen = b.y + a.head * b.height;
     }
-    let x = Math.round(cxScreen - W / 2);
-    let y = Math.round(headScreen - GAP - TOP_PAD - contentH);
+    const Wz = Math.round(W * zoom);
+    let x = Math.round(cxScreen - Wz / 2);
+    let y = Math.round(headScreen - GAP - (TOP_PAD + contentH) * zoom);
     const area = screen.getDisplayNearestPoint({ x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) }).workArea;
     if (x < area.x) x = area.x;
-    if (x + W > area.x + area.width) x = area.x + area.width - W;
+    if (x + Wz > area.x + area.width) x = area.x + area.width - Wz;
     if (y < area.y) y = area.y;
     /* 角色贴近屏幕边缘时窗口会被夹回来，这时把「尖角」挪到角色正上方，
        不然气泡会指着空气（对话气泡的通行做法）。 */
-    const tailX = Math.round(Math.min(W - 26, Math.max(26, cxScreen - x)));
+    const tailX = Math.round(Math.min(W - 26, Math.max(26, (cxScreen - x) / zoom)));
     return { x, y, tailX };
   }
 
@@ -426,9 +506,12 @@ function createIsland(deps) {
     const p = islandPos();
     if (p && isFinite(p.tailX)) lastTailX = p.tailX;
     if (!p) { if (!win.isDestroyed() && win.isVisible()) win.hide(); return; }
+    applyZoom();
     const cur = win.getBounds();
-    if (force || Math.abs(cur.x - p.x) >= 6 || Math.abs(cur.y - p.y) >= 6) {
-      win.setBounds({ x: p.x, y: p.y, width: W, height: H });
+    const Wz = Math.round(W * zoom), Hz = Math.round(H * zoom);
+    if (force || Math.abs(cur.x - p.x) >= 6 || Math.abs(cur.y - p.y) >= 6
+        || Math.abs(cur.width - Wz) > 1 || Math.abs(cur.height - Hz) > 1) {
+      win.setBounds({ x: p.x, y: p.y, width: Wz, height: Hz });
       const after = win.getBounds();
       log('ISLAND_POS ' + JSON.stringify({ want: p, cur, after, anchor, anchorRect }));
     }
@@ -529,6 +612,7 @@ function createIsland(deps) {
     resetPos: () => { resetAnchor(); place(true); },
     cfg: () => Object.assign({}, cfg),
     notify,
+    noteAgent,
     noteAnchor,
     resetAnchor,
     win: () => win,
