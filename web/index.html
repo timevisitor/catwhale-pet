@@ -460,12 +460,14 @@
 <link rel="stylesheet" href="chat.css">
 <link rel="stylesheet" href="dock.css">
 <link rel="stylesheet" href="persona.css">
+<link rel="stylesheet" href="hud.css">
 </head>
 <body>
 <div id="desktop"></div>
 <div id="checker"></div>
 <div id="shadow"></div>
 <div id="pet"></div>
+<div id="note" role="status" aria-live="polite"></div>
 
 <div id="menu">
   <div class="mtitle">桌宠菜单</div>
@@ -779,6 +781,45 @@ const opt = {
   debug:    qs.get('debug')    === '1',
   menu:     qs.get('menu')     === '1'    // ?menu=1 打开页面就直接弹菜单(调试/截图用)
 };
+
+/* 菜单音效：WebAudio 现场合成，不落任何素材文件（0 KB）。
+   参考 SAO Utils 的四声语义：Launcher(开) / Click / Panel(悬停) / Alert(关)。 */
+const SFX = (() => {
+  let ctx = null, lastHover = 0;
+  const enabled = () => { try { return localStorage.getItem('sao.sfx') !== '0'; } catch (e) { return true; } };
+  function ac() {
+    if (ctx) return ctx;
+    try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ctx = null; }
+    return ctx;
+  }
+  function tone(freq, dur, gain, type) {
+    const c = ac(); if (!c) return;
+    if (c.state === 'suspended') c.resume().catch(() => {});
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, c.currentTime);
+    g.gain.linearRampToValueAtTime(gain, c.currentTime + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0006, c.currentTime + dur);
+    o.connect(g); g.connect(c.destination);
+    o.start(); o.stop(c.currentTime + dur + 0.02);
+  }
+  return {
+    get on() { return enabled(); },
+    set(v) { try { localStorage.setItem('sao.sfx', v ? '1' : '0'); } catch (e) {} },
+    play(kind) {
+      if (!enabled()) return;
+      if (kind === 'hover') {
+        const t = performance.now();
+        if (t - lastHover < 45) return;
+        lastHover = t; tone(2100, 0.035, 0.03, 'sine'); return;
+      }
+      if (kind === 'open') { tone(880, 0.10, 0.045, 'triangle'); setTimeout(() => tone(1320, 0.15, 0.04, 'triangle'), 55); return; }
+      if (kind === 'close') { tone(700, 0.09, 0.035, 'triangle'); setTimeout(() => tone(470, 0.13, 0.03, 'triangle'), 45); return; }
+      if (kind === 'click') { tone(1560, 0.05, 0.045, 'square'); return; }
+    }
+  };
+})();
 
 let states = DEFAULT_STATES;
 let activeSkin = null;   // 当前生效的外置皮肤包（%APPDATA%\桌宠\skins\active.json）
@@ -1613,7 +1654,8 @@ function uiHitAt(x, y){
   const el = document.elementFromPoint(x, y);
   if (!el || !el.closest) return false;
   if (el.closest('#panel') || el.closest('#menu') || el.closest('#search') || el.closest('#chat') || el.closest('#settings') || el.closest('#envwiz') || el.closest('#sao')
-      || el.closest('#dockpan') || el.closest('#dockchip')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单/Agent看板可交互
+      || el.closest('#note') || el.closest('#hud') || el.closest('#hudMini')
+      || el.closest('#dockpan') || el.closest('#dockchip')) return true;   // 面板/菜单/搜索/聊天/设置/自检/SAO菜单/信息卡/Agent看板可交互
   if (el.closest('#pet')){
     const r = pet.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
@@ -1963,6 +2005,8 @@ const SAO_MENU = {
         { selected:()=>opt.size===460, icon:'ruler', label:'大  460',  run: ()=> applySize(460) },
         { selected:()=>opt.size===620, icon:'ruler', label:'超大 620', run: ()=> applySize(620) } ] },
     { keepOpen:true, icon:'moon',  label:'脚下阴影', state: ()=> opt.shadow ? '开' : '关', run: ()=> setShadow(!opt.shadow) },
+    { keepOpen:true, icon:'spark', label:'菜单音效', state: ()=> SFX.on ? '开' : '关',
+      run: ()=>{ SFX.set(!SFX.on); if(SFX.on) SFX.play('click'); } },
     { keepOpen:true, icon:'pic',   label:'演示背景', state: ()=> (opt.bg === 'desktop' ? '开' : '关'),
       run: ()=> setBg(opt.bg === 'desktop' ? 'none' : 'desktop') },
   ]},
@@ -1976,6 +2020,9 @@ const SAO_MENU = {
     { keepOpen:true, icon:'task', label:'陪它忙起来', state:()=>SAO.demoTask?'进行中':'10秒', disabled:()=>!!SAO.demoTask, run: ()=>{ SAO.demoTask=true; startTask(); setTimeout(()=>{ SAO.demoTask=false; endTask(); if(SAO.open){renderSao();positionSao();} },10000); } },
   ]},
   tools: { label:'工具', icon:'search', items: [
+    { keepOpen:true, icon:'panel', label:'信息中枢', disabled:()=>!(window.petHost && window.petHost.hub),
+      state: ()=> SAO_HUB.loaded ? (SAO_HUB.on ? '开' : '关') : '—', run: ()=> setHubOn(!SAO_HUB.on) },
+    { icon:'panel', label:'打开情报面板', disabled:()=>!SAO_HUB.on, run: ()=> openHub() },
     { icon:'search', label:'文件搜索',  run: ()=> openSearch() },
     { icon:'chat',   label:'DeepSeek 聊天', run: ()=> openChat() },
     { icon:'panel',  label:'控制面板',  run: ()=> petAPI.togglePanel() },
@@ -2055,7 +2102,7 @@ function stateCn(){
 function cardInfoFor(cat){
   const rows = [];
   if (cat === 'interact') rows.push(['当前动作', stateCn()], ['提示', '点角色也能互动']);
-  if (cat === 'look')     rows.push(['显示大小', String(opt.size)], ['脚下阴影', opt.shadow?'开':'关'],
+  if (cat === 'look')     rows.push(['显示大小', String(opt.size)], ['菜单音效', SFX.on?'开':'关'], ['脚下阴影', opt.shadow?'开':'关'],
                                     ['演示背景', opt.bg === 'desktop' ? '开' : '关']);
   if (cat === 'action')   rows.push(['当前动作', stateCn()], ['长任务', M.taskCount ? '进行中' : '无']);
   if (cat === 'tools')    rows.push(['文件搜索', SAO_EV.ready ? ('就绪 · ' + (SAO_EV.instance||'')) : '未检测'],
@@ -2272,8 +2319,12 @@ function openMenu(){
   if(SAO.open)return;
   if(S.open)closeSearch();if(C.open)closeChat();if(SET.open)closeSettings();
   SAO.previousFocus=document.activeElement; SAO.open=true;M.menuOpen=true;
+  try { if (window.HUDCTL && HUDCTL.state().open) HUDCTL.close(); } catch (e) {}
   SAO.subRow=-1;SAO.subOf=-1;SAO.kbd=-1;SAO.kbdIn='list';
-  els.sao.classList.add('show');renderSao();
+  clearTimeout(SAO.outT); els.sao.classList.remove('out');
+  els.sao.classList.add('show','enter');renderSao();
+  clearTimeout(SAO.enterT); SAO.enterT = setTimeout(() => els.sao.classList.remove('enter'), 700);
+  SFX.play('open');
   touch();applyState();
   positionSao().then(()=>{if(SAO.open)els.saoList.querySelector('[data-cat="'+SAO.cat+'"]')?.focus({preventScroll:true});});
   refreshSaoStatus();
@@ -2287,7 +2338,12 @@ function closeMenu(){
   if(!SAO.open)return;
   SAO.open=false;M.menuOpen=false;SAO.subRow=-1;SAO.subOf=-1;SAO.layoutTicket=(SAO.layoutTicket||0)+1;
   clearTimeout(SAO.hoverT);clearTimeout(SAO.leaveT);
-  els.sao.classList.remove('show');els.saoSub.classList.remove('show');
+  els.sao.classList.remove('enter');
+  els.sao.classList.add('out');
+  els.saoSub.classList.remove('show');
+  SFX.play('close');
+  clearTimeout(SAO.outT);
+  SAO.outT = setTimeout(() => els.sao.classList.remove('show','out'), 150);
   syncMirrorFromPanels();                    // 菜单关了 → 抬手方向复位（若有通用面板开着则由它接管）
   try{window.petHost?.sysInfoStop?.()?.catch?.(()=>{});window.petHost?.focusWindow?.(false);}catch(e){}
   syncPanelGuard();
@@ -2335,6 +2391,38 @@ function setMsg(id, txt, cls){
   if (!el) return;
   el.className = 'hint' + (cls ? ' ' + cls : '');
   el.textContent = txt || '';
+}
+/* 信息中枢：主窗内的情报面板（hud.js 提供 HUDCTL） */
+let SAO_HUB = { on: true, loaded: false };
+function openHub(tab){
+  try{
+    if (!window.petHost || !window.petHost.hub){ toast('信息中枢需要桌面版宿主'); return; }
+    if (!SAO_HUB.on){ setHubOn(true); return; }
+    if (window.HUDCTL) HUDCTL.open(tab || '');
+  }catch(e){ toast('打开情报面板失败'); }
+}
+async function setHubOn(on){
+  try{
+    const host = window.petHost;
+    if (!host || !host.hub || !host.hub.setEnabled){ toast('需要桌面版宿主'); return; }
+    const r = await host.hub.setEnabled(!!on);
+    SAO_HUB.on = !!(r && r.enabled);
+    SAO_HUB.loaded = true;
+    if (!SAO_HUB.on && window.HUDCTL) HUDCTL.close();
+    toast(SAO_HUB.on ? '信息中枢已开启' : '信息中枢已关闭');
+    if (SAO.open){ renderSao(); positionSao(); }
+  }catch(e){ toast('切换失败'); }
+}
+async function syncHubState(){
+  try{
+    const host = window.petHost;
+    if (!host || !host.hub) return;
+    const st = await host.hub.state();
+    SAO_HUB.on = !!(st && st.enabled);
+    SAO_HUB.loaded = true;
+    if (host.hub.onEnabled) host.hub.onEnabled((v)=>{ SAO_HUB.on = !!(v && v.enabled); if (SAO.open){ renderSao(); positionSao(); } });
+    if (SAO.open){ renderSao(); positionSao(); }
+  }catch(e){}
 }
 function openSettings(){
   if (S.open) closeSearch();
@@ -2933,6 +3021,8 @@ async function init(){
   place(innerWidth - opt.size * CANVAS_ASPECT - 60, innerHeight - opt.size * FOOT_RATIO - 6, false);
   bindEvents();
   initHostBridge();                 // 桌面版(Electron)才生效
+  try{ window.HUDCTL && HUDCTL.init(); }catch(e){}   // 情报面板：贴角色的 HUD（hud.js 自初始化，这里兜一次）
+  syncHubState();                                   // 菜单里的"信息中枢 开/关"要跟主进程一致
   applyVideoMirror();               // 给所有 video 写上统一的 transform/origin（镜像开关都用这一处）
   applyState();                     // 先起状态机，再起播（起播失败也不影响交互）
   play(cur || 'idle');              // 已开启的片段会在 alRestoreConfig 里接管
@@ -3022,6 +3112,65 @@ function hitTest(px, py){
   return b.img.data[(y * b.w + x) * 4 + 3] > 24;
 }
 
+/* ===================== 灵动岛锚点 =====================
+   岛挂在桌宠头顶靠这个：把「角色可见轮廓的头顶」和「水平中心」
+   换算成窗口内归一化坐标（0..1）交给主进程。
+   头顶取「不透明格数 ≥ 最宽行 25% 的第一行」，避开立绘上方那根呆毛 ——
+   直接取包围盒顶边会让气泡飘在离脑袋几十像素的半空（Tauri 版实测踩过）。 */
+let islandAnchorAt = 0, islandAnchorSig = '';
+function reportIslandAnchor(force){
+  const t = now();
+  if (!force && t - islandAnchorAt < 500) return;
+  islandAnchorAt = t;
+  const v = videos[cur];
+  if (!v || v.readyState < 2 || !v.videoWidth) return;
+  const b = alphaBitmap();
+  if (!b || !b.any || !b.img) return;
+  const BW = b.w, BH = b.h, d = b.img.data;
+  const rows = new Array(BH).fill(0);
+  let x0 = BW, y0 = BH, x1 = -1, y1 = -1, maxRow = 0;
+  for (let y = 0; y < BH; y++){
+    let n = 0;
+    for (let x = 0; x < BW; x++){
+      if (d[(y * BW + x) * 4 + 3] > 24){
+        n++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+    rows[y] = n;
+    if (n > maxRow) maxRow = n;
+  }
+  if (x1 < 0) return;
+  const need = Math.max(2, Math.ceil(maxRow * 0.25));
+  let hr = y0;
+  for (let y = y0; y <= y1; y++){ if (rows[y] >= need){ hr = y; break; } }
+  const vr = v.getBoundingClientRect();
+  const wr = { w: innerWidth || 1, h: innerHeight || 1 };
+  let cxV = ((x0 + x1 + 1) / 2) / BW;
+  if (petMirror) cxV = 2 * MIRROR_AXIS - cxV;      // 镜像时按角色中轴翻回去
+  const cx = Math.min(1, Math.max(0, cxV));
+  const head = Math.min(1, Math.max(0, hr / BH));
+  /* 角色矩形用「屏幕 DIP」：Electron 版桌宠窗口铺满工作区，角色在窗口里移动，
+     主进程只拿窗口内归一化会算错位置。screenX/screenY 就是窗口的屏幕坐标。 */
+  const sx = (typeof window.screenX === 'number' ? window.screenX : 0) + vr.left;
+  const sy = (typeof window.screenY === 'number' ? window.screenY : 0) + vr.top;
+  const sig = cx.toFixed(3) + ',' + head.toFixed(3) + ',' +
+              Math.round(sx) + ',' + Math.round(sy) + ',' + Math.round(vr.width) + ',' + Math.round(vr.height);
+  if (sig === islandAnchorSig) return;
+  islandAnchorSig = sig;
+  try {
+    if (window.petHost && window.petHost.islandAnchor) {
+      window.petHost.islandAnchor({
+        cx: cx, head: head,
+        sx: sx, sy: sy, rx: 0, ry: 0, rw: vr.width, rh: vr.height,
+      });
+    }
+  } catch (e) {}
+}
+
 /* ===================== 事件 ===================== */
 /* 监听器登记表：本文件的事件监听都经 on() 登记，页面卸载时统一显式移除。
    （原来完全依赖浏览器回收；桌面版重建宿主/刷新时不希望旧回调还挂在 document 上） */
@@ -3085,6 +3234,14 @@ function bindEvents(){
   //   这一下会落进页面里 → 角色被瞬移过去，误触率极高，用户已要求去掉）
   on(document, 'pointerdown', (e)=>{
     const t = e.target;
+    // 先处理「点空白就收回」：菜单 / 情报面板都不例外（点角色也算菜单外）
+    try {
+      const inSao = !!(t && t.closest && t.closest('#sao'));
+      const inHud = !!(t && t.closest && t.closest('#hud, #hudMini'));
+      const inDock = !!(t && t.closest && t.closest('#dockpan, #dockchip'));
+      if (!inSao && !inDock && SAO.open) closeMenu();
+      if (!inHud && !inDock && window.HUDCTL && HUDCTL.state().open) HUDCTL.close();
+    } catch (err) {}
     if (t && t.closest && (t.closest('#pet') || t.closest('#panel') || t.closest('#menu') || t.closest('#search') || t.closest('#chat') || t.closest('#settings') || t.closest('#envwiz') || t.closest('#sao')
         || t.closest('#dockpan') || t.closest('#dockchip'))) return;
     if (window.DockUI && DockUI.isOpen()) DockUI.close();
@@ -3295,6 +3452,37 @@ function bindEvents(){
     const row=e.target.closest('#saoSub .row');if(row&&!row.disabled)saoRunSub(Number(row.dataset.i));
   });
   on(els.saoList, 'scroll',()=>{if(SAO.open)placeSaoSub();});
+  // 悬停/点击音：统一委托到 #sao（列表、圆钮、子菜单都在里面）
+  // 伪 3D 视差：鼠标在菜单区域内移动 → 整块面板轻微转向（±3°），离开回正
+  let saoTiltRaf = 0, saoTiltPt = null;
+  on(els.sao, 'pointermove', (e) => {
+    saoTiltPt = e;
+    if (saoTiltRaf) return;
+    saoTiltRaf = requestAnimationFrame(() => {
+      saoTiltRaf = 0;
+      if (!saoTiltPt) return;
+      const r = els.sao.getBoundingClientRect();
+      if (!r.width) return;
+      const nx = Math.max(-1, Math.min(1, (saoTiltPt.clientX - (r.left + r.width / 2)) / (r.width / 2)));
+      const ny = Math.max(-1, Math.min(1, (saoTiltPt.clientY - (r.top + r.height / 2)) / (r.height / 2)));
+      const base = els.sao.classList.contains('mirror') ? 4 : -4;
+      els.sao.style.setProperty('--sao-ry', (base + nx * 2).toFixed(2) + 'deg');
+      els.sao.style.setProperty('--sao-rx', (-ny * 2).toFixed(2) + 'deg');
+    });
+  });
+  on(els.sao, 'pointerleave', () => {
+    els.sao.style.setProperty('--sao-ry', els.sao.classList.contains('mirror') ? '4deg' : '-4deg');
+    els.sao.style.setProperty('--sao-rx', '0deg');
+  });
+
+  on(els.sao, 'pointerover', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('.row, .cat')) SFX.play('hover');
+  });
+  on(els.sao, 'click', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('.row, .cat, .sub-head')) SFX.play('click');
+  });
   on(window, 'resize',()=>{if(SAO.open)positionSao();});
   on(document, 'keydown',e=>{
     if(!SAO.open||e.defaultPrevented)return;
@@ -3822,6 +4010,9 @@ window.petAPI = {
     play(id);
   } },
   openChat: ()=> openChat(),
+  openHud: (tab)=> openHub(tab),
+  hudToggle: ()=> setHubOn(!SAO_HUB.on),
+  hudState: ()=> ({ on: SAO_HUB.on, hud: window.HUDCTL ? HUDCTL.state() : null }),
   closeChat: ()=> closeChat(),
   toggleChat: ()=> toggleChat(),
   chatState: ()=>({ open:C.open, busy:C.busy, msgs:C.msgs.length }),
@@ -4078,11 +4269,17 @@ window.addEventListener('dock:state', (e)=>{
 
 window.addEventListener('error', e=>{ window.__petError = (e.message || '') + ' @' + (e.lineno||''); });
 window.addEventListener('unhandledrejection', e=>{ window.__petError = 'Promise: ' + ((e.reason && (e.reason.stack||e.reason.message)) || e.reason); });
-init().then(()=>{ window.__petInitOK = true; })
+init().then(()=>{
+  window.__petInitOK = true;
+  /* 灵动岛锚点：低频上报，主进程做粘滞处理 */
+  setTimeout(() => { try { reportIslandAnchor(true); } catch (e) {} }, 900);
+  setInterval(() => { try { reportIslandAnchor(false); } catch (e) {} }, 700);
+})
       .catch(e=>{ window.__petError = String((e && (e.stack || e.message)) || e); });
 </script>
 <script src="dock.js"></script>
 <script src="persona.js"></script>
+<script src="hud.js"></script>
 </body>
 </html>
 

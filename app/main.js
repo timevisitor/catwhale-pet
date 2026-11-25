@@ -30,6 +30,7 @@ const { createPersonaStore } = require('./persona-store.js');   // 详情卡四�
 const { createStore: createAnimationLoopStore } = require('./animation-loop-config.js');
 /* 本地媒体演出：SMTC 元数据 + WASAPI 出声进程 → 「在看视频 / 在听音乐」 */
 const { createMediaShow, probeScript, probeCs } = require('./media-show.js');
+const { createIsland } = require('./island.js');     // 灵动岛（头顶气泡）
 
 const SOLID = process.argv.includes('--solid');
 const BENCH = process.argv.includes('--bench');
@@ -1608,6 +1609,32 @@ function buildTrayMenu() {
     { label: '⚙ 设置（DeepSeek API / 网址）…', click: () => sendToPage('petAPI.openSettings()') },
     { label: '🩺 环境自检（harness / Everything）…', click: () => sendToPage('petAPI.openEnv()') },
     { label: '🔍 文件搜索…' + hk, click: () => sendToPage('petAPI.openSearch()') },
+    { label: '🧭 情报面板…', click: () => sendToPage('petAPI.openHud()') },
+    { label: '🫧 灵动岛', submenu: (function () {
+        const c = island.cfg();
+        const t = (key, name) => ({
+          label: name + (c[key] ? '：开' : '：关'),
+          type: 'checkbox', checked: !!c[key],
+          click: () => { island.setCfg({ [key]: !c[key] }); if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu()); },
+        });
+        return [
+          t('enabled', '总开关'),
+          { type: 'separator' },
+          t('msg', '消息'),
+          t('music', '音乐（带波形与歌词）'),
+          t('video', '视频'),
+          { type: 'separator' },
+          { label: '预览一条消息', click: () => { try { island.demo('msg'); } catch (e) {} } },
+          { label: '回到桌宠头顶', click: () => { try { island.resetPos(); } catch (e) {} } },
+        ];
+      })() },
+    { label: (infoHub && infoHub.getState().enabled) ? '⏻ 信息中枢：开（点击关闭）' : '⏻ 信息中枢：关（点击开启）',
+      click: async () => {
+        try {
+          await infoHub.setEnabled(!infoHub.getState().enabled);
+          if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu());
+        } catch (e) {}
+      } },
     { label: '🚀 检查新版本…', click: () => {
         sendToPage('petAPI.openSettings()');
         sendToPage('typeof triggerUpdateCheck==="function" && triggerUpdateCheck()');
@@ -2193,6 +2220,115 @@ function saveGameModeAuto(on) {
 ipcMain.handle('gamemode:get', () => ({ active: gameMode.active, reason: gameMode.reason, manual: gameMode.manual,
   auto: gameModeCfg().auto, scans: gameMode.scans, procs: GAME_GUARD_PROCS.concat(gameModeCfg().extra) }));
 
+/* ---------- 信息中枢：剪贴板 / 额度 / 消息 / 天气 / 待办 / 音乐 ----------
+   设计要点：
+   - 全部 source 可选，缺文件/起不来只影响它自己（infoHub 内部兜住），桌宠照常跑；
+   - 弹窗（小卡片）画在主窗里、贴着角色，不另开窗口（主窗本来就铺满工作区）；
+   - 面板（大窗）单独开 BrowserWindow，出问题也只死它自己。 */
+let infoHub = null, hubWin = null;
+/* 灵动岛：独立小窗，挂在桌宠头顶。数据源复用 mediaShow 与 infoHub 的事件，
+   自己只负责「什么时候展开、显示什么、摆哪儿」。 */
+const island = createIsland({
+  getUserData: () => app.getPath('userData'),
+  getPort: () => port,
+  getPetWin: () => win,
+  getMediaState: () => { try { return mediaShow.get(); } catch (e) { return null; } },
+  /* 信息中枢已经开了 winnotify 这一源的话，岛就直接吃 infohub:note，不再另起一个探针 */
+  hasHubNotify: () => {
+    try {
+      const st = infoHub && infoHub.getState ? infoHub.getState() : null;
+      const s = st && (st.sources || []).find((x) => x.name === 'winnotify');
+      return !!(s && s.enabled);
+    } catch (e) { return false; }
+  },
+  log: (m) => console.log(m),
+});
+
+/* 灵动岛启动：绑 IPC、按配置决定跑不跑。
+   岛的「音乐/视频」两路依赖媒体探测进程，所以打开这两项时会把探测拉起来
+   （只改内存里的开关，不动用户设置的 media.show.enabled 文件值）。 */
+function startIsland() {
+  try {
+    island.bindIpc();
+    const c = island.cfg();
+    if (c.enabled && (c.music || c.video)) {
+      try { mediaShow.apply({ enabled: true, pollMs: 600 }); } catch (e) {}
+    }
+    if (c.enabled) island.start();
+    console.log('ISLAND_READY ' + JSON.stringify(c));
+  } catch (e) {
+    console.log('ISLAND_INIT_ERR ' + ((e && e.message) || e));
+  }
+}
+
+function startInfoHub() {
+  try {
+    const { createHub } = require('./infohub');
+    infoHub = createHub({
+      dataDir: app.getPath('userData'),
+      appDir: __dirname,
+      openHub: (tab) => sendToPage('petAPI.openHud(' + JSON.stringify(String(tab || '')) + ')'),
+      emitToUi: (ch, payload) => {
+        send(ch, payload);
+        try { if (ch === 'infohub:note') island.notify(payload); } catch (e) {}
+      },
+      emitToHub: (ch, payload) => { try { if (hubWin && !hubWin.isDestroyed()) hubWin.webContents.send(ch, payload); } catch (e) {} },
+    });
+    infoHub.start()
+      .then(() => {
+        const st = infoHub.getState();
+        console.log('INFOHUB_READY ' + JSON.stringify({ enabled: st.enabled, sources: st.sources.map((s) => s.name + ':' + (s.enabled ? (s.ready ? 'ok' : 'idle') : 'off')) }));
+        // 页面可能比信息中枢先就绪（createWindow 早于 startInfoHub），此时渲染层拿到的是空兜底状态
+        // → 启动完成后主动推一次真实状态，否则菜单/HUD 的总开关会显示成"关"
+        try { send('infohub:enabled', { enabled: st.enabled, state: st }); } catch (e) {}
+      })
+      .catch((e) => console.log('INFOHUB_ERR ' + ((e && e.message) || e)));
+  } catch (e) {
+    console.log('INFOHUB_INIT_ERR ' + ((e && e.message) || e));
+  }
+}
+
+/* 面板现在画在主窗里（贴着角色，SAO 风格 HUD），不再单开窗口。
+   保留 openHubWindow 仅作调试兜底：环境变量 PET_HUB_WINDOW=1 时仍走独立窗口。 */
+function openHubWindow(tab) {
+  try {
+    if (process.env.PET_HUB_WINDOW !== '1') {
+      sendToPage('petAPI.openHud(' + JSON.stringify(String(tab || '')) + ')');
+      return;
+    }
+    if (hubWin && !hubWin.isDestroyed()) {
+      hubWin.show(); hubWin.focus();
+      if (tab) { try { hubWin.webContents.send('infohub:tab', tab); } catch (e) {} }
+      return;
+    }
+    const wa = screen.getPrimaryDisplay().workArea;
+    const w = 470, h = Math.min(660, Math.max(480, wa.height - 80));
+    hubWin = new BrowserWindow({
+      width: w, height: h,
+      x: Math.round(wa.x + (wa.width - w) / 2),
+      y: Math.round(wa.y + (wa.height - h) / 2),
+      frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+      resizable: false, skipTaskbar: false, alwaysOnTop: true, show: false, title: '信息中枢',
+      webPreferences: { preload: path.join(__dirname, 'preload-hub.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    hubWin.setAlwaysOnTop(true, 'normal');
+    hubWin.loadURL(`http://127.0.0.1:${port}/hub.html${tab ? ('?tab=' + encodeURIComponent(tab)) : ''}`);
+    hubWin.once('ready-to-show', () => { if (hubWin && !hubWin.isDestroyed()) hubWin.show(); });
+    hubWin.on('closed', () => { hubWin = null; });
+  } catch (e) {
+    console.log('INFOHUB_WIN_ERR ' + ((e && e.message) || e));
+  }
+}
+
+ipcMain.handle('infohub:state', () => (infoHub ? infoHub.getState() : { enabled: false, sources: [], notes: [], note: {} }));
+ipcMain.handle('infohub:setEnabled', (_e, on) => (infoHub ? infoHub.setEnabled(!!on) : { ok: false, error: '信息中枢未启动' }));
+ipcMain.handle('infohub:do', (_e, action, arg) => (infoHub ? infoHub.doAction(action, arg) : { ok: false, error: '信息中枢未启动' }));
+ipcMain.handle('infohub:noteAction', (_e, id, actionId) => (infoHub ? infoHub.noteAction(id, actionId) : { ok: false, error: '信息中枢未启动' }));
+ipcMain.handle('infohub:snapshots', () => (infoHub ? infoHub.getSnapshots() : {}));
+ipcMain.handle('infohub:notes', () => (infoHub ? infoHub.getState().notes : []));
+ipcMain.handle('infohub:open', (_e, tab) => { openHubWindow(tab); return { ok: true }; });
+ipcMain.handle('infohub:closeWindow', () => { try { if (hubWin && !hubWin.isDestroyed()) hubWin.close(); } catch (e) {} return { ok: true }; });
+
 /* ---------- 生命周期 ---------- */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -2209,7 +2345,9 @@ if (!app.requestSingleInstanceLock()) {
     if (bootGuard.delayMs > 0) await new Promise((r) => setTimeout(r, bootGuard.delayMs));
     await createWindow();
     startAgentDock();                              // Agent 看板：失败只记日志，不影响桌宠启动
+    startInfoHub();                                // 信息中枢：同上，任何源起不来都不影响桌宠
     bootMediaShow();                               // 媒体演出：按保存的开关决定要不要起探测进程
+    startIsland();                                 // 灵动岛：绑定 IPC + 起聚合循环
     watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();
@@ -2813,7 +2951,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.on('window-all-closed', () => { if (quitting || process.platform !== 'darwin') app.quit(); });
-  app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} try { mediaShow.stopAll(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
+  app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} try { mediaShow.stopAll(); } catch (e) {} try { island.stop(); } catch (e) {} try { if (infoHub) infoHub.stop(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
   app.on('will-quit', () => { cancelWindowDisplaySync(); try { globalShortcut.unregisterAll(); } catch (e) {} });
 }
 

@@ -47,3 +47,6 @@ tools/record/
 tools/video/
 HANDOFF_*.md
 app/diag/
+
+# 本机诊断截图/日志（tools/cdp_eval.js 产物）
+diag/

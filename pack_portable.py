@@ -42,7 +42,13 @@ def copy_app_tree(app_dir, APP):
                 "renderer/index.html", "renderer/animation-loop.js", "renderer/emotion.js", "tools/sysinfo.ps1", "harness-sdk/pet-sdk.patch.yml",
                 # 本地媒体演出：探测脚本 + 判定模块（缺任一 → 功能静默失效，所以放进硬性断言）
                 "media-detect.js", "media-show.js", "renderer/media-show-page.js",
-                "media-probe/media_probe.ps1", "media-probe/WasapiProbe.cs"]
+                "media-probe/media_probe.ps1", "media-probe/WasapiProbe.cs",
+                # 信息中枢：面板桥 + 面板页 + 宿主（缺任一 → 菜单打开白屏或事件全丢）
+                "preload-hub.js", "infohub/index.js", "infohub/clipboard.js",
+                "infohub/music.js", "infohub/activate.ps1", "media-probe/media_control.ps1",
+                "infohub/sources/winnotify.js", "infohub/sources/winnotify_probe.ps1",
+                "renderer/hud.css", "renderer/hud.js",
+                "renderer/hub.html", "renderer/hub.js"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:
         sys.exit("打包失败：应用缺少必需文件 " + ", ".join(missing))
@@ -82,6 +88,23 @@ def main():
 
 快捷键：Ctrl+Shift+D 聊天 · Ctrl+Shift+F 文件搜索 · Esc 关面板
 DeepSeek 聊天要自己在“设置”里填 API key；文件搜索需要本机装 Everything。
+
+信息中枢（新）：
+  入口：右键角色 → 工具 → 信息中枢（开关）/ 打开情报面板；托盘菜单里也有开关。
+  它是一个可以整体关掉的模块：关掉后所有来源停止、不再弹卡片、常驻小条消失。
+  开启后面板贴着角色浮出（四角括号 + 浅金细线，SAO 同款），常驻小条显示 消息/待办/专注/余额。
+  面板 9 页：消息 / 额度 / 待办 / 天气 / 邮件 / 日历 / 音乐 / 剪贴板 / 设置。
+  消息来源全部是非侵入的（不登录第三方协议、不读数据库）：
+    · 桌面消息（通知中心）  读 Windows 通知中心，按应用过滤 微信/QQ/飞书/钉钉/企微
+        - 微信需要在微信里开「设置 → 通知 → 新消息通知」，并在 Windows 允许应用访问通知
+        - 发消息的软件自己没推系统通知时，这里读不到（不是程序坏了）
+    · 飞书消息   也可走本机 lark-cli（需先 lark-cli auth login），默认关
+    · 邮箱验证码 填 IMAP 服务器 + 授权码（QQ 邮箱要在网页版开启 IMAP）
+    · AI 额度    填 DeepSeek / Pure Tokens 的 key，或从 Hermes 的 config.yaml 自动读
+    · 天气 / 待办 / 专注 / 喝水 / 音乐 / 剪贴板  默认已开，无需配置
+  弹窗贴着角色出现；鼠标移上去才能点按钮，其余时间完全穿透。
+  设置页有「试一下弹窗」按钮，可先确认链路。
+  配置在 %APPDATA% 的「桌宠」文件夹里：infohub.json（授权码/密钥用系统 DPAPI 单独加密）
 
 退出：托盘图标右键 → 退出桌宠（或任务管理器结束 桌宠.exe）。
 配置：位置/大小会自动记住，存在 %APPDATA%\\桌宠\\pet-state.json。

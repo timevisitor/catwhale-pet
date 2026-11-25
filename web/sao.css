@@ -173,3 +173,200 @@
   #sao { --sao-cat-d:36px; --sao-cat-gap:42px; --sao-row-h:36px; }
   #saoCats .axis { top:18px; bottom:18px; }
 }
+
+/* ===================================================================
+   v3 打磨：参考 SAO Utils 2 启动器控制台（Steam 877280 官方截图）
+   —— 切角板材 + 发丝描边的控制台感、金色楔形选中、四角括号、去浮空三角
+   只覆盖材质与选中态，不动布局与间距（行高/圆钮间距仍一一对齐）
+   =================================================================== */
+
+/* 1. 列表行 / 子菜单头：从“卡片贴纸”改成控制台板材 */
+#sao .row, #sao .sub-head{
+  border:0; border-radius:0;
+  background:linear-gradient(180deg, rgba(252,253,249,.965) 0%, rgba(243,246,239,.945) 100%);
+  box-shadow:
+    0 0 0 1px rgba(90,100,92,.22),
+    inset 0 1px 0 rgba(255,255,255,.92),
+    0 6px 18px rgba(0,0,0,.10);
+  clip-path:polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  position:relative;
+}
+#sao .row:hover, #sao .sub-head:hover{
+  background:linear-gradient(180deg, #FFFDF4 0%, #FFF6D6 100%);
+  box-shadow:0 0 0 1px rgba(200,150,22,.55), inset 0 1px 0 rgba(255,255,255,.9), 0 6px 18px rgba(0,0,0,.10);
+}
+/* 选中：整条金色楔形带 + 左侧深金竖脊（对应 SAO 的蓝色选中条） */
+#sao .row.on{
+  background:linear-gradient(180deg, #F9D04A 0%, #F3C024 55%, #EFB714 100%);
+  color:#4A3A0C;
+  box-shadow:0 0 0 1px rgba(160,116,10,.6), inset 0 1px 0 rgba(255,255,255,.5), 0 6px 20px rgba(160,116,10,.20);
+}
+#sao .row.on::after{
+  content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:linear-gradient(180deg, #B7860F, #8E6608);
+}
+#sao .row.on svg{ color:#5A460D; }
+#sao .row:active{ background:linear-gradient(180deg,#EBB81C,#E2AC10); }
+#sao .sub-head{ border-bottom:0; box-shadow:0 0 0 1px rgba(90,100,92,.22) inset, 0 0 0 1px rgba(90,100,92,.22), 0 4px 12px rgba(0,0,0,.09); }
+
+/* 2. 分类圆钮：做成有厚度的球，选中=金球+深金环+外发光 */
+#saoCats .cat{
+  border:0;
+  background:radial-gradient(circle at 50% 30%, #FFFFFF 0%, #F4F6F0 48%, #E1E6DD 100%);
+  box-shadow:0 0 0 1px rgba(90,100,92,.30), 0 3px 10px rgba(0,0,0,.18), inset 0 -1px 2px rgba(90,100,92,.12);
+}
+#saoCats .cat::before{ inset:0; border:0; background:transparent; }
+#saoCats .cat svg{ color:#5F6B63; }
+#saoCats .cat:hover{ box-shadow:0 0 0 1px rgba(200,150,22,.5), 0 3px 12px rgba(0,0,0,.18); }
+#saoCats .cat.on{
+  background:radial-gradient(circle at 50% 28%, #FFE9A0 0%, #F6C62E 52%, #DFA70E 100%);
+  box-shadow:0 0 0 1.5px #AC7D0C, 0 0 9px rgba(246,198,46,.40), 0 3px 8px rgba(0,0,0,.18);
+}
+#saoCats .cat.on svg{ color:#FFFDF0; }
+/* 选中圆钮朝列表伸一根金色引线（替代原先的白色浮空三角） */
+#saoCats .cat-tri{ display:none; }
+#saoCats .cat.on::after{
+  content:''; position:absolute; right:100%; top:50%; width:12px; height:1px;
+  background:linear-gradient(90deg, rgba(200,150,22,.15), rgba(172,125,12,.85));
+}
+#sao.mirror #saoCats .cat.on::after{ right:auto; left:100%; background:linear-gradient(270deg, rgba(200,150,22,.15), rgba(172,125,12,.85)); }
+
+/* 3. 详情卡：切角 + 四角金括号，去掉右缘那块浮空三角 */
+#saoCard{
+  outline:0; background:linear-gradient(180deg, rgba(247,249,244,.96) 0%, rgba(237,240,233,.95) 100%);
+  box-shadow:0 0 0 1px rgba(90,100,92,.26), 0 14px 34px rgba(0,0,0,.20), 0 2px 8px rgba(0,0,0,.08);
+  clip-path:polygon(0 0, calc(100% - 13px) 0, 100% 13px, 100% 100%, 13px 100%, 0 calc(100% - 13px));
+}
+#saoCard .cd-tri{ display:none; }
+#saoCard::before{
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:3;
+  background:
+    linear-gradient(#F6C62E,#F6C62E) 17px 11px/12px 1px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) 17px 11px/1px 12px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) calc(100% - 29px) 11px/12px 1px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) calc(100% - 18px) 11px/1px 12px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) 17px calc(100% - 12px)/12px 1px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) 17px calc(100% - 23px)/1px 12px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) calc(100% - 29px) calc(100% - 12px)/12px 1px no-repeat,
+    linear-gradient(#F6C62E,#F6C62E) calc(100% - 18px) calc(100% - 23px)/1px 12px no-repeat;
+  opacity:.85;
+}
+/* 标题：小字距 + 金色发丝线，去“方块图标”的重感 */
+#saoCard .cd-title{
+  font-size:12.5px; font-weight:600; letter-spacing:.16em; color:#4E574F;
+  padding:16px 16px 10px;
+}
+#saoCard .cd-title svg{ width:15px; height:15px; color:#AC7D0C; }
+#saoCard .cd-rule{
+  height:1px; margin:0 16px;
+  background:linear-gradient(90deg, rgba(172,125,12,.75), rgba(172,125,12,.12) 55%, rgba(172,125,12,0));
+}
+
+/* 4. 角色水印压淡（原来 .36 会像污渍浮在数字后面） */
+#saoCard .cd-preview .cd-char{ opacity:.075; filter:saturate(.85) brightness(1.06) blur(.6px); }
+#saoCard .cd-preview .cd-char-veil{
+  background:
+    radial-gradient(ellipse 72% 60% at 50% 46%, rgba(248,249,245,.55) 0%, rgba(248,249,245,.14) 60%, rgba(248,249,245,0) 80%),
+    linear-gradient(180deg, rgba(248,249,245,.5) 0%, rgba(248,249,245,.08) 32%, rgba(248,249,245,0) 58%, rgba(248,249,245,.34) 100%);
+}
+
+/* 5. 四格读数：去掉块与块之间的立体阴影，用发丝线分隔（更像仪表盘） */
+#cdMarks .mk{
+  background:rgba(250,251,247,.72);
+  border:0; border-left:0;
+  box-shadow:inset 1px 0 0 rgba(90,100,92,.16), inset 0 1px 0 rgba(255,255,255,.85);
+  border-radius:0;
+  padding-left:13px;
+}
+#cdMarks .mk:nth-child(odd){ box-shadow:inset 0 1px 0 rgba(255,255,255,.85); }
+/* 每一行留一条极淡的横向发丝线，把四格格成仪表盘而不是四张卡 */
+#cdMarks .mk:nth-child(-n+2){ border-bottom:1px solid rgba(90,100,92,.14); }
+#cdMarks .mk-label{ letter-spacing:1.2px; font-size:9.5px; }
+#cdMarks .mk-val{ font-size:19px; }
+#cdMarks .mk-bar{ height:4px; }
+
+/* 6. 动画：级联入场（MC 版 SAO Menu 的做法）+ 菜单整体浮动
+   —— 只在打开后 700ms 内加 .enter，避免切换分类重渲染时反复抖 */
+#sao.show.enter #saoList .row,
+#sao.show.enter #saoSub .row,
+#sao.show.enter #saoSub .sub-head {
+  animation:sao-row-in .30s cubic-bezier(.2,.8,.2,1) both;
+}
+#sao.show.enter #saoList .row:nth-child(1){ animation-delay:.00s }
+#sao.show.enter #saoList .row:nth-child(2){ animation-delay:.035s }
+#sao.show.enter #saoList .row:nth-child(3){ animation-delay:.07s }
+#sao.show.enter #saoList .row:nth-child(4){ animation-delay:.105s }
+#sao.show.enter #saoList .row:nth-child(5){ animation-delay:.14s }
+#sao.show.enter #saoList .row:nth-child(n+6){ animation-delay:.17s }
+#sao.show.enter #saoSub .row:nth-child(1){ animation-delay:.10s }
+#sao.show.enter #saoSub .row:nth-child(2){ animation-delay:.135s }
+#sao.show.enter #saoSub .row:nth-child(3){ animation-delay:.17s }
+#sao.show.enter #saoSub .row:nth-child(4){ animation-delay:.205s }
+#sao.show.enter #saoSub .row:nth-child(n+5){ animation-delay:.23s }
+@keyframes sao-row-in{
+  from{ opacity:0; translate:-16px 0; }
+  to  { opacity:1; translate:0 0; }
+}
+#sao.mirror.show.enter #saoList .row,
+#sao.mirror.show.enter #saoSub .row{ animation-name:sao-row-in-m; }
+@keyframes sao-row-in-m{
+  from{ opacity:0; translate:16px 0; }
+  to  { opacity:1; translate:0 0; }
+}
+/* 整体轻微浮动（原作菜单是“悬停在空中”的，静止会显得贴纸化） */
+#sao.show{ animation:sao-float 5.2s ease-in-out infinite; }
+@keyframes sao-float{ 0%,100%{ translate:0 0 } 50%{ translate:0 -3px } }
+@media (prefers-reduced-motion:reduce){ #sao.show{ animation:none } }
+#sao:hover{ animation-play-state:paused; }
+
+/* 7. 子菜单入口：▸ 变成「连接环 + 箭头」（参考 SAO-World 的 ◀ 尾巴与连接环） */
+#sao .row .sub-arw{
+  width:14px; height:14px; border-radius:50%;
+  border:1px solid rgba(172,125,12,.55);
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:8px; line-height:1; color:#AC7D0C;
+  background:rgba(255,255,255,.45);
+}
+#sao .row.on .sub-arw{ border-color:rgba(90,60,10,.7); color:#4A3A0C; background:rgba(255,255,255,.4); }
+#sao .row:hover .sub-arw{ border-color:#C89716; color:#8E6608; }
+
+/* 8. 伪 3D：整列作为一块面板绕 Y 轴轻微后仰（不是每行单独转，否则会像纸牌扇开）
+   配合鼠标视差（见 index.html 的 pointermove），平面上做出纵深 */
+#sao{ perspective:1600px; }
+#sao.show #saoList, #sao.show #saoSub, #sao.show #saoCard, #sao.show #saoCats{
+  transform:rotateY(var(--sao-ry,-4deg)) rotateX(var(--sao-rx,0deg));
+  transform-style:preserve-3d;
+  transition:transform .22s cubic-bezier(.2,.8,.2,1);
+  will-change:transform;
+}
+#sao.mirror{ --sao-ry:4deg; }
+/* 卡片作为“最靠近眼睛”的一层，给它更长的落影 + 内侧底部暗角，拉开层次 */
+#sao.show #saoCard{
+  box-shadow:
+    0 0 0 1px rgba(90,100,92,.28),
+    inset 0 1px 0 rgba(255,255,255,.95),
+    inset 0 -22px 34px -26px rgba(60,70,64,.5),
+    0 4px 10px rgba(0,0,0,.16),
+    0 34px 64px -26px rgba(0,0,0,.5);
+}
+/* 列表/子菜单稍微“退后”一层：投影更小、亮度略降，产生前后景差 */
+#sao.show #saoList .row, #sao.show #saoSub .row{
+  box-shadow:
+    0 0 0 1px rgba(90,100,92,.20),
+    inset 0 1px 0 rgba(255,255,255,.88),
+    0 4px 12px rgba(0,0,0,.09);
+}
+@media (prefers-reduced-motion:reduce){
+  #sao.show #saoList, #sao.show #saoSub, #sao.show #saoCard, #sao.show #saoCats{ transform:none!important }
+}
+
+/* 9. 关闭动效：向角色方向缩回 + 淡出（150ms，和 .out 类配合） */
+#sao.out{
+  animation:none!important;
+  opacity:0;
+  transition:opacity .15s ease-in, translate .15s ease-in;
+  translate:0 6px;
+}
+#sao.out #saoCard, #sao.out #saoList, #sao.out #saoSub, #sao.out #saoCats{ transition:transform .15s ease-in; }
+#sao.out #saoCard, #sao.out #saoList, #sao.out #saoCats{ scale:.985; }
+@media (prefers-reduced-motion:reduce){ #sao.out{ transition:none } }

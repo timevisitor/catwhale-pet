@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('petHost', {
   /* ---- 键盘输入：搜索框打开时抢焦点，关闭时还回去 ---- */
   focusWindow: (on) => ipcRenderer.send('pet:focus', !!on),
 
+  /* ---- 灵动岛：把「桌宠头顶」锚点喂给主进程（岛挂在头顶靠它定位）---- */
+  islandAnchor: (a) => ipcRenderer.send('island:anchor-raw', a),
+
   /* ---- 全局热键唤起搜索框（主进程 → 页面）---- */
   onOpenSearch: (cb) => {
     const h = () => { try { cb(); } catch (e) {} };
@@ -154,6 +157,36 @@ contextBridge.exposeInMainWorld('petHost', {
     const h = (_e, info) => { try { cb(info); } catch (e) {} };
     ipcRenderer.on('app:update-available', h);
     return () => ipcRenderer.removeListener('app:update-available', h);
+  },
+
+  /* ---- 信息中枢：弹窗事件 + 面板 ---- */
+  hub: {
+    open: (tab) => ipcRenderer.invoke('infohub:open', tab || ''),
+    state: () => ipcRenderer.invoke('infohub:state'),
+    setEnabled: (on) => ipcRenderer.invoke('infohub:setEnabled', !!on),
+    do: (action, arg) => ipcRenderer.invoke('infohub:do', action, arg),
+    noteAction: (id, actionId) => ipcRenderer.invoke('infohub:noteAction', id, actionId),
+    snapshots: () => ipcRenderer.invoke('infohub:snapshots'),
+    onNote: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('infohub:note', h);
+      return () => ipcRenderer.removeListener('infohub:note', h);
+    },
+    onSnapshot: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('infohub:snapshot', h);
+      return () => ipcRenderer.removeListener('infohub:snapshot', h);
+    },
+    onEnabled: (cb) => {
+      const h = (_e, v) => { try { cb(v); } catch (e) {} };
+      ipcRenderer.on('infohub:enabled', h);
+      return () => ipcRenderer.removeListener('infohub:enabled', h);
+    },
+    onOpenHud: (cb) => {
+      const h = (_e, tab) => { try { cb(tab); } catch (e) {} };
+      ipcRenderer.on('infohud:open', h);
+      return () => ipcRenderer.removeListener('infohud:open', h);
+    }
   },
 
   /* ---- 面板打开状态 → 主进程据此临时注册全局 Esc ---- */
