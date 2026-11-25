@@ -659,6 +659,17 @@
         ts: Date.now() - 3 * 60 * 1000, count: 3
       }
     },
+    agent: {
+      mode: 'agent', pinned: false,
+      agent: { agent: 'Claude Code', label: '正在干活', state: 'working', busy: true,
+        detail: '重构图片批处理的脚本 · 第 3 步', count: 2 }
+    },
+    info: {
+      mode: 'info', pinned: false, badge: 5,
+      info: { todoOpen: 3, todoTotal: 5, nextTodo: '把周报发给组里', calCount: 2,
+        nextCal: '14:30 例会', unread: 4, weather: { city: '杭州', temp: 7, text: '阴' } },
+      agent: { agent: 'Claude Code', label: '正在干活' }
+    },
     video: {
       mode: 'video', pinned: false,
       video: {

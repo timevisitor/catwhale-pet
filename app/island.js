@@ -117,6 +117,9 @@ function createIsland(deps) {
   /* Agent 看板快照 / 信息中枢摘要：这两块原来各有一个贴在角色旁边的小窗，
      和胶囊抢同一片屏幕 —— 现在统一并进胶囊，页面里那两个浮层关掉。 */
   let agentSnap = null, agentAt = 0, infoOpen = false;
+  /* 自动截图/自检时用：冻结若干毫秒，期间不再把实时状态推给页面，
+     这样页面里手工 render 的状态不会被 500ms 一次的推送冲掉。 */
+  let frozenUntil = 0;
   const lyricCache = new Map();    // key -> {lines:[[ms,text]]} | null
 
   /* ---------------- Agent 看板 ---------------- */
@@ -528,6 +531,7 @@ function createIsland(deps) {
 
   /* ---------------- 主循环 ---------------- */
   function tick() {
+    if (Date.now() < frozenUntil) return;
     try {
       if (!cfg.enabled) { hide(); return; }
       const pet = petBounds();
@@ -566,10 +570,14 @@ function createIsland(deps) {
     }),
     'island:set': (_e, patch) => noteCfg(patch),
     'island:cmd': (_e, cmd) => {
-      const c = String(cmd || '');
+      /* 页面用 islandInvoke('island_cmd', 'pin') 传字符串，也有地方传 {cmd:'pin'} —— 两种都认 */
+      const c = typeof cmd === 'string' ? cmd : String((cmd && cmd.cmd) || '');
       if (c === 'expand') { hiddenUntil = 0; show(); }
       else if (c === 'pin') { pinned = !pinned; hiddenUntil = 0; }
       else if (c === 'dismiss') { pinned = false; hiddenUntil = Date.now() + 60000; hide(); }
+      /* 截图/自检：冻结推送，页面里手工 render 的状态才不会被 500ms 一次的实时数据冲掉 */
+      else if (c === 'freeze') { frozenUntil = Date.now() + 120000; hiddenUntil = 0; show(); }
+      else if (c === 'unfreeze') { frozenUntil = 0; }
       return { ok: true, pinned };
     },
     'island:demo': (_e, what) => {
