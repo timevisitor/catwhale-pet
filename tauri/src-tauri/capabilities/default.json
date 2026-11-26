@@ -8,7 +8,8 @@
     "panel",
     "search",
     "chat",
-    "walk-select"
+    "walk-select",
+    "island"
   ],
   "permissions": [
     "core:default",

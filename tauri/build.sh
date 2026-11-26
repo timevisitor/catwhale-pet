@@ -12,6 +12,13 @@ if [ ! -d "frontend/assets" ] || [ -z "$(ls -A frontend/assets 2>/dev/null)" ]; 
   mkdir -p frontend/assets || exit 1
   cp "$HERE/../web/assets/video/"*.webm frontend/assets/ || { echo "复制回落视频失败"; exit 1; }
 fi
+# 仓库里只入库了 walk_left/walk_right 两段，其余 26 段要补齐；
+# 只补缺失的，不覆盖已有文件。
+for f in "$HERE/../web/assets/video/"*.webm; do
+  [ -e "$f" ] || continue
+  base=$(basename "$f")
+  [ -f "frontend/assets/$base" ] || cp "$f" "frontend/assets/$base" || exit 1
+done
 
 # 逐个核对 index.html 里引用的每个 assets/*.webm 是否真在 frontend/assets。
 # 少了任何一个，前端只会静默 404（video error → 兜底动作），界面上不报错，
@@ -34,7 +41,7 @@ fi
 # 否则 PE .rdata 增加约 65 MiB。构建路径必须是纯 ASCII，mingw 的 ld 处理中文路径会失败。
 EMBED="$HERE/frontend-embed"
 mkdir -p "$EMBED" || exit 1
-cp frontend/index.html frontend/sao.html frontend/panel.html frontend/search.html frontend/chat.html frontend/walk-select.html "$EMBED/" || exit 1
+cp frontend/index.html frontend/sao.html frontend/panel.html frontend/search.html frontend/chat.html frontend/walk-select.html frontend/island.html "$EMBED/" || exit 1
 
 cd "$HERE/src-tauri" || exit 1
 TARGET_DIR="${CARGO_TARGET_DIR:-$HERE/src-tauri/target}"

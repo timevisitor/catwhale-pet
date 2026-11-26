@@ -8,7 +8,10 @@ mod everything;
 mod feature_config;
 mod gamemode;
 mod harness;
+mod island;
 mod media;
+mod notify;
+mod info;
 mod persona;
 mod sysinfo;
 mod update;
@@ -174,6 +177,8 @@ fn apply_size(win: &WebviewWindow, h: i32) {
     let new_x = old_pos.x + (old_size.width as i32 - new_w) / 2;
     let new_y = old_pos.y + old_size.height as i32 - new_h;
     let _ = win.set_position(PhysicalPosition::new(new_x, new_y));
+    // 尺寸变了 → 锚点在物理坐标里也变了，让灵动岛跟着重算（事件驱动，不轮询）
+    island::pet_moved(win.app_handle());
 }
 
 fn park_bottom_right(win: &WebviewWindow, h: i32) {
@@ -186,6 +191,7 @@ fn park_bottom_right(win: &WebviewWindow, h: i32) {
     let x = wa.position.x + wa.size.width as i32 - w - MARGIN;
     let y = wa.position.y + wa.size.height as i32 - hh - MARGIN;
     let _ = win.set_position(PhysicalPosition::new(x, y));
+    island::pet_moved(win.app_handle());
 }
 
 #[tauri::command]
@@ -195,15 +201,27 @@ fn set_role_rect(pet: tauri::State<'_, Pet>, x: f64, y: f64, w: f64, h: f64) {
 
 /// 前端上传命中网格：w/h 网格尺寸，bbox 归一化包围盒，data 为 w*h 个 0/1 字节（base64 前按原始字节传）
 #[tauri::command]
-fn set_hit_grid(pet: tauri::State<'_, Pet>, w: u32, h: u32, bbox: Vec<f64>, data: Vec<u8>) {
+fn set_hit_grid(
+    app: AppHandle,
+    pet: tauri::State<'_, Pet>,
+    w: u32,
+    h: u32,
+    bbox: Vec<f64>,
+    data: Vec<u8>,
+) {
     if w == 0 || h == 0 || w > 512 || h > 512 || data.len() != (w * h) as usize || bbox.len() != 4 {
         return;
     }
+    // 逐像素 alpha 网格顺带喂给灵动岛：它拿「头顶」（跳过呆毛）当跟随锚点
+    island::note_pet_box(&bbox, w, h, &data);
     let mut g = pet.grid.lock().unwrap();
     g.w = w;
     g.h = h;
     g.bbox = [bbox[0], bbox[1], bbox[2], bbox[3]];
     g.data = data;
+    drop(g);
+    // 姿态/皮肤换帧可能让锚点重定，顺便让岛对齐一次
+    island::pet_moved(&app);
 }
 
 
@@ -314,6 +332,8 @@ fn skin_set(app: AppHandle, slug: String) -> Result<(), String> {
         serde_json::json!({ "slug": slug }).to_string(),
     )
     .map_err(|e| e.to_string())?;
+    // 换皮肤 → 角色轮廓变了，锚点必须重新采样（否则气泡还挂在旧头顶）
+    island::reset_anchor();
     let _ = app.emit("skin:changed", &slug);
     Ok(())
 }
@@ -1439,6 +1459,7 @@ fn sao_action(app: AppHandle, action: String, arg: Option<serde_json::Value>) ->
                             let y = a.position.y + a.size.height as i32 - hh - MARGIN;
                             let _ = w.set_position(PhysicalPosition::new(x, y));
                             walk::clamp_window(&app);
+                            island::pet_moved(&app);
                             if let Some(pet) = app.try_state::<Pet>() {
                                 let mut c = pet.cfg.lock().unwrap();
                                 if let Ok(p) = w.outer_position() {
@@ -1632,6 +1653,8 @@ fn drag_begin(win: WebviewWindow, pet: tauri::State<'_, Pet>) {
                 let dx = (c.x - start_cur.x).round() as i32;
                 let dy = (c.y - start_cur.y).round() as i32;
                 let _ = w.set_position(PhysicalPosition::new(start_win.x + dx, start_win.y + dy));
+                // 与自动行走共用同一个跟随源：岛按「存储偏移」贴上来（channel 会合并连发）
+                island::pet_moved(&app);
                 tick = tick.wrapping_add(1);
                 if tick % 10 == 0 {
                     sync_float_mirror(&app);
@@ -1655,6 +1678,7 @@ fn drag_begin(win: WebviewWindow, pet: tauri::State<'_, Pet>) {
             }
         }
         sync_float_mirror(&app);
+        island::pet_moved(&app);
     });
 }
 
@@ -1809,6 +1833,9 @@ fn main() {
             #[cfg(windows)]
             install_keyboard_hook(app.handle());
             media::media_init(app.handle());
+            // 灵动岛：建窗（隐藏）+ 启动唯一的跟随搬运线程。必须在 walk_init 之后，
+            // 这样自动行走的第一帧位移就有地方投递。
+            island::island_init(app.handle());
             dock::dock_init(app.handle());
             gamemode::gamemode_init(app.handle());
             watch_game_mode(app.handle());
@@ -2041,6 +2068,18 @@ fn main() {
             walk::walk_stop,
             walk::walk_debug,
             drag_begin,
+            island::island_get,
+            island::island_set,
+            island::island_cmd,
+            island::island_demo,
+            island::island_reset_pos,
+            island::island_drag_begin,
+            island::island_stat,
+            island::island_set_offset,
+            island::notify_probe,
+            island::notify_request_access,
+            info::info_get,
+            info::info_set,
             skin_list,
             skin_load,
             builtin_asset_dir,

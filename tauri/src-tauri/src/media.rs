@@ -64,6 +64,8 @@ struct MediaInfo {
     source: String,
     confidence: String,
     since: u64,
+    pos: Option<f64>,
+    end: Option<f64>,
 }
 
 impl MediaInfo {
@@ -81,6 +83,8 @@ impl MediaInfo {
             source: decision.source.clone(),
             confidence: decision.confidence.clone(),
             since: epoch_ms(),
+            pos: decision.pos,
+            end: decision.end,
         }
     }
 
@@ -100,6 +104,8 @@ impl MediaInfo {
         self.peak = decision.peak;
         self.source = decision.source.clone();
         self.confidence = decision.confidence.clone();
+        self.pos = decision.pos;
+        self.end = decision.end;
         changed
     }
 }
@@ -245,6 +251,20 @@ fn runtime(app: &AppHandle) -> &'static Runtime {
 /// With the default configuration this only reads JSON; it starts no process.
 pub fn media_init(app: &AppHandle) {
     let _ = runtime(app);
+}
+
+/// 给灵动岛用的只读快照：不需要 AppHandle，直接读进程内运行时。
+pub fn snapshot_for_island() -> Value {
+    let Some(rt) = RUNTIME.get() else {
+        return json!({ "playing": false, "kind": "", "info": Value::Null });
+    };
+    let inner = lock(&rt.inner);
+    let st = inner.state.snapshot(&inner.cfg);
+    json!({
+        "playing": st.playing,
+        "kind": st.kind.clone().unwrap_or_default(),
+        "info": st.info,
+    })
 }
 
 #[tauri::command]
@@ -1100,6 +1120,9 @@ struct Decision {
     pb_type: String,
     peak: f64,
     confidence: String,
+    /// 播放位置/总时长（秒）。只有 SMTC 会话带 timeline 时才有值，网易云这类没有。
+    pos: Option<f64>,
+    end: Option<f64>,
 }
 
 impl Decision {
@@ -1117,6 +1140,8 @@ impl Decision {
             pb_type: String::new(),
             peak: 0.0,
             confidence: "none".into(),
+            pos: None,
+            end: None,
         }
     }
 }
@@ -1131,6 +1156,8 @@ struct Session {
     pb_type: String,
     genres: Vec<String>,
     win: String,
+    pos: Option<f64>,
+    end: Option<f64>,
 }
 
 impl Session {
@@ -1161,6 +1188,8 @@ impl Session {
                     win
                 }
             },
+            pos: value.get("pos").and_then(Value::as_f64),
+            end: value.get("end").and_then(Value::as_f64),
         }
     }
 }
@@ -1263,6 +1292,8 @@ fn decide(sample: &Value) -> Decision {
                     pb_type: session.pb_type.clone(),
                     peak: wasapi.peak,
                     confidence: "high".into(),
+                    pos: session.pos,
+                    end: session.end,
                 };
             }
         }
@@ -1279,6 +1310,9 @@ fn decide(sample: &Value) -> Decision {
             continue;
         }
         let loose = smtc.iter().find(|s| session_matches(s, wasapi));
+        // 网易云这类不注册 SMTC 的播放器：smtc 里根本没有它的会话，
+        // 歌名/歌手只能从窗口标题里取（实测主窗标题就是「歌名 - 歌手」）。
+        let (win_title, win_artist) = parse_window_meta(&wasapi.win, &wasapi.proc_name);
         return Decision {
             playing: true,
             kind: kind.into(),
@@ -1286,12 +1320,20 @@ fn decide(sample: &Value) -> Decision {
             app: wasapi.proc_name.clone(),
             proc: wasapi.proc_name.clone(),
             pid: Some(wasapi.pid),
-            title: loose.map(|s| s.title.clone()).unwrap_or_default(),
-            artist: loose.map(|s| s.artist.clone()).unwrap_or_default(),
+            title: loose
+                .map(|s| s.title.clone())
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or(win_title),
+            artist: loose
+                .map(|s| s.artist.clone())
+                .filter(|a| !a.trim().is_empty())
+                .unwrap_or(win_artist),
             album: loose.map(|s| s.album.clone()).unwrap_or_default(),
             pb_type: loose.map(|s| s.pb_type.clone()).unwrap_or_default(),
             peak: wasapi.peak,
             confidence: "medium".into(),
+            pos: loose.and_then(|s| s.pos),
+            end: loose.and_then(|s| s.end),
         };
     }
 
@@ -1309,6 +1351,8 @@ fn decide(sample: &Value) -> Decision {
         pb_type: String::new(),
         peak: loudest.peak,
         confidence: "low".into(),
+        pos: None,
+        end: None,
     }
 }
 
@@ -1336,6 +1380,75 @@ fn pick_audio(value: &Value) -> Option<AudioSession> {
         active: peak >= PEAK_MIN,
         win: string(value, "win"),
     })
+}
+
+/// 从窗口标题里抠「歌名 - 歌手」。
+///
+/// 只有 SMTC 缺位（网易云音乐等）时才用。规则：
+/// - 掐掉尾部 "- 网易云音乐" / "- QQ音乐" 之类应用名尾巴（真实标题里常见）；
+/// - 纯应用名（"网易云音乐"）返回空，别把应用名当歌名；
+/// - 按 " - " 切两段：左歌名右歌手；只有一段就只当歌名。
+fn parse_window_meta(win: &str, proc_name: &str) -> (String, String) {
+    let mut s = win.trim().to_string();
+    if s.is_empty() {
+        return (String::new(), String::new());
+    }
+    const SUFFIXES: &[&str] = &[
+        " - 网易云音乐",
+        "- 网易云音乐",
+        " - QQ音乐",
+        "- QQ音乐",
+        " - 酷狗音乐",
+        "- 酷狗音乐",
+        " - 酷我音乐",
+        " - 咪咕音乐",
+    ];
+    for suffix in SUFFIXES {
+        if let Some(rest) = s.strip_suffix(suffix) {
+            s = rest.trim().to_string();
+        }
+    }
+    const PREFIXES: &[&str] = &["网易云音乐 ", "QQ音乐 ", "酷狗音乐 ", "酷我音乐 "];
+    for prefix in PREFIXES {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.trim().to_string();
+        }
+    }
+    if s.is_empty() {
+        return (String::new(), String::new());
+    }
+    let bare = norm(&s);
+    if bare.is_empty()
+        || bare == norm(proc_name)
+        || [
+            "网易云音乐",
+            "qq音乐",
+            "酷狗音乐",
+            "酷我音乐",
+            "咪咕音乐",
+            "cloudmusic",
+            "qqmusic",
+            "kugou",
+            "kuwo",
+        ]
+        .contains(&bare.as_str())
+    {
+        return (String::new(), String::new());
+    }
+    for sep in [" - ", " – ", " — "] {
+        if let Some((left, right)) = s.split_once(sep) {
+            let left = left.trim();
+            let right = right.trim();
+            if !left.is_empty() && !right.is_empty() && left.chars().count() <= 120 {
+                return (left.to_string(), right.to_string());
+            }
+        }
+    }
+    if s.chars().count() > 1 {
+        (s, String::new())
+    } else {
+        (String::new(), String::new())
+    }
 }
 
 fn classify_session(session: &Session) -> &'static str {

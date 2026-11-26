@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>island</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
+    -webkit-user-select:none;user-select:none;cursor:default;
+    font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    color:#E8EDF2;-webkit-font-smoothing:antialiased}
+  #stage{position:fixed;left:0;top:0;width:100%;height:100%;overflow:hidden}
+
+  /* ================= 形变主体 ================= */
+  #isl{position:absolute;left:var(--content-x,50%);top:8px;
+    width:56px;height:56px;border-radius:28px;
+    transform:translateX(-50%) scale(var(--sc,1));
+    overflow:hidden;cursor:pointer;will-change:width,height;
+    /* 底色常驻在主体上：形变过程中不会出现「半透明灰板」的过渡帧 */
+    background:rgba(10,13,18,.82);
+    box-shadow:0 6px 22px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.06);
+    transition:width .32s cubic-bezier(.22,1.2,.36,1),
+               height .32s cubic-bezier(.22,1.2,.36,1),
+               border-radius .32s cubic-bezier(.22,1.2,.36,1),
+               box-shadow .32s ease,transform .18s ease}
+  #isl.idle:hover{--sc:1.06}
+  /* 气泡尖角：朝下指向桌宠，像对话泡泡 */
+  #isl::after{content:'';position:absolute;left:var(--tail-x,50%);bottom:-5px;width:12px;height:12px;
+    margin-left:-6px;transform:rotate(45deg);border-radius:3px;
+    background:rgba(10,13,18,.82);opacity:0;transition:opacity .18s ease;pointer-events:none}
+  #isl.open::after,#isl.idle::after{opacity:1}
+  #isl.idle::after{width:10px;height:10px;margin-left:-5px;bottom:-3px}
+  /* 有未读/待办时球右上角一个小红点 */
+  #isl.has-badge:not(.open)::before{content:'';position:absolute;right:6px;top:6px;width:10px;height:10px;
+    border-radius:50%;background:#E4573D;box-shadow:0 0 0 2px rgba(10,13,18,.9);z-index:3}
+
+  #isl.open{width:var(--w,600px);height:104px;border-radius:26px;
+    /* 每种状态需求不同：消息要宽、Agent 状态和情报卡窄一些，别让小人戴大帽子 */
+    /* 只在胶囊态做玻璃模糊：球态是实心球，不需要也不会产生方形模糊边缘 */
+    -webkit-backdrop-filter:blur(18px) saturate(1.2);
+    backdrop-filter:blur(18px) saturate(1.2);
+    box-shadow:0 18px 40px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.08)}
+
+  /* 胶囊的 1px 描边 + 顶部高光（淡入） */
+  .skin{position:absolute;inset:0;border-radius:inherit;opacity:0;pointer-events:none;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+    transition:opacity .18s ease}
+  #isl.open .skin{opacity:1}
+  .skin::before{content:'';position:absolute;left:16px;right:16px;top:0;height:1px;
+    background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.26) 20%,
+      rgba(255,255,255,.16) 62%,rgba(255,255,255,0));
+    transition:background .3s ease}
+  #isl.pinned .skin::before{background:linear-gradient(90deg,rgba(231,184,75,0),
+      rgba(231,184,75,.55) 50%,rgba(231,184,75,0))}
+
+  /* 小球 */
+  .ballcore{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
+    border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 40% 30%,rgba(32,39,50,.90) 0%,
+      rgba(18,22,28,.92) 42%,rgba(8,10,14,.96) 100%);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.10),inset 0 1px 0 rgba(255,255,255,.16);
+    animation:breathe 2.4s ease-in-out infinite;
+    transition:opacity .18s ease}
+  #isl.open .ballcore{opacity:0;animation:none;transition:opacity .14s ease}
+  @keyframes breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(1.13)}}
+
+  .bars{display:flex;align-items:center;justify-content:center;gap:3px;height:24px}
+  .bars i{display:block;width:3px;border-radius:2px;height:9px;
+    background:linear-gradient(180deg,#F4D68C 0%,#E7B84B 60%,#C9962F 100%);
+    box-shadow:0 0 7px rgba(231,184,75,.45);
+    animation:bar 2.4s ease-in-out infinite}
+  .bars i:nth-child(2){animation-delay:.28s}
+  .bars i:nth-child(3){animation-delay:.56s}
+  @keyframes bar{0%,100%{height:8px;opacity:.68}50%{height:22px;opacity:1}}
+
+  /* ================= 内容层 ================= */
+  .content{position:absolute;inset:0;opacity:0;visibility:hidden;
+    transition:opacity .18s ease,visibility 0s linear .18s}
+  #isl.open .content{opacity:1;visibility:visible;
+    transition:opacity .18s ease .10s,visibility 0s}
+
+  .panel{position:absolute;inset:0;display:flex;align-items:center;gap:16px;
+    padding:0 18px;opacity:0;pointer-events:none;transition:opacity .18s ease}
+  .panel.on{opacity:1}
+
+  .mid{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:2px}
+  .t1{font-size:14px;font-weight:600;line-height:18px;color:#E8EDF2;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t2{font-size:12px;line-height:16px;color:rgba(232,237,242,.56);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t3{font-size:11px;line-height:14px;color:rgba(232,237,242,.34);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t3:empty{display:none}
+
+  .side{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;
+    justify-content:center;gap:6px;min-width:62px;max-width:110px}
+  .badge{display:block;max-width:104px;font-size:10.5px;line-height:1;padding:4px 8px;
+    border-radius:7px;color:rgba(232,237,242,.74);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;background:rgba(255,255,255,.05);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.09)}
+  .time{font-size:11px;line-height:1;color:rgba(232,237,242,.56);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .time:empty{display:none}
+
+  /* cover / avatar */
+  .cover{flex:0 0 auto;width:56px;height:56px;border-radius:14px;
+    display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(150deg,rgba(40,47,60,.92) 0%,rgba(20,24,32,.95) 55%,rgba(11,14,20,.97) 100%);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.09),inset 0 1px 0 rgba(255,255,255,.10)}
+  .glyph{font-size:24px;line-height:1;color:rgba(231,184,75,.16);
+    -webkit-text-stroke:1.2px #E7B84B;text-shadow:0 0 10px rgba(231,184,75,.30);
+    transform:translateY(-1px)}
+  .cover.vid .glyph{font-size:20px;-webkit-text-stroke:1.3px #E7B84B;color:rgba(231,184,75,.20)}
+
+  .avatar{flex:0 0 auto;width:44px;height:44px;border-radius:12px;
+    display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(150deg,rgba(42,49,61,.92) 0%,rgba(15,18,25,.96) 100%);
+    box-shadow:inset 0 0 0 1px rgba(231,184,75,.26),inset 0 1px 0 rgba(255,255,255,.08)}
+  .avatar span{font-size:18px;font-weight:600;line-height:1;color:#E7B84B;
+    text-shadow:0 0 10px rgba(231,184,75,.28)}
+
+  .appline{font-size:11px;line-height:14px;letter-spacing:.10em;text-transform:uppercase;
+    color:rgba(232,237,242,.50);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .body{font-size:12.5px;line-height:16px;color:rgba(232,237,242,.56);
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    word-break:break-word}
+  .body:empty{display:none}
+
+  .count{font-size:10.5px;line-height:1;color:#E7B84B;padding:3px 6px;border-radius:6px;
+    background:rgba(231,184,75,.12);box-shadow:inset 0 0 0 1px rgba(231,184,75,.30)}
+  .count:empty{display:none}
+
+  /* wave */
+  .wave{display:block;width:100%;height:22px;margin-top:4px}
+
+  /* video progress */
+  .bar{height:3px;border-radius:2px;background:rgba(255,255,255,.10);
+    overflow:hidden;margin-top:7px}
+  .bar i{display:block;height:100%;width:0;border-radius:2px;
+    background:linear-gradient(90deg,#C08F26 0%,#E7B84B 100%);
+    box-shadow:0 0 8px rgba(231,184,75,.40);transition:width .3s ease}
+  .vrow{display:flex;justify-content:space-between;align-items:baseline;
+    font-size:11px;line-height:14px;color:rgba(232,237,242,.56);
+    margin-top:5px;font-variant-numeric:tabular-nums}
+
+    /* 视频态：不要进度条（SMTC 给的位置不可靠，显示反而误导），只留标题 */
+    #p-video .bar, #p-video .vrow { display: none !important; }
+    #p-video .mid { justify-content: center; }
+  /* 每种状态需求不同：消息要宽，Agent 状态和情报卡窄一些 —— 别让小人戴大帽子 */
+  #isl[data-mode="agent"]{--w:420px}
+  #isl[data-mode="info"]{--w:452px}
+  #isl[data-mode="video"]{--w:520px}
+  #isl[data-mode="msg"]{--w:560px}
+  #isl[data-mode="music"]{--w:600px}
+  #isl[data-mode="agent"] .t1,#isl[data-mode="info"] .t1{font-size:15px}
+  #isl[data-mode="agent"] .t3,#isl[data-mode="info"] .body{font-size:12px}
+  #isl[data-mode="info"] .body{display:flex;flex-direction:column;gap:2px;line-height:1.35}
+  #isl[data-mode="info"] .body .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #isl[data-mode="info"] .body .more{opacity:.55}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="isl" class="idle">
+    <div class="skin"></div>
+    <div class="ballcore"><div class="bars"><i></i><i></i><i></i></div></div>
+
+    <div class="content">
+      <!-- music -->
+      <section class="panel" id="p-music">
+        <div class="cover"><span class="glyph">♪</span></div>
+        <div class="mid">
+          <div class="t1" id="mTitle">未知曲目</div>
+          <div class="t2" id="mSub">未知艺术家</div>
+          <div class="t3" id="mNext"></div>
+          <canvas class="wave" id="wave"></canvas>
+        </div>
+        <div class="side">
+          <span class="badge" id="mApp">音乐</span>
+          <span class="time" id="mTime"></span>
+        </div>
+      </section>
+
+      <!-- msg -->
+      <section class="panel" id="p-msg">
+        <div class="avatar"><span id="gAv">消</span></div>
+        <div class="mid">
+          <div class="appline" id="gApp">消息</div>
+          <div class="t1" id="gTitle">新消息</div>
+          <div class="body" id="gText"></div>
+        </div>
+        <div class="side">
+          <span class="time" id="gTime"></span>
+          <span class="count" id="gCount"></span>
+        </div>
+      </section>
+
+      <!-- video -->
+      <section class="panel" id="p-video">
+        <div class="cover vid"><span class="glyph">▶</span></div>
+        <div class="mid">
+          <div class="t1" id="vTitle">正在播放</div>
+          <div class="bar"><i id="vFill"></i></div>
+          <div class="vrow"><span id="vPos"></span><span id="vDur"></span></div>
+        </div>
+        <div class="side">
+          <span class="badge" id="vApp">播放器</span>
+        </div>
+      </section>
+
+      <!-- agent：Agent 看板（原来贴在角色旁边的小窗，现在并进胶囊） -->
+      <section class="panel" id="p-agent">
+        <div class="cover"><span class="glyph" id="aGlyph">⚙</span></div>
+        <div class="mid">
+          <div class="appline" id="aAgent">Agent</div>
+          <div class="t1" id="aTitle">正在干活</div>
+          <div class="t3" id="aDetail"></div>
+        </div>
+        <div class="side">
+          <span class="badge" id="aBadge">看板</span>
+        </div>
+      </section>
+
+      <!-- info：信息中枢摘要（待办/日程/邮件/天气），点右侧按钮打开完整面板 -->
+      <section class="panel" id="p-info">
+        <div class="cover"><span class="glyph">☰</span></div>
+        <div class="mid">
+          <div class="t1" id="iHead">情报</div>
+          <div class="body" id="iBody"></div>
+        </div>
+        <div class="side">
+          <span class="badge" id="iOpen" style="cursor:pointer">打开面板</span>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var isl = $('isl');
+  var T = window.__TAURI__ || {};
+  var invoke = (T.core && typeof T.core.invoke === 'function') ? T.core.invoke.bind(T.core) : null;
+  /* Electron 宿主：主进程通过 preload 暴露 petHost.islandInvoke / onIslandData / islandHit */
+  var HOST = window.petHost || null;
+  if (!invoke && HOST && typeof HOST.islandInvoke === 'function') invoke = HOST.islandInvoke;
+
+  /* ---------------- 兜底工具 ---------------- */
+  function str(v, fb) {
+    if (v === null || v === undefined) return fb === undefined ? '' : fb;
+    if (typeof v === 'string') { var t = v.trim(); return t ? t : (fb === undefined ? '' : fb); }
+    if (typeof v === 'number' && isFinite(v)) return String(v);
+    return fb === undefined ? '' : fb;
+  }
+  function num(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    if (typeof v === 'string' && v.trim() !== '') {
+      var n = parseFloat(v);
+      return isFinite(n) ? n : null;
+    }
+    return null;
+  }
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function fmt(sec) {
+    var n = num(sec);
+    if (n === null || n < 0) return '';
+    var t = Math.floor(n), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+  }
+
+  var APPS = {
+    cloudmusic: '网易云', netease: '网易云', qqmusic: 'QQ音乐', spotify: 'Spotify',
+    kugou: '酷狗音乐', kuwo: '酷我音乐', apple_music: 'Apple Music',
+    wechat: '微信', weixin: '微信', qq: 'QQ', feishu: '飞书', lark: '飞书',
+    telegram: 'Telegram', dingtalk: '钉钉', mail: '邮件', outlook: 'Outlook',
+    potplayer: 'PotPlayer', mpv: 'mpv', vlc: 'VLC', bilibili: '哔哩哔哩'
+  };
+  function appLabel(app, name) {
+    var n = str(name, '');
+    if (n) return n;
+    var a = str(app, '');
+    if (!a) return '';
+    var k = a.toLowerCase();
+    if (APPS[k]) return APPS[k];
+    return a.charAt(0).toUpperCase() + a.slice(1);
+  }
+
+  function timeLabel(ts) {
+    var n = num(ts);
+    if (n === null) return '';
+    if (n > 0 && n < 1e11) n = n * 1000;          // 秒级时间戳兜底
+    var d = new Date(n);
+    if (isNaN(d.getTime())) return '';
+    var now = new Date();
+    var diff = (now.getTime() - d.getTime()) / 1000;
+    if (diff < 0) return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+    var sameDay = d.toDateString() === now.toDateString();
+    if (sameDay && diff < 43200) return Math.floor(diff / 3600) + ' 小时前';
+    if (sameDay) return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var y = new Date(now.getTime() - 86400000);
+    if (d.toDateString() === y.toDateString()) return '昨天';
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
+  /* ---------------- 波形 canvas ---------------- */
+  var wave = (function () {
+    var cv = $('wave');
+    var ctx = cv.getContext('2d');
+    var W = 0, H = 22, dpr = 1, PITCH = 5, BW = 3;
+    var cur = [], tgt = [], raf = 0, running = false, raw = [];
+
+    function fitArr(a, n) {
+      var out = new Array(n).fill(0);
+      for (var i = 0; i < n; i++) {
+        var si = a.length - n + i;             // 右对齐，最新在最右
+        out[i] = si >= 0 ? a[si] : 0;
+      }
+      return out;
+    }
+    /* 把 raw 归一化后铺到当前条数上（条数随宽度变化，随时可重算） */
+    function apply() {
+      var n = cur.length;
+      if (!n) return;                       // 还没量到宽度，等 measure() 再算
+      var peak = 0, i;
+      for (i = 0; i < raw.length; i++) if (raw[i] > peak) peak = raw[i];
+      var out = new Array(n).fill(0);
+      if (raw.length && peak > 0) {
+        var src = raw.slice(-n);
+        var off = n - src.length;
+        for (i = 0; i < src.length; i++) out[off + i] = src[i] / peak;
+      }
+      tgt = out;
+      var blank = true;
+      for (i = 0; i < n; i++) if (cur[i] > 0.0005) { blank = false; break; }
+      if (blank) cur = tgt.slice();          // 空画布首次落位，不从 0 冒泡成噪点
+      else cur = fitArr(cur, n);
+    }
+    function measure() {
+      var r = cv.getBoundingClientRect();
+      var w = Math.round(r.width);
+      if (w < 12) return;
+      dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      var n = Math.max(1, Math.floor((w + 2) / PITCH));
+      if (Math.abs(w - W) < 1 && cur.length === n) return;
+      W = w; H = 22;
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (cur.length !== n) { cur = fitArr(cur, n); tgt = fitArr(tgt, n); }
+      apply();
+      draw();
+    }
+    function draw() {
+      if (!W || !cur.length) return;
+      ctx.clearRect(0, 0, W, H);
+      var g = ctx.createLinearGradient(0, 0, W, 0);
+      g.addColorStop(0, 'rgba(231,184,75,.62)');
+      g.addColorStop(0.55, 'rgba(231,184,75,.95)');
+      g.addColorStop(1, 'rgba(95,214,206,.95)');
+      ctx.fillStyle = g;
+      var base = H - 1;
+      for (var i = 0; i < cur.length; i++) {
+        var v = cur[i];
+        var h = 2 + v * (H - 3);
+        var x = i * PITCH + 1;
+        ctx.globalAlpha = 0.55 + 0.45 * v;
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(x, base - h, BW, h, 1.5);
+          ctx.fill();
+        } else {
+          ctx.fillRect(x, base - h, BW, h);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    function loop() {
+      raf = 0;
+      var moving = false;
+      for (var i = 0; i < cur.length; i++) {
+        var d = tgt[i] - cur[i];
+        if (Math.abs(d) > 0.0008) { cur[i] += d * 0.16; moving = true; }
+        else { cur[i] = tgt[i]; }
+      }
+      draw();
+      if (moving && running) raf = requestAnimationFrame(loop);
+    }
+    function kick() { if (!raf && running) raf = requestAnimationFrame(loop); }
+
+    return {
+      start: function () { running = true; measure(); kick(); },
+      stop: function () {
+        running = false;
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      },
+      setLevels: function (levels) {
+        raw = [];
+        if (Array.isArray(levels)) {
+          for (var i = 0; i < levels.length; i++) {
+            var n = num(levels[i]);
+            raw.push(n === null ? 0 : Math.max(0, Math.min(1, n)));
+          }
+        }
+        // 掐掉开头那段静音（媒体刚起来时电平全是 0），否则会画出一条虚线
+        var first = -1;
+        for (var k = 0; k < raw.length; k++) { if (raw[k] >= 0.02) { first = k; break; } }
+        if (first > 0) raw = raw.slice(first);
+        apply();
+        draw();
+        kick();
+      },
+      measure: measure,
+      redraw: draw
+    };
+  })();
+
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(function () { wave.measure(); });
+    ro.observe($('wave'));
+  } else {
+    window.addEventListener('resize', function () { wave.measure(); });
+  }
+
+  /* ---------------- 各面板渲染（全部兜底） ---------------- */
+  function renderMusic(m) {
+    m = m && typeof m === 'object' ? m : {};
+    var title = str(m.title, '未知曲目');
+    var artist = str(m.artist, '未知艺术家');
+    var lyric = str(m.lyric, '');
+    var next = str(m.lyricNext, '');
+
+    $('mTitle').textContent = title;
+    $('mSub').textContent = lyric ? lyric : artist;
+    $('mNext').textContent = lyric ? next : '';
+
+    var app = appLabel(m.app, m.appName);
+    $('mApp').textContent = app || '音乐';
+
+    var pos = num(m.pos), dur = num(m.dur), el = num(m.elapsed);
+    if (pos !== null && dur !== null && dur > 0) {
+      $('mTime').textContent = (m.estimated ? '≈ ' : '') + fmt(pos) + ' / ' + fmt(dur);
+    } else if (el !== null && el > 0.5) {
+      // 网易云这类没有 SMTC 时间轴：只能按「检测到开始播」估算
+      $('mTime').textContent = '≈ ' + fmt(el);
+    } else {
+      $('mTime').textContent = '';
+    }
+
+    wave.setLevels(m.levels);
+  }
+
+  function renderMsg(m) {
+    m = m && typeof m === 'object' ? m : {};
+    var app = appLabel(m.app, m.appName);
+    var name = app || '消息';
+
+    $('gApp').textContent = name;
+    $('gTitle').textContent = str(m.title, name);
+
+    var av = Array.from(name)[0] || '✉';
+    $('gAv').textContent = av;
+
+    $('gText').textContent = str(m.text, '');
+    $('gTime').textContent = timeLabel(m.ts);
+
+    var c = num(m.count);
+    $('gCount').textContent = (c !== null && c > 1) ? '×' + Math.min(Math.round(c), 99) : '';
+  }
+
+  function renderVideo(v) {
+    v = v && typeof v === 'object' ? v : {};
+    var app = appLabel(v.app, v.appName);
+    $('vTitle').textContent = str(v.title, '正在播放');
+    $('vApp').textContent = app || '播放器';
+
+    // 进度条已按用户要求去掉：浏览器的 SMTC 位置经常不更新，显示反而误导
+  }
+
+  /* ---------------- Agent / 信息卡 ---------------- */
+  function renderAgent(a) {
+    a = a && typeof a === 'object' ? a : {};
+    var state = str(a.state, '');
+    var glyph = state === 'error' ? '!' : (a.busy ? '⚙' : '✓');
+    $('aGlyph').textContent = glyph;
+    $('aGlyph').style.color = state === 'error' ? '#F08A8A' : '';
+    $('aAgent').textContent = str(a.agent, 'Agent');
+    $('aTitle').textContent = str(a.label, '状态');
+    $('aDetail').textContent = str(a.detail, a.count ? ('共 ' + a.count + ' 个会话') : '');
+    $('aBadge').textContent = a.busy ? '进行中' : (state === 'error' ? '出错' : '完成');
+  }
+
+  function renderInfo(info, agent) {
+    info = info && typeof info === 'object' ? info : {};
+    var lines = [];
+    var todo = num(info.todoOpen) || 0;
+    if (todo > 0 || num(info.todoTotal) > 0) {
+      lines.push('待办 ' + todo + (info.nextTodo ? '：' + str(info.nextTodo) : ''));
+    }
+    var cal = num(info.calCount) || 0;
+    if (cal > 0) lines.push('日程 ' + cal + (info.nextCal ? '：' + str(info.nextCal) : ''));
+    var unread = num(info.unread) || 0;
+    if (unread > 0) lines.push('未读邮件 ' + unread);
+    var w = info.weather;
+    if (w && (w.city || w.text)) {
+      lines.push([w.city, (w.temp === null || w.temp === undefined) ? '' : (w.temp + '°C'), w.text]
+        .filter(Boolean).join(' '));
+    }
+    if (agent && agent.agent) lines.push('Agent：' + str(agent.agent) + ' · ' + str(agent.label, ''));
+    $('iHead').textContent = lines.length ? '情报' : '暂时没有情报';
+    /* 一行一条，窄胶囊里不要挤成一条长串（挤了就折行、把整块撑高） */
+    var box = $('iBody');
+    box.textContent = '';
+    var show = lines.slice(0, 3);
+    if (!show.length) show = ['点右侧「打开面板」看完整信息中枢'];
+    show.forEach(function (t) {
+      var d = document.createElement('div');
+      d.className = 'row';
+      d.textContent = t;
+      box.appendChild(d);
+    });
+    if (lines.length > show.length) {
+      var m = document.createElement('div');
+      m.className = 'row more';
+      m.textContent = '还有 ' + (lines.length - show.length) + ' 条';
+      box.appendChild(m);
+    }
+  }
+
+  /* ---------------- 主渲染 ---------------- */
+  var MODES = ['idle', 'msg', 'music', 'video', 'agent', 'info'];
+  var lastOpen = 'music';     // 最近一次非 idle 的 mode（无宿主时点球展开用）
+
+  function render(d) {
+    d = (d && typeof d === 'object') ? d : {};
+    /* 尖角 / 主体位置由 Rust 给：角色贴近屏幕边时窗口会被夹回屏幕内，
+       这时「内容」整体挪到角色那一侧，尖角才指着角色而不是空气。 */
+    if (typeof d.tailX === 'number' && isFinite(d.tailX)) {
+      var TW = 640;                                  // 窗口宽（与 Rust 常量一致）
+      var mw = { idle: 56, msg: 560, music: 600, video: 520, agent: 420, info: 452 };
+      var cw = mw[str(d.mode, 'idle')] || 600;
+      var cx = (typeof d.contentX === 'number' && isFinite(d.contentX))
+        ? d.contentX
+        : Math.max(cw / 2 + 4, Math.min(TW - cw / 2 - 4, d.tailX));
+      isl.style.setProperty('--content-x', Math.round(cx) + 'px');
+      isl.style.setProperty('--tail-x', Math.round(d.tailX) + 'px');
+    }
+
+    var mode = str(d.mode, 'idle').toLowerCase();
+    if (MODES.indexOf(mode) < 0) mode = 'idle';
+
+    var open = mode !== 'idle';
+    if (open) lastOpen = mode;
+
+    isl.classList.toggle('open', open);
+    isl.classList.toggle('idle', !open);
+    isl.classList.toggle('pinned', !!d.pinned);
+    isl.setAttribute('data-mode', mode);
+
+    for (var i = 1; i < MODES.length; i++) {
+      var p = $('p-' + MODES[i]);
+      if (p) p.classList.toggle('on', mode === MODES[i]);
+    }
+
+    if (mode === 'music') { renderMusic(d.music); wave.start(); }
+    else {
+      wave.stop();
+      if (mode === 'msg') renderMsg(d.msg);
+      else if (mode === 'video') renderVideo(d.video);
+      else if (mode === 'agent') renderAgent(d.agent);
+      else if (mode === 'info') renderInfo(d.info, d.agent);
+    }
+    /* 球上的小红点：有未读/待办时提示「点我」 */
+    if (isl) isl.classList.toggle('has-badge', Number(d.badge) > 0);
+  }
+  window.applyIsland = render;
+
+  /* ---------------- 交互 ---------------- */
+  function cmd(name) {
+    if (!invoke) return false;
+    try {
+      var p = invoke('island_cmd', { cmd: name });
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+      return true;
+    } catch (e) { return false; }
+  }
+
+  var clickTimer = null;
+  function singleClick() {
+    var open = isl.classList.contains('open');
+    if (!open) {
+      /* 点球 = 展开成「情报卡」（信息中枢 + Agent 摘要并进胶囊） */
+      var okInfo = cmd('info');
+      if (!okInfo) renderInfo({}, null);
+      return;
+    }
+    if (false) {
+      var ok = cmd('expand');
+      if (!ok) render(SAMPLE[lastOpen] || SAMPLE.music);
+    } else {
+      var ok2 = cmd('pin');
+      if (!ok2) {
+        var p = !isl.classList.contains('pinned');
+        isl.classList.toggle('pinned', p);
+      }
+    }
+  }
+
+  (function () {
+    var b = $('iOpen');
+    if (b) b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      cmd('hud');
+    });
+  })();
+
+  isl.addEventListener('dblclick', function () {
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+    var ok = cmd('dismiss');
+    if (!ok) render({ mode: 'idle' });
+  });
+
+  /* ---------------- 拖动：松手后由 Rust 存「相对角色锚点的偏移」 ----------------
+     用 mousedown + 位移阈值判定（≥4px 才算拖动），窗口移动后仍能收 mouseup
+     （监听挂在 document）。抬起时的 click 必须吞掉，否则「拖一下」会被当成单击。 */
+  var press = null, dragging = false, suppressClick = false;
+  function beginDrag() {
+    if (!invoke) return false;
+    try {
+      var p = invoke('island_drag_begin');
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+      return true;
+    } catch (e) { return false; }
+  }
+  isl.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return;
+    press = { x: e.screenX, y: e.screenY };
+    dragging = false;
+  });
+  document.addEventListener('mousemove', function (e) {
+    if (!press || dragging) return;
+    if (Math.abs(e.screenX - press.x) + Math.abs(e.screenY - press.y) >= 4) {
+      dragging = true;
+      suppressClick = true;
+      press = null;
+      beginDrag();
+    }
+  });
+  document.addEventListener('mouseup', function () { press = null; });
+
+  isl.addEventListener('click', function () {
+    if (suppressClick) { suppressClick = false; return; }
+    if (clickTimer) return;
+    clickTimer = setTimeout(function () { clickTimer = null; singleClick(); }, 230);
+  });
+
+  /* ---------------- 自测数据 ---------------- */
+  /* 自测用波形：确定性生成 90 个 0..1 的采样，够铺满 414px（83 条） */
+  var LV = (function () {
+    var a = [], seed = 20261125;
+    for (var i = 0; i < 90; i++) {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      var r = seed / 2147483648;
+      var env = Math.pow(Math.abs(Math.sin(i * 0.42 + 0.6)), 1.3);
+      a.push(Math.min(1, 0.14 + env * (0.62 + 0.38 * r)));
+    }
+    return a;
+  })();
+
+  var SAMPLE = {
+    idle: { mode: 'idle' },
+    music: {
+      mode: 'music', pinned: false,
+      music: {
+        title: 'ばかじゃないのに', artist: 'ずっと真夜中でいいのに。',
+        app: 'cloudmusic', appName: '网易云',
+        levels: LV, pos: 83, dur: 210,
+        lyric: '君はそう言って笑うの', lyricNext: '何もかも嫌になる前に'
+      }
+    },
+    msg: {
+      mode: 'msg', pinned: false,
+      msg: {
+        app: '微信', title: '张三',
+        text: '在吗？明天下午三点那个评审会的材料我改好了，你有空看一眼吗？主要是第三页的数据口径我调过，需要你确认一下再发出去，另外附件的预算表也换成了最新版本，别再拿旧的那份了。',
+        ts: Date.now() - 3 * 60 * 1000, count: 3
+      }
+    },
+    video: {
+      mode: 'video', pinned: false,
+      video: {
+        title: '葬送的芙莉莲 第12话 1080p.mp4', appName: 'PotPlayer',
+        pos: 30.2, dur: 600
+      }
+    }
+  };
+
+  /* ---------------- Tauri 事件 ---------------- */
+  try {
+    if (T.event && typeof T.event.listen === 'function') {
+      T.event.listen('island:data', function (e) {
+        render(e && e.payload ? e.payload : e);
+      });
+    } else if (HOST && typeof HOST.onIslandData === 'function') {
+      HOST.onIslandData(function (d) { render(d); });
+    }
+  } catch (e) {}
+
+  /* 命中上报：Electron 侧窗口默认穿透（forward:true），页面负责告诉主进程
+     「光标现在压没压在这个形状上」，主进程据此 setIgnoreMouseEvents。
+     Tauri 侧是自己轮询光标，不走这里。 */
+  function reportHit(inside) {
+    if (HOST && typeof HOST.islandHit === 'function') {
+      try { HOST.islandHit(!!inside); } catch (e) {}
+    }
+  }
+  var hitNow = null;
+  function hitAt(x, y) {
+    var r = isl.getBoundingClientRect();
+    var inside = x >= r.left - 4 && x <= r.right + 4 && y >= r.top - 4 && y <= r.bottom + 6;
+    window.__hitDbg = { x: x, y: y, rect: [r.left, r.top, r.width, r.height], inside: inside, sent: false };
+    if (inside !== hitNow) { hitNow = inside; window.__hitDbg.sent = true; reportHit(inside); }
+  }
+  document.addEventListener('mousemove', function (e) { hitAt(e.clientX, e.clientY); }, { passive: true });
+  document.addEventListener('mouseleave', function () { if (hitNow !== false) { hitNow = false; reportHit(false); } });
+  isl.addEventListener('mouseenter', function (e) { hitAt(e.clientX, e.clientY); });
+  isl.addEventListener('mouseleave', function () { if (hitNow !== false) { hitNow = false; reportHit(false); } });
+
+  /* ---------------- 启动 / 自测 ---------------- */
+  var qs = new URLSearchParams(location.search);
+  var qState = (qs.get('state') || '').toLowerCase();
+  var mock = qs.get('mock') === '1';
+
+  if (mock) {
+    var idx = 0;
+    var seq = ['idle', 'msg', 'music', 'video'];
+    render(SAMPLE[seq[idx]]);
+    setInterval(function () {
+      idx = (idx + 1) % seq.length;
+      render(SAMPLE[seq[idx]]);
+    }, 4000);
+  } else if (MODES.indexOf(qState) >= 0) {
+    render(SAMPLE[qState]);
+  } else {
+    render({ mode: 'idle' });
+  }
+
+  window.__islandReady = true;
+})();
+</script>
+</body>
+</html>

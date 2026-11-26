@@ -161,15 +161,11 @@ fn now_ms() -> u64 {
 }
 
 fn config_path(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_config_dir()
-        .unwrap_or_else(|_| {
-            std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("com.hermes.catwhalepoc")
-        })
-        .join("dock.json")
+    // 与 island/info/walk 一致，走 chat::config_dir()：
+    // 默认就是 app_config_dir（生产环境路径不变），但测试时可用 CATWHALE_CONFIG_DIR
+    // 把整棵配置树隔离到别处，避免读到/写到真实用户目录。
+    let _ = app;
+    crate::chat::config_dir().join("dock.json")
 }
 
 fn load_config(path: &Path) -> DockConfig {
@@ -1263,6 +1259,12 @@ pub fn dock_get(app: AppHandle) -> Value {
     if rt.lock().channels.is_empty() {
         refresh_channels(&rt, true);
     }
+    snapshot(&rt)
+}
+
+/// 只读快照（不拉起服务、不探测通道）：给灵动岛的 Agent 态用，500ms 一次不能有副作用。
+pub fn snapshot_quick(app: &AppHandle) -> Value {
+    let rt = runtime(app);
     snapshot(&rt)
 }
 

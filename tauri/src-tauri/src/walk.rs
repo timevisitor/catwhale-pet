@@ -748,6 +748,9 @@ fn tick(app: &AppHandle, engine: &WalkEngine) {
     if let Some((x, y)) = set_pos {
         if pos.x != x || pos.y != y {
             let _ = win.set_position(PhysicalPosition::new(x, y));
+            // 自动行走与手动拖动共用同一个跟随源：岛的搬运线程只认「桌宠动过」这一信号，
+            // 按存储偏移贴着走，不做独立缓动、不自己追赶。
+            crate::island::pet_moved(app);
             // 拖动 / 菜单镜像等不会改这里；走动时前端只跟 dir 选 walk_left/right。
         }
     }
@@ -1248,6 +1251,7 @@ fn clamp_window_with(app: &AppHandle, engine: &WalkEngine) {
     let (x, y) = clamp_position((pos.x, pos.y), size, area);
     if x != pos.x || y != pos.y {
         let _ = win.set_position(PhysicalPosition::new(x, y));
+        crate::island::pet_moved(app);
     }
 }
 
