@@ -111,7 +111,7 @@ ctx.snapshot('mail', { list: [...] });
 ### 4.2 `app/infohub/sources/wechat.js` —— 微信消息（Windows 11 通知中心，尽力而为）
 - 用 PowerShell + UIAutomationClient 读"通知中心"里应用名含 `微信`/`WeChat` 的条目，轮询 3s。
 - 脚本独立成文件 `app/infohub/sources/wechat_probe.ps1`，可单独跑：`node app/infohub/sources/wechat.js --probe` 输出 JSON。
-- 本机实测拿不到就**如实**把 `status().detail` 写成"本机通知中心读不到微信（Windows 版本/微信版本不支持）"，并让 `start()` 不报错、只是不通。
+- 使用虚构数据和隔离配置验收，不记录账户、真实通知或凭据。
 - **验收**：贴 `--probe` 的真实输出（拿到什么都行，必须是真跑出来的）。
 
 ### 4.3 `app/infohub/sources/lark.js` —— 飞书消息
@@ -137,7 +137,7 @@ ctx.snapshot('mail', { list: [...] });
 - 配置形态：`{enabled, accounts:[{id,label,type,base_url,keyEnv,key}]}`；`keyEnv` 优先取环境变量，其次 `key`。
 - 首次启动自动从 `%LOCALAPPDATA%\hermes\config.yaml` **尽力**抽取（正则可，别写 YAML 解析器）：只要 provider 名、`base_url`、`key_env`；抽不到就空着，用户手填。
 - 轮询 10 分钟；`snapshot('balance', {items:[{id,label,amount,currency,detail,ok,error}]})`；任一账户 `amount < cfg.warnBelow`（默认 1）→ `emit` 一条 `level:'warn'` 的 `balance` 事件（同 key 6 小时只弹一次）。
-- **验收**：用本机真实 key 跑一次 DeepSeek（若 config/env 里有），贴真实返回的金额；其余账户用本地假 http 服务断言解析。
+- 使用虚构数据和隔离配置验收，不记录账户、真实通知或凭据。
 
 ### 4.6 `app/infohub/sources/weather.js` —— 天气
 - `https://ipwho.is/` 取大致城市（失败退 `https://freeipapi.com/api/json`）；`https://api.open-meteo.com/v1/forecast` 取实况+7 日（`current=temperature_2m,weather_code,relative_humidity_2m,apparent_temperature,wind_speed_10m` + `daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code`）。

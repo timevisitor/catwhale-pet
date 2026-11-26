@@ -589,7 +589,9 @@
   }
 
   var clickTimer = null;
+  var suppressClick = false;                 // 拖完松手后紧跟的 click 不当作单击
   function singleClick() {
+    window.__islandSingleCount = (window.__islandSingleCount || 0) + 1;
     var open = isl.classList.contains('open');
     if (!open) {
       /* 点球 = 展开成「情报卡」（信息中枢 + Agent 摘要并进胶囊） */
@@ -618,6 +620,8 @@
   })();
 
   isl.addEventListener('click', function () {
+    window.__islandClickCount = (window.__islandClickCount || 0) + 1;
+    if (suppressClick) return;               // 这次 click 是拖动的尾巴，不是单击
     if (clickTimer) return;
     clickTimer = setTimeout(function () { clickTimer = null; singleClick(); }, 230);
   });
@@ -626,6 +630,52 @@
     var ok = cmd('dismiss');
     if (!ok) render({ mode: 'idle' });
   });
+
+  /* ---------------- 拖动（球 / 胶囊） ----------------
+     与 Tauri 版同一套手势：
+       · 按下先不进入拖动，指针位移超过 4px 才判定为拖动 —— 单击/双击不被吃掉；
+       · 判定为拖动时把「按下瞬间的屏幕坐标」交给主进程，之后每次 mousemove 交当前
+         屏幕坐标，主进程自己搬窗口（不用系统拖拽）；
+       · 松手交最后坐标 → 主进程换算成偏移并落盘；紧跟着的 click 被抑制。
+     用屏幕坐标是因为拖动时窗口本身跟着指针走，client 坐标相对窗口几乎不变。 */
+  var dragState = null;
+  function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : 0; }
+  isl.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return;
+    if (!HOST || typeof HOST.islandDragStart !== 'function') return;   // 自测页 / Tauri 端无此桥
+    dragState = { sx: num(e.screenX), sy: num(e.screenY), cx: e.clientX, cy: e.clientY, active: false };
+    window.__islandDownCount = (window.__islandDownCount || 0) + 1;
+    window.__islandDrag = { down: { sx: dragState.sx, sy: dragState.sy, cx: dragState.cx, cy: dragState.cy },
+      start: null, moves: 0, up: null, lastScreen: null };
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (!dragState) return;
+    if (!dragState.active) {
+      var d = Math.max(Math.abs(e.clientX - dragState.cx), Math.abs(e.clientY - dragState.cy),
+        Math.abs(num(e.screenX) - dragState.sx), Math.abs(num(e.screenY) - dragState.sy));
+      if (d < 4) return;                      // 4px 以内仍算点击
+      dragState.active = true;
+      window.__islandDrag.start = { d: d, sx: dragState.sx, sy: dragState.sy };
+      try { HOST.islandDragStart(dragState.sx, dragState.sy); } catch (err) {}
+    }
+    window.__islandDrag.moves++;
+    window.__islandDrag.lastScreen = { sx: num(e.screenX), sy: num(e.screenY) };
+    try { HOST.islandDragMove(num(e.screenX), num(e.screenY)); } catch (err) {}
+  }, { passive: false });
+  window.addEventListener('mouseup', function (e) {
+    window.__islandLastUp = { sx: num(e.screenX), sy: num(e.screenY), had: !!dragState, active: !!(dragState && dragState.active), t: Date.now() };
+    if (!dragState) return;
+    var was = dragState.active;
+    dragState = null;
+    if (was) {
+      window.__islandDrag.up = { sx: num(e.screenX), sy: num(e.screenY) };
+      try { HOST.islandDragEnd(num(e.screenX), num(e.screenY)); } catch (err) {}
+      suppressClick = true;
+      setTimeout(function () { suppressClick = false; }, 400);
+    }
+  });
+  isl.addEventListener('dragstart', function (e) { e.preventDefault(); });
 
   /* ---------------- 自测数据 ---------------- */
   /* 自测用波形：确定性生成 90 个 0..1 的采样，够铺满 414px（83 条） */
@@ -700,6 +750,7 @@
   }
   var hitNow = null;
   function hitAt(x, y) {
+    if (dragState) return;                  // 拖动中不改穿透（否则会半路断事件）
     var r = isl.getBoundingClientRect();
     var inside = x >= r.left - 4 && x <= r.right + 4 && y >= r.top - 4 && y <= r.bottom + 6;
     window.__hitDbg = { x: x, y: y, rect: [r.left, r.top, r.width, r.height], inside: inside, sent: false };

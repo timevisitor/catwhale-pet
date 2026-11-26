@@ -746,6 +746,7 @@ body.island-on #dockchip{display:none !important}
 <script src="animation-loop.js"></script>
 <script src="emotion.js"></script>
 <script src="media-show-page.js"></script>
+<script src="island-anchor.js"></script>
 <script>
 /* =====================================================================
    状态配置。role 决定它在状态机里的优先级角色：
@@ -1669,6 +1670,9 @@ function play(id){
     if (p && p.catch) p.catch(()=>{});
   }catch(e){}
   updateShadow();
+  /* 动作换了 → 头顶在角色矩形里的位置要重新量一次（代价高的逐像素识别就在这里发生，
+     走动/呼吸这些帧不碰它）。island-anchor.js 用 key 变化触发，这里只负责通知。 */
+  islandPoke(false);
 }
 
 /* 按需加载：非 eager 状态初始只有元数据，首次要演它（或空闲时段预选到它）时切成 auto。
@@ -1847,6 +1851,8 @@ function applyVideoMirror(){
     v.style.transform = videoTransform(id);
     v.style.transformOrigin = (petMirror ? (MIRROR_AXIS * 100).toFixed(4) + '%' : '50%') + ' 96.67%';
   }
+  /* 镜像会把角色的水平中心翻到另一边：锚点必须强制重算一次（这是「换了就发」的场合） */
+  islandPoke(true);
 }
 function setPetMirror(on){
   on = !!on;
@@ -3669,6 +3675,9 @@ function place(x, y, animate){
   pet.style.left = x + 'px'; pet.style.top = y + 'px';
   if (animate) setTimeout(()=> pet.classList.remove('moving'), 520);
   updateShadow();
+  /* 灵动岛：所有让角色位移的路径（拖动 / 自动走动 / 夹回屏幕 / 换尺寸）最终都过这里。
+     只登记「下一帧要上报」，同一帧里调多少次都只合成一次，不会为每个 px 发 IPC。 */
+  islandPoke(false);
 }
 function clampToScreen(animate){
   if (!pet) return;        // 同上：皮肤加载期的早调用
@@ -3726,20 +3735,38 @@ function hitTest(px, py){
   return b.img.data[(y * b.w + x) * 4 + 3] > 24;
 }
 
-/* ===================== 灵动岛锚点 =====================
-   岛挂在桌宠头顶靠这个：把「角色可见轮廓的头顶」和「水平中心」
-   换算成窗口内归一化坐标（0..1）交给主进程。
+/* ===================== 灵动岛锚点（事件驱动） =====================
+   岛挂在桌宠头顶靠这个：把「角色可见轮廓的头顶」和「水平中心」换算成
+   **角色矩形内**归一化坐标（0..1），连同「角色矩形（屏幕 DIP）」一起交给主进程。
    头顶取「不透明格数 ≥ 最宽行 25% 的第一行」，避开立绘上方那根呆毛 ——
-   直接取包围盒顶边会让气泡飘在离脑袋几十像素的半空（Tauri 版实测踩过）。 */
-let islandAnchorAt = 0, islandAnchorSig = '';
-function reportIslandAnchor(force){
-  const t = now();
-  if (!force && t - islandAnchorAt < 500) return;
-  islandAnchorAt = t;
+   直接取包围盒顶边会让气泡飘在离脑袋几十像素的半空（Tauri 版实测踩过）。
+
+   v0.7.1 改成事件驱动（见 web/island-anchor.js 的文件头）：
+     · 触发点只有三处 —— place()（拖动/自动走动/夹边/换尺寸都走它）、
+       play()（动作状态换了 → 头顶重新量）、镜像/首帧（强制一次）；
+     · 每帧只读 getBoundingClientRect（廉价），逐像素头顶识别按状态变化或 1.2s 到期才做；
+     · 只在数值真变了才发，静止时零上报；主进程收到即落位，不再靠 700ms 轮询推着走。 */
+const ISLAND_ANCHOR = window.CatwhaleIslandAnchor || null;
+let islandAnchorRep = null, islandAnchorWarned = false;
+
+/* 廉价：角色矩形（屏幕 DIP）。Electron 版桌宠窗口铺满工作区、角色在窗口里移动，
+   主进程只拿窗口内归一化会算错位置 —— screenX/screenY 就是窗口的屏幕坐标。 */
+function islandRectNow(){
   const v = videos[cur];
-  if (!v || v.readyState < 2 || !v.videoWidth) return;
-  const b = alphaBitmap();
-  if (!b || !b.any || !b.img) return;
+  if (!v || v.readyState < 2 || !v.videoWidth) return null;
+  const vr = v.getBoundingClientRect();
+  if (!(vr.width > 1) || !(vr.height > 1)) return null;
+  return { x: (typeof window.screenX === 'number' ? window.screenX : 0) + vr.left,
+           y: (typeof window.screenY === 'number' ? window.screenY : 0) + vr.top,
+           w: vr.width, h: vr.height };
+}
+
+/* 贵：逐像素头顶识别。只在动作状态换了 / 到期 / 强制时被 island-anchor.js 调用。 */
+function islandHeadNow(){
+  const v = videos[cur];
+  if (!v || v.readyState < 2) return null;
+  const b = alphaBitmap();                       // 自带 400/1000ms 缓存，这里不额外缓存
+  if (!b || !b.any || !b.img) return null;
   const BW = b.w, BH = b.h, d = b.img.data;
   const rows = new Array(BH).fill(0);
   let x0 = BW, y0 = BH, x1 = -1, y1 = -1, maxRow = 0;
@@ -3757,32 +3784,44 @@ function reportIslandAnchor(force){
     rows[y] = n;
     if (n > maxRow) maxRow = n;
   }
-  if (x1 < 0) return;
+  if (x1 < 0) return null;
   const need = Math.max(2, Math.ceil(maxRow * 0.25));
   let hr = y0;
   for (let y = y0; y <= y1; y++){ if (rows[y] >= need){ hr = y; break; } }
-  const vr = v.getBoundingClientRect();
-  const wr = { w: innerWidth || 1, h: innerHeight || 1 };
   let cxV = ((x0 + x1 + 1) / 2) / BW;
   if (petMirror) cxV = 2 * MIRROR_AXIS - cxV;      // 镜像时按角色中轴翻回去
-  const cx = Math.min(1, Math.max(0, cxV));
-  const head = Math.min(1, Math.max(0, hr / BH));
-  /* 角色矩形用「屏幕 DIP」：Electron 版桌宠窗口铺满工作区，角色在窗口里移动，
-     主进程只拿窗口内归一化会算错位置。screenX/screenY 就是窗口的屏幕坐标。 */
-  const sx = (typeof window.screenX === 'number' ? window.screenX : 0) + vr.left;
-  const sy = (typeof window.screenY === 'number' ? window.screenY : 0) + vr.top;
-  const sig = cx.toFixed(3) + ',' + head.toFixed(3) + ',' +
-              Math.round(sx) + ',' + Math.round(sy) + ',' + Math.round(vr.width) + ',' + Math.round(vr.height);
-  if (sig === islandAnchorSig) return;
-  islandAnchorSig = sig;
-  try {
-    if (window.petHost && window.petHost.islandAnchor) {
-      window.petHost.islandAnchor({
-        cx: cx, head: head,
-        sx: sx, sy: sy, rx: 0, ry: 0, rw: vr.width, rh: vr.height,
-      });
-    }
-  } catch (e) {}
+  return { cx: Math.min(1, Math.max(0, cxV)), head: Math.min(1, Math.max(0, hr / BH)) };
+}
+
+function islandAnchor(){
+  if (islandAnchorRep) return islandAnchorRep;
+  const host = window.petHost;
+  if (!ISLAND_ANCHOR || !host || !host.islandAnchor) return null;
+  islandAnchorRep = ISLAND_ANCHOR.create({
+    rect: islandRectNow,
+    head: islandHeadNow,
+    key: () => cur || '',
+    now: () => now(),
+    send: (a) => { try { host.islandAnchor(a); } catch (e) {} },
+  });
+  return islandAnchorRep;
+}
+function islandPoke(force){
+  const r = islandAnchor();
+  if (!r){ if (!islandAnchorWarned){ islandAnchorWarned = true; } return; }
+  try { r.poke({ force: !!force }); } catch (e) {}
+}
+/* 兼容旧名字：自检脚本/外部调用还在用它 */
+function reportIslandAnchor(force){ islandPoke(force); }
+
+/* 拖动松手才把「角色局部锚点」落盘（island.json）：重启后胶囊先按同一相对位置出现，
+   不必等第一次上报。不松手就一直只走内存，不写盘。 */
+function islandAnchorCommit(){
+  const r = islandAnchor();
+  const p = r && r.lastPayload ? r.lastPayload() : null;
+  const host = window.petHost;
+  if (!p || !host || !host.islandAnchorCommit) return;
+  try { host.islandAnchorCommit({ cx: p.cx, head: p.head }); } catch (e) {}
 }
 
 /* ===================== 事件 ===================== */
@@ -3835,6 +3874,8 @@ function bindEvents(){
       clampToScreen(false);
       replaceOpenPanels();
       playOnce('drop', undefined, true);
+      /* 松手才落盘：把「角色局部锚点」写进 island.json（拖动过程中一帧都不写盘） */
+      islandAnchorCommit();
     }
     touch();
   });
@@ -4931,9 +4972,14 @@ window.addEventListener('error', e=>{ window.__petError = (e.message || '') + ' 
 window.addEventListener('unhandledrejection', e=>{ window.__petError = 'Promise: ' + ((e.reason && (e.reason.stack||e.reason.message)) || e.reason); });
 init().then(()=>{
   window.__petInitOK = true;
-  /* 灵动岛锚点：低频上报，主进程做粘滞处理 */
-  setTimeout(() => { try { reportIslandAnchor(true); } catch (e) {} }, 900);
-  setInterval(() => { try { reportIslandAnchor(false); } catch (e) {} }, 700);
+  /* 灵动岛锚点：事件驱动（见 web/island-anchor.js）。
+     首帧强制发一次；另留一个 1.5s 慢兜底 —— 它同样只在「数值真变了」时才发
+     （典型场景：视频解出首帧后头顶量出来和之前不同），静止时是 0 上报，
+     所以位置依然由事件驱动，不是靠这个定时器推着走。 */
+  setTimeout(() => { try { islandPoke(true); } catch (e) {} }, 900);
+  setInterval(() => { try { islandPoke(false); } catch (e) {} }, 1500);
+  /* 自检/验收用：看一眼上报器这段时间发了多少、扫了几次像素 */
+  window.__islandAnchorStats = () => { try { return islandAnchorRep ? islandAnchorRep.stats() : null; } catch (e) { return null; } };
 })
       .catch(e=>{ window.__petError = String((e && (e.stack || e.message)) || e); });
 </script>

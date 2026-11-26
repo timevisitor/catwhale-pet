@@ -30,4 +30,13 @@ contextBridge.exposeInMainWorld('petHost', {
   },
   islandHit: (inside) => ipcRenderer.invoke('island:hit', !!inside).catch(() => {}),
   islandAnchor: (a) => ipcRenderer.invoke('island:anchor', a).catch(() => {}),
+  /* 拖动球/胶囊：页面在位移超过阈值后才判定为拖动，把按下的屏幕坐标与每次移动的
+     屏幕坐标交给主进程自己搬窗口；松手时主进程换算成偏移并落盘。 */
+  islandDragStart: (sx, sy) => ipcRenderer.invoke('island:drag-start', { sx: Number(sx), sy: Number(sy) })
+    .catch(() => ({ ok: false })),
+  islandDragMove: (sx, sy) => {
+    try { ipcRenderer.send('island:drag-move', { sx: Number(sx), sy: Number(sy) }); } catch (e) {}
+  },
+  islandDragEnd: (sx, sy) => ipcRenderer.invoke('island:drag-end', { sx: Number(sx), sy: Number(sy) })
+    .catch(() => ({ ok: false })),
 });

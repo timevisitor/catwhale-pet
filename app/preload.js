@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('petHost', {
 
   /* ---- 灵动岛：把「桌宠头顶」锚点喂给主进程（岛挂在头顶靠它定位）---- */
   islandAnchor: (a) => ipcRenderer.send('island:anchor-raw', a),
+  /* 拖动松手才调：把「角色局部锚点」落盘（island.json），重启后先按它落位 */
+  islandAnchorCommit: (a) => ipcRenderer.invoke('island:anchor-commit', a).catch(() => ({})),
 
   /* ---- 全局热键唤起搜索框（主进程 → 页面）---- */
   onOpenSearch: (cb) => {

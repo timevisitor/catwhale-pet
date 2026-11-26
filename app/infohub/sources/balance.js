@@ -631,13 +631,12 @@ module.exports = function create(ctx) {
     async start() {
       if (timer) { clearInterval(timer); timer = null; }
       state = { ready: true, detail: '启动中' };
-      loadWarnState();
-      // 先抽取配置（即使当前没启用，也把账户填好，用户打开开关即有数据）
-      bootstrapFromHermes();
-      if (getCfg().enabled === false) {
-        state = { ready: false, detail: '已关闭（账户已自动抽取，打开开关即开始刷新）' };
+      if (getCfg().enabled !== true) {
+        state = { ready: false, detail: '已关闭' };
         return;
       }
+      // Use only accounts explicitly configured by the user; never discover external accounts on startup.
+      loadWarnState();
       refresh().catch(() => {});
       timer = setInterval(() => { refresh().catch(() => {}); }, POLL_MS);
       if (typeof timer.unref === 'function') timer.unref();

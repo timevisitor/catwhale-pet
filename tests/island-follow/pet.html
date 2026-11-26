@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>pet-smoke</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  #pet { position: absolute; left: 0; top: 0; width: 204px; height: 340px; }
+  #cv { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<div id="pet"><canvas id="cv" width="204" height="340"></canvas></div>
+<script src="island-anchor.js"></script>
+<script>
+'use strict';
+/* 灵动岛跟随的合成桌宠页（冒烟台）。
+ *
+ * 它只做三件事：
+ *   1. 画一个「角色」（canvas，头顶在最上面 20% 处，带 ±0.8% 的呼吸）；
+ *   2. 用**两种上报实现**把锚点喂给主进程：
+ *        impl=legacy —— 祖先版（e9a9f77）的 reportIslandAnchor：700ms 定时 + 500ms 节流 + 签名去重；
+ *        impl=event  —— v0.7.1 的 web/island-anchor.js：事件驱动 + 按帧合并 + 只在变化时发；
+ *      head 采样函数两者共用（同一份逐像素扫描），保证「测得准不准」不是变量，只有调度方式在变；
+ *   3. 每帧把**真值**（角色矩形 + 真实头顶）推给主进程，主进程拿它算理想落点、比误差。
+ *
+ * 轨迹由主进程用 smoke:run 下发，两条运行走完全相同的轨迹（walk → walk down → idle）。
+ */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const pet = document.getElementById('pet');
+const HOST = window.petHost || null;
+const SMOKE = window.smoke || null;
+
+const IMPL = new URLSearchParams(location.search).get('impl') || 'event';
+const now = () => performance.now();
+
+/* 角色姿态：走路时是一只竖着的胖水滴（头顶在 20%），站立时同一轮廓只是不再位移。
+   呼吸：头顶高度按 0.4Hz 抖 ±0.8%（0.008 × 340 ≈ 2.7px）—— 这正是「肉眼像静止、
+   但逐像素一量就在动」的量级，用来验证上报器有没有把呼吸当移动。 */
+let state = 'idle';          // idle | walk_right | walk_down
+let breath = 0;
+function draw() {
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const headY = H * 0.20 + breath * H * 0.008;
+  const cx = W * 0.5 + breath * W * 0.004;
+  // 身体：从头顶往下收窄到脚
+  ctx.fillStyle = '#8fd0ff';
+  ctx.beginPath();
+  ctx.moveTo(cx - W * 0.30, H * 0.96);
+  ctx.quadraticCurveTo(cx - W * 0.42, headY + H * 0.10, cx - W * 0.16, headY + H * 0.02);
+  ctx.quadraticCurveTo(cx, headY - H * 0.01, cx + W * 0.16, headY + H * 0.02);
+  ctx.quadraticCurveTo(cx + W * 0.42, headY + H * 0.10, cx + W * 0.30, H * 0.96);
+  ctx.closePath();
+  ctx.fill();
+  // 呆毛：故意画在头顶上方 —— 祖先版注释里说过，直接取包围盒顶边会飘在呆毛上
+  ctx.strokeStyle = '#8fd0ff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx + 2, headY + 2);
+  ctx.quadraticCurveTo(cx + 10, headY - H * 0.055, cx + 20, headY - H * 0.045);
+  ctx.stroke();
+}
+
+/* ---------- 逐像素头顶识别（两种实现共用这一份 ---------- */
+const sampler = (() => {
+  const c = document.createElement('Canvas');
+  c.width = 96; c.height = 160;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  let data = null, at = -1e9;
+  return function sample() {
+    if (data && now() - at < 400) return data;
+    at = now();
+    g.clearRect(0, 0, c.width, c.height);
+    g.drawImage(cv, 0, 0, c.width, c.height);
+    data = g.getImageData(0, 0, c.width, c.height);
+    return data;
+  };
+})();
+function scanHead() {
+  let img;
+  try { img = sampler(); } catch (e) { return null; }
+  const BW = img.width, BH = img.height, d = img.data;
+  const rows = new Array(BH).fill(0);
+  let x0 = BW, x1 = -1, y0 = BH, y1 = -1, maxRow = 0;
+  for (let y = 0; y < BH; y++) {
+    let n = 0;
+    for (let x = 0; x < BW; x++) {
+      if (d[(y * BW + x) * 4 + 3] > 24) {
+        n++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+    rows[y] = n;
+    if (n > maxRow) maxRow = n;
+  }
+  if (x1 < 0) return null;
+  const need = Math.max(2, Math.ceil(maxRow * 0.25));
+  let hr = y0;
+  for (let y = y0; y <= y1; y++) { if (rows[y] >= need) { hr = y; break; } }
+  return { cx: ((x0 + x1 + 1) / 2) / BW, head: hr / BH };
+}
+function rectNow() {
+  const r = pet.getBoundingClientRect();
+  if (!(r.width > 1) || !(r.height > 1)) return null;
+  return { x: screenX + r.left, y: screenY + r.top, w: r.width, h: r.height };
+}
+
+/* ---------- 上报实现 A：祖先版（逐字照搬 e9a9f77 的 reportIslandAnchor）---------- */
+let islandAnchorAt = 0, islandAnchorSig = '';
+function reportIslandAnchor(force) {
+  const t = now();
+  if (!force && t - islandAnchorAt < 500) return;
+  islandAnchorAt = t;
+  const vr = rectNow();
+  if (!vr) return;
+  const a = scanHead();
+  if (!a) return;
+  const cx = Math.min(1, Math.max(0, a.cx));
+  const head = Math.min(1, Math.max(0, a.head));
+  const sig = cx.toFixed(3) + ',' + head.toFixed(3) + ',' +
+    Math.round(vr.x) + ',' + Math.round(vr.y) + ',' + Math.round(vr.w) + ',' + Math.round(vr.h);
+  if (sig === islandAnchorSig) return;
+  islandAnchorSig = sig;
+  send({ cx: cx, head: head, sx: vr.x, sy: vr.y, rx: 0, ry: 0, rw: vr.w, rh: vr.h });
+}
+/* ---------- 上报实现 B：v0.7.1 事件驱动 ---------- */
+let rep = null;
+const MOD = window.CatwhaleIslandAnchor || null;
+function initEventReporter() {
+  if (!MOD) { console.warn('[smoke] island-anchor.js 未加载，无法跑 event 实现'); return; }
+  rep = MOD.create({
+    rect: rectNow,
+    head: () => scanHead(),
+    key: () => state,
+    now: now,
+    send: send,
+  });
+}
+function poke(force) { if (rep) rep.poke({ force: !!force }); }
+
+/* ---------- 统一出口（两种实现都走这里，方便数上报次数）---------- */
+const sends = { total: 0, at: [] };
+function send(a) {
+  sends.total += 1;
+  sends.at.push(Math.round(now()));
+  try { HOST && HOST.islandAnchor && HOST.islandAnchor(a); } catch (e) {}
+}
+
+if (IMPL === 'legacy') {
+  setTimeout(() => { try { reportIslandAnchor(true); } catch (e) {} }, 900);
+  setInterval(() => { try { reportIslandAnchor(false); } catch (e) {} }, 700);
+} else {
+  initEventReporter();
+}
+
+/* ---------- 轨迹（主进程 smoke:run 下发后才开始）---------- */
+const TRACK = null;
+let t0 = 0, x = 0, y = 0, running = false, vx = 0, vy = 0, phase = 'warmup', last = 0;
+function applyPlace(nx, ny) {
+  x = nx; y = ny;
+  pet.style.left = x + 'px'; pet.style.top = y + 'px';
+  if (IMPL !== 'legacy') poke();          // 事件驱动：位移即事件（和真实 index.html 的 place() 一致）
+}
+function frame(ts) {
+  requestAnimationFrame(frame);
+  const dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016;
+  last = ts;
+  breath = Math.sin(ts / 1000 * 2 * Math.PI * 0.4);
+  draw();
+  if (running) {
+    const el = ts - t0;
+    const prevState = state;
+    /* 三段：慢走（130px/s，自动巡游的速度）→ 快拖（500px/s，用户甩鼠标的手速）→ 走下来。
+       拖动段是用户说的「不丝滑」的主场：位移速度翻四倍，700ms 一轮的上报只能追个大概。 */
+    if (el < 3500) { state = 'walk_right'; applyPlace(x + 130 * dt, y); }
+    else if (el < 5000) { state = 'grabbed'; applyPlace(x + 500 * dt, y - 240 * dt); }
+    else if (el < 6500) { state = 'walk_down'; applyPlace(x, y + 130 * dt); }
+    else { state = 'idle'; running = false; phase = 'idle'; }
+    if (state !== prevState && IMPL !== 'legacy') poke();   // 动作换了 → 重扫头顶
+    if (state !== prevState && IMPL === 'legacy') { /* 祖先版没有这个事件，只能等下一个 700ms */ }
+  }
+  /* 真值：角色矩形（屏幕 DIP）+ 真实头顶。
+     头顶用「不呼吸时的静态量测值」：算法看的是像素，我画出来的轮廓按 25% 行宽规则
+     量出来就是 head0 —— 拿它当真值，呼吸（±0.008）才算「本不该跟」的量。 */
+  if (SMOKE) {
+    const r = rectNow();
+    if (r) SMOKE.truth({ sx: r.x, sy: r.y, rw: r.w, rh: r.h, cx: TRUTH.cx, head: TRUTH.head, state: state, ts: ts });
+  }
+}
+window.addEventListener('smoke:run', () => {
+  /* 位置在 init 时就摆好了（见文件末尾）：开跑时不瞬移，否则第一帧是真值跳变，
+     那不是「跟随」的问题，会把两边都算进一个巨大的离群误差。 */
+  state = 'idle'; running = true; phase = 'walk';
+  t0 = performance.now(); last = 0;
+  if (IMPL === 'legacy') { try { reportIslandAnchor(true); } catch (e) {} }
+  else poke(true);
+});
+window.smokeSends = () => ({ total: sends.total, at: sends.at.slice(), impl: IMPL,
+  stats: rep ? rep.stats() : null });
+/* 起始位姿：离工作区左上角 40px，先让两种实现各自把岛摆好，再开始走 */
+applyPlace(40, 40);
+/* 静态基准量测：不呼吸时画一帧，让同一套逐像素算法给出「真实头顶」—— 之后所有
+   呼吸带来的偏移都算误差（±0.8% 高度 ≈ 2.7px），这正是要区分「呼吸 / 真移动」的地方。 */
+const TRUTH = (() => {
+  breath = 0; draw();
+  const a = scanHead();
+  return a ? { cx: a.cx, head: a.head } : { cx: 0.5, head: 0.20 };
+})();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

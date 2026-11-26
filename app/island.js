@@ -23,13 +23,24 @@ const W = 640, H = 150;          // 窗口尺寸（DIP）
 const TOP_PAD = 8;               // 页面里内容的顶部内边距
 const BALL = 56, CAP_H = 104;    // 球 / 胶囊的可见高度
 const GAP = 6;                   // 离头顶点
-const TICK_MS = 500;
+const TICK_MS = 500;             // **内容**推送周期（波形/歌词/进度）；不负责定位
 const LEVELS_MAX = 44;
 const SILENT_RESET_MS = 4000;
-const ANCHOR_JUMP = 0.12;        // 锚点大偏移阈值（相对窗口高度）
-const ANCHOR_MISS_NEED = 6;      // 连续多少帧才算真的换了姿态
+/* 落位门槛（DIP）。窗口坐标是整数，所以 1 就是最小可见步进：
+   锚点驱动（角色在动）用 1，逐帧跟；只有非定位路径（例如重置）才用 6 的粗门槛。 */
+const TOL_MOVE = 1;
+const TOL_COARSE = 6;
+const ANCHOR_EPS = 0.03;         // 角色矩形内归一化：小于这个量级视为呼吸/摆尾，不动
 
 const DEFAULTS = { enabled: true, msg: true, music: true, video: true, holdMs: 8000 };
+
+/* 手动偏移的归一化：屏幕 DIP，保留两位小数。非法值一律当作「没有偏移」。 */
+function readOff(v) {
+  if (!v || typeof v !== 'object') return { x: 0, y: 0 };
+  const x = Number(v.x), y = Number(v.y);
+  if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
+  return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 };
+}
 
 /* ---------------- 歌词（网易云公开接口） ---------------- */
 function httpGet(url, timeoutMs) {
@@ -107,7 +118,18 @@ function createIsland(deps) {
   let progKey = '', progPos = 0, progAt = 0, progLast = -1, progStillMs = 0;
   let anchor = null;               // {cx, head} 归一化到「角色矩形」（0..1）
   let anchorRect = null;           // {sx,sy,rx,ry,rw,rh} 角色矩形（屏幕 DIP）
-  let anchorMiss = 0;
+  /* 手动偏移（屏幕 DIP，相对「锚点默认落点」）。用户把球/胶囊拖到哪儿，就一直挂在
+     头顶的同一相对位置；与 anchor 是两件事：
+       anchor  = 头顶在角色矩形里的位置（页面量出来的，跟着动作换姿）
+       off     = 用户手调的整体位移（只在拖动松手时写盘，贴边只夹显示、不回写）
+     重启后从 island.json 的 off 还原，不会因为重新量头顶而漂走。 */
+  let off = readOff(cfg.off);
+  /* 拖动状态机：startOff + 屏幕指针位移 = 新偏移。用屏幕坐标而不是 client 坐标 ——
+     拖动过程中窗口本身在跟着指针移动，client 坐标相对窗口几乎不变，算不出位移。 */
+  let drag = null;                 // {ox,oy,sx,sy,px,py,win} ; ox/oy=起始偏移
+  let lastHit = false;
+  /* 重启恢复：拖动松手时渲染进程会把「角色局部锚点」写进 island.json（anchor 字段）。
+     首次上报若还没量到头顶（meas:false，视频没解出首帧），就用它起手 —— 见 noteAnchor。 */
   let pinned = false, hiddenUntil = 0;
   /* 胶囊跟着桌宠大小缩放：桌宠缩到 200px 时胶囊还按 640 宽画，看着就是「小人戴大帽子」。
      用 anchorRect 的角色高度比上基准高度算倍率，靠 webContents.setZoomFactor 整体缩放
@@ -184,10 +206,13 @@ function createIsland(deps) {
 
   /* ---------------- 锚点（桌宠头顶） ---------------- */
   /* 页面按「第一个不透明格数 ≥ 最宽行 25% 的行」算头顶，避开呆毛；
-     这里做粘滞：小偏差一律忽略，只有连续多帧大偏移才重新锚定。 */
+     这里只做最后一道过滤。
+     注意：v0.7.0 的「连续 6 帧大偏移才采纳」是 700ms 轮询时代的补丁 ——
+     事件驱动下渲染进程只在真变化时才发，永远攒不满 6 帧，会把真实换姿全部丢掉，
+     所以改成「pose 直接采纳 / 呼吸量级忽略 / 其余立即采纳」。 */
   /* 页面送上来的是：角色视频矩形（屏幕 DIP）+ 矩形内归一化锚点（0..1）。
-     粘滞只作用在「矩形内归一化锚点」上 —— 桌宠在窗口里移动/拖窗口是角色矩形的变化，
-     必须实时跟；而角色呼吸摆尾导致锚点在矩形内抖几像素，要压掉。 */
+     粘滞只作用在「矩形内归一化锚点」上 —— 角色矩形是位置，必须实时跟；
+     呼吸摆尾导致锚点在矩形内抖几像素，压掉。 */
   function noteAnchor(a) {
     if (!a || !isFinite(a.cx) || !isFinite(a.head)) return;
     const cx = Math.min(1, Math.max(0, a.cx));
@@ -195,17 +220,45 @@ function createIsland(deps) {
     const rect = (isFinite(a.sx) && isFinite(a.sy) && isFinite(a.rw) && a.rw > 0)
       ? { sx: a.sx, sy: a.sy, rx: a.rx || 0, ry: a.ry || 0, rw: a.rw, rh: a.rh || 0 }
       : null;
-    if (!anchor) { anchor = { cx, head }; anchorRect = rect; anchorMiss = 0; return; }
-    const d = Math.max(Math.abs(cx - anchor.cx), Math.abs(head - anchor.head));
-    if (d > ANCHOR_JUMP) {
-      anchorMiss += 1;
-      if (anchorMiss >= ANCHOR_MISS_NEED) { anchor = { cx, head }; anchorMiss = 0; }
-    } else {
-      anchorMiss = 0;
+    /* meas=false：这一份 cx/head 是兜底值（视频还没解出首帧、逐像素量不到头顶）。
+       位置照跟，锚点别动 —— 否则重启后会先用 0.5/0.22 把上次松手存下的相对位置冲掉。 */
+    const measured = a.meas !== false;
+    if (!anchor) {
+      anchor = (measured || !cfg.anchor)
+        ? { cx, head }
+        : { cx: cfg.anchor.cx, head: cfg.anchor.head };
+      anchorRect = rect;
+      return;
     }
-    if (rect) anchorRect = rect;      // 角色在屏幕上的位置始终用最新值
+    if (!measured) { if (rect) anchorRect = rect; return; }
+    if (a.pose) {
+      anchor = { cx, head };                       // 动作换了：头顶整块重算过，直接采纳
+    } else {
+      const d = Math.max(Math.abs(cx - anchor.cx), Math.abs(head - anchor.head));
+      if (d > ANCHOR_EPS) anchor = { cx, head };   // 能发出来就是真变化
+    }
+    if (rect) anchorRect = rect;                   // 角色在屏幕上的位置始终用最新值
   }
-  function resetAnchor() { anchor = null; anchorRect = null; anchorMiss = 0; }
+  /* 托盘「回到桌宠头顶」：只丢「矩形内归一化锚点」，角色矩形留着 ——
+     这样下一次 place() 立刻按默认锚点落位，不会先隐藏一下再冒出来。 */
+  function resetAnchor() { anchor = null; }
+
+  /* latest-only：渲染进程一帧最多发一次，主进程这边也只在下一轮事件循环落位一次。
+     极端情况（连续多帧 / 重排）只保留最后一个锚点，不排队把 setBounds 堆成山。 */
+  let pendAnchor = null, pendQueued = false;
+  function queueAnchor(a) {
+    if (!a || typeof a !== 'object') return;
+    pendAnchor = a;
+    if (pendQueued) return;
+    pendQueued = true;
+    setImmediate(() => {
+      pendQueued = false;
+      const x = pendAnchor; pendAnchor = null;
+      if (!x) return;
+      noteAnchor(x);
+      place(false, TOL_MOVE);
+    });
+  }
 
   /* ---------------- 歌词（网易云公开接口） ---------------- */
   function lyricAt(key, elapsedMs) {
@@ -475,77 +528,174 @@ function createIsland(deps) {
     log('ISLAND_ZOOM ' + JSON.stringify({ rh: anchorRect && anchorRect.rh, zoom }));
   }
 
-  function islandPos() {
+  /* 默认落点（off = 0）：球/胶囊底边中点贴在头顶上方 GAP 处，水平与头顶中点对齐。
+     球↔胶囊切换时只改可见高度，底边保持不动（胶囊向上长），所以同一个 off 在收起/
+     展开后都不会漂。返回的 x/y 已经过「离岛最近的显示器工作区」夹取 —— 夹取只影响
+     显示位置，绝不回写 off。 */
+  function defaultPos() {
     const b = petBounds();
     if (!b) return null;
+    /* 必须有「角色矩形（屏幕 DIP）」才能落位：
+       Electron 版桌宠窗口铺满整个工作区，用窗口归一化算出来的位置是「工作区 22% 高处」，
+       和角色头顶没有关系（v0.7.0 靠 700ms 轮询掩盖了这一点）。事件驱动下第一次 place()
+       就会带上矩形，拿不到就宁可先不显示，也不把球摆到屏幕中间。 */
+    if (!anchorRect || !(anchorRect.rw > 0)) return null;
     const a = anchor || { cx: 0.5, head: 0.22 };
     const contentH = mode === 'idle' ? BALL : CAP_H;
-    /* 锚点优先用页面给的「角色矩形（屏幕 DIP）」：
-       Electron 版桌宠窗口铺满工作区、角色在窗口里到处走，用窗口归一化会算错位置。 */
-    let cxScreen, headScreen;
-    if (anchorRect) {
-      cxScreen = anchorRect.sx + anchorRect.rx + a.cx * anchorRect.rw;
-      headScreen = anchorRect.sy + anchorRect.ry + a.head * anchorRect.rh;
-    } else {
-      cxScreen = b.x + a.cx * b.width;
-      headScreen = b.y + a.head * b.height;
-    }
+    const cxScreen = anchorRect.sx + anchorRect.rx + a.cx * anchorRect.rw;
+    const headScreen = anchorRect.sy + anchorRect.ry + a.head * anchorRect.rh;
     const Wz = Math.round(W * zoom);
     let x = Math.round(cxScreen - Wz / 2);
     let y = Math.round(headScreen - GAP - (TOP_PAD + contentH) * zoom);
-    const area = screen.getDisplayNearestPoint({ x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) }).workArea;
+    /* 夹取目标用「岛自己的落点」找最近的显示器，而不是桌宠所在的那块 ——
+       这样岛可以摆到副屏上，桌宠还在主屏。 */
+    const area = screen.getDisplayNearestPoint({
+      x: x + Math.round(Wz / 2),
+      y: y + Math.round((TOP_PAD + contentH) * zoom / 2),
+    }).workArea;
     if (x < area.x) x = area.x;
     if (x + Wz > area.x + area.width) x = area.x + area.width - Wz;
     if (y < area.y) y = area.y;
     /* 角色贴近屏幕边缘时窗口会被夹回来，这时把「尖角」挪到角色正上方，
        不然气泡会指着空气（对话气泡的通行做法）。 */
     const tailX = Math.round(Math.min(W - 26, Math.max(26, (cxScreen - x) / zoom)));
-    return { x, y, tailX };
+    return { x, y, tailX, cxScreen, headScreen, Wz, contentH };
+  }
+
+  /* 最终落点 = 默认落点 + 手动偏移。off 是逻辑像素（DIP），不随缩放变化：
+     桌宠变大变小时，岛仍挂在同一次拖动后的相对位置。 */
+  function islandPos() {
+    const d = defaultPos();
+    if (!d) return null;
+    /* 偏移加完再夹一次：用户可能拖到屏幕外，显示上夹回工作区，但 off 本身不动。 */
+    const Wz = d.Wz;
+    let x = Math.round(d.x + off.x);
+    let y = Math.round(d.y + off.y);
+    const area = screen.getDisplayNearestPoint({
+      x: x + Math.round(Wz / 2),
+      y: y + Math.round((TOP_PAD + d.contentH) * zoom / 2),
+    }).workArea;
+    if (x < area.x) x = area.x;
+    if (x + Wz > area.x + area.width) x = area.x + area.width - Wz;
+    if (y < area.y) y = area.y;
+    const tailX = Math.round(Math.min(W - 26, Math.max(26, (d.cxScreen - x) / zoom)));
+    return { x, y, tailX, off: { x: off.x, y: off.y }, clamped: (x !== Math.round(d.x + off.x) || y !== Math.round(d.y + off.y)) };
+  }
+
+  /* ---------------- 拖动（球/胶囊） ----------------
+     页面在指针位移超过 4 CSS px 后才判定为拖动（单击/双击不被吃掉），
+     进入拖动时把按下瞬间的屏幕坐标发来；之后每个 mousemove 发当前屏幕坐标。
+     主进程自己 setBounds（不用系统拖拽），松手才把 off 落盘。 */
+  function dragStart(pt) {
+    if (!pt || !isFinite(pt.sx) || !isFinite(pt.sy)) return { ok: false, error: 'bad-point' };
+    const w = ensure();
+    if (!w) return { ok: false, error: 'no-window' };
+    drag = { ox: off.x, oy: off.y, sx: Number(pt.sx), sy: Number(pt.sy), px: Number(pt.sx), py: Number(pt.sy) };
+    lastHit = true;
+    try { w.setIgnoreMouseEvents(false); } catch (e) {}
+    log('ISLAND_DRAG_START ' + JSON.stringify({ sx: drag.sx, sy: drag.sy, off: { x: off.x, y: off.y } }));
+    return { ok: true };
+  }
+
+  function dragTo(pt) {
+    if (!drag) return { ok: false };
+    if (pt && isFinite(pt.sx) && isFinite(pt.sy)) { drag.px = Number(pt.sx); drag.py = Number(pt.sy); }
+    off = { x: drag.ox + (drag.px - drag.sx), y: drag.oy + (drag.py - drag.sy) };
+    const w = win;
+    if (w && !w.isDestroyed()) {
+      applyZoom();
+      const p = islandPos();
+      if (p) {
+        lastTailX = p.tailX;
+        const Wz = Math.round(W * zoom), Hz = Math.round(H * zoom);
+        const cur = w.getBounds();
+        if (cur.x !== p.x || cur.y !== p.y || Math.abs(cur.width - Wz) > 1 || Math.abs(cur.height - Hz) > 1) {
+          w.setBounds({ x: p.x, y: p.y, width: Wz, height: Hz });
+        }
+      }
+    }
+    return { ok: true, off: { x: off.x, y: off.y } };
+  }
+
+  function dragEnd(pt) {
+    if (!drag) return { ok: false };
+    if (pt && isFinite(pt.sx) && isFinite(pt.sy)) { drag.px = Number(pt.sx); drag.py = Number(pt.sy); }
+    off = { x: drag.ox + (drag.px - drag.sx), y: drag.oy + (drag.py - drag.sy) };
+    drag = null;
+    /* 松手才写：把「整体偏移」写进 island.json。贴边被夹回的那部分不回写 ——
+       off 是用户意图（可能暂时在屏幕外），移动桌宠/换屏后还能回到原相对位置。 */
+    cfg.off = readOff(off);
+    saveCfg();
+    log('ISLAND_OFFSET_COMMIT ' + JSON.stringify(cfg.off));
+    /* 松手再按最终偏移落一次位：确保最后一次 mousemove 丢失/被夹取时窗口仍在正确位置 */
+    place(true);
+    /* 松手这一刻指针可能已经不在形状上：按最后已知命中恢复穿透。 */
+    if (win && !win.isDestroyed()) { try { win.setIgnoreMouseEvents(!lastHit, { forward: true }); } catch (e) {} }
+    return { ok: true, off: Object.assign({}, cfg.off) };
   }
 
   let lastTailX = W / 2;
-  function place(force) {
-    if (!win || win.isDestroyed()) return;
+  function place(force, tol) {
+    if (!win || win.isDestroyed()) return false;
+    /* 先定倍率再算位置：缩放会改窗口宽度，islandPos 里的水平居中依赖它 */
+    applyZoom();
     const p = islandPos();
     if (p && isFinite(p.tailX)) lastTailX = p.tailX;
-    if (!p) { if (!win.isDestroyed() && win.isVisible()) win.hide(); return; }
-    applyZoom();
+    if (!p) { if (!win.isDestroyed() && win.isVisible()) win.hide(); return false; }
     const cur = win.getBounds();
     const Wz = Math.round(W * zoom), Hz = Math.round(H * zoom);
-    if (force || Math.abs(cur.x - p.x) >= 6 || Math.abs(cur.y - p.y) >= 6
+    /* tol：锚点驱动的落位用 1 DIP（逐帧跟），其它路径用 6 DIP（避免无谓的 setBounds） */
+    const t = Math.max(1, Number.isFinite(tol) ? tol : TOL_COARSE);
+    if (force || Math.abs(cur.x - p.x) >= t || Math.abs(cur.y - p.y) >= t
         || Math.abs(cur.width - Wz) > 1 || Math.abs(cur.height - Hz) > 1) {
       win.setBounds({ x: p.x, y: p.y, width: Wz, height: Hz });
       const after = win.getBounds();
       log('ISLAND_POS ' + JSON.stringify({ want: p, cur, after, anchor, anchorRect }));
     }
+    return true;               // true = 有落点（是否真的 setBounds 由门槛决定）
   }
 
   function show() {
     const w = ensure();
     if (!w) return;
-    place(true);
+    if (!place(true)) return;  // 角色矩形还没到：先不亮，免得球摆到工作区中间
     if (!w.isVisible()) w.showInactive();
     w.setAlwaysOnTop(true, 'screen-saver');
   }
   function hide() { if (win && !win.isDestroyed() && win.isVisible()) win.hide(); }
 
-  /* ---------------- 主循环 ---------------- */
+  /* ---------------- 主循环 ----------------
+     节奏：内容（波形/歌词/进度/消息）还是 500ms 一推；**定位不在这里** ——
+     它由渲染进程的锚点事件驱动（queueAnchor → place(TOL_MOVE)）。
+     这里只在两种「几何真的变了」的场合补一次落位：第一次显示、球↔胶囊高度变了。
+     这样即使内容停更，胶囊也不会掉帧式地每 500ms 被拽一下。 */
   function tick() {
     if (Date.now() < frozenUntil) return;
     try {
       if (!cfg.enabled) { hide(); return; }
       const pet = petBounds();
       if (!pet) { hide(); return; }
+      const modeBefore = mode;
       const payload = buildPayload();
       const hidden = Date.now() < hiddenUntil;
       if (!hidden || payload.mode !== 'idle') {
         if (hidden && payload.mode !== 'idle') hiddenUntil = 0;
-        show();
+        const w = ensure();
+        if (!w) return;
+        if (!w.isVisible()) {
+          /* 先摆好再亮：place() 返回 false = 角色矩形还没到（页面刚起、视频没解出首帧），
+             这时候 showInactive 会把球亮在「窗口默认的屏幕正中」—— 正是要避免的那种一秒钟乱跳。 */
+          if (place(true)) {
+            w.showInactive();
+            w.setAlwaysOnTop(true, 'screen-saver');
+          }
+        } else if (payload.mode !== modeBefore || Math.abs(wantZoom() - zoom) > 0.014) {
+          place(true);                                   // 球↔胶囊：可见高度不同，纵向必须重算
+        }
+        w.webContents.send('island:data', payload);
       } else {
         hide();
       }
-      place(false);
-      if (win && !win.isDestroyed()) win.webContents.send('island:data', payload);
     } catch (e) {
       log('ISLAND_TICK_ERR ' + (e && e.message));
     }
@@ -596,18 +746,35 @@ function createIsland(deps) {
     },
     'island:reset': () => { place(true); return { ok: true }; },
     'island:hit': (_e, inside) => {
-      if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!inside, { forward: true });
+      lastHit = !!inside;
+      /* 拖动中不改穿透：拖到形状边缘时命中会瞬间变 false，若此时把窗口切回穿透，
+         后续 mousemove/mouseup 可能直接丢掉，拖动会「半路断掉」。 */
+      if (!drag && win && !win.isDestroyed()) win.setIgnoreMouseEvents(!inside, { forward: true });
       return { ok: true };
     },
-    'island:anchor': (_e, a) => { noteAnchor(a); place(false); return { ok: true }; },
+    'island:drag-start': (_e, pt) => dragStart(pt),
+    'island:drag-end': (_e, pt) => dragEnd(pt),
+    'island:anchor': (_e, a) => { queueAnchor(a); return { ok: true }; },
+    /* 拖动松手才存：把「角色局部锚点」写进 island.json，重启后先按它落位 */
+    'island:anchor-commit': (_e, a) => {
+      if (!a || !isFinite(a.cx) || !isFinite(a.head)) return { ok: false };
+      const round3 = (v) => Math.round(Math.min(1, Math.max(0, Number(v))) * 1000) / 1000;
+      cfg.anchor = { cx: round3(a.cx), head: round3(a.head) };
+      saveCfg();
+      log('ISLAND_ANCHOR_COMMIT ' + JSON.stringify(cfg.anchor));
+      return { ok: true, anchor: Object.assign({}, cfg.anchor) };
+    },
   };
   function bindIpc() {
     Object.keys(handlers).forEach((ch) => {
       try { ipcMain.handle(ch, handlers[ch]); } catch (e) { /* 重复注册忽略 */ }
     });
-    /* 主窗口页面用 send 高频喂锚点（不需要回包） */
+    /* 主窗口页面用 send 高频喂锚点（不需要回包）。
+       事件驱动后这里只做 latest-only 合并：同一轮事件循环里来多少帧都只落位一次。 */
     try {
-      ipcMain.on('island:anchor-raw', (_e, a) => { noteAnchor(a); place(false); });
+      ipcMain.on('island:anchor-raw', (_e, a) => { queueAnchor(a); });
+      /* 拖动中的 mousemove 用 send（不回包），避免 60Hz 的 invoke 排队 */
+      ipcMain.on('island:drag-move', (_e, pt) => { dragTo(pt); });
     } catch (e) {}
   }
 
@@ -617,14 +784,22 @@ function createIsland(deps) {
     stop,
     setCfg: (patch) => noteCfg(patch),
     demo: (what) => handlers['island:demo'](null, what),
-    resetPos: () => { resetAnchor(); place(true); },
+    /* 「回到桌宠头顶」= 同时清掉手动偏移（用户表达「摆回默认」） */
+    resetPos: () => {
+      resetAnchor();
+      off = { x: 0, y: 0 };
+      if (cfg.off) { delete cfg.off; saveCfg(); }
+      place(true);
+    },
     cfg: () => Object.assign({}, cfg),
     notify,
     noteAgent,
     noteAnchor,
     resetAnchor,
+    queueAnchor,                      // 自检/冒烟用：直接喂一个锚点，走和 IPC 同一条路
+    place: (force, tol) => place(force, tol),
     win: () => win,
-    state: () => ({ mode, pinned, anchor, cfg: Object.assign({}, cfg) }),
+    state: () => ({ mode, pinned, anchor, anchorRect, zoom, off: { x: off.x, y: off.y }, dragging: !!drag, cfg: Object.assign({}, cfg) }),
   };
 }
 

@@ -13,7 +13,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const APP = process.env.PET_APP_DIR || path.join(__dirname, '..', 'app');
-const pre = fs.readFileSync(path.join(APP, 'preload.js'), 'utf8');
+/* 两个 preload：主窗口 + 灵动岛窗口。灵动岛的拖动/命中通道只在 island-preload.js 里，
+   只看 preload.js 会把它们误判成「主进程残留」。 */
+const pre = ['preload.js', 'island-preload.js']
+  .map((f) => path.join(APP, f))
+  .filter((p) => fs.existsSync(p))
+  .map((p) => fs.readFileSync(p, 'utf8'))
+  .join('\n');
 const main = fs.readFileSync(path.join(APP, 'main.js'), 'utf8');
 
 const uniq = (a) => [...new Set(a)];
@@ -23,24 +29,37 @@ const listens = uniq([...pre.matchAll(/ipcRenderer\.on\('([^']+)'/g)].map((m) =>
 
 // 先剥掉注释，避免把注释里提到的旧写法当成真实调用（踩过这个误报）
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-const mainCode = strip(main);
+/* 主进程侧的处理器不全在 main.js 里：灵动岛的通道注册在 app/island.js 的 bindIpc() 里
+   （createIsland 是独立模块），只看 main.js 会把 island:anchor-* 全判成「缺处理器」。 */
+const mainParts = ['main.js', 'island.js']
+  .map((f) => path.join(APP, f))
+  .filter((p) => fs.existsSync(p))
+  .map((p) => fs.readFileSync(p, 'utf8'));
+const mainCode = strip(mainParts.join('\n'));
 
 const mainOn = new Set([...mainCode.matchAll(/ipcMain\.on\('([^']+)'/g)].map((m) => m[1]));
 const mainHandle = new Set([...mainCode.matchAll(/ipcMain\.handle\('([^']+)'/g)].map((m) => m[1]));
+/* island.js 的处理器写在 handlers 对象里、由 bindIpc() 循环注册，扫不到字面量调用 —— 补一次键名 */
+for (const m of mainCode.matchAll(/'((?:island|pet|media|infohub):[a-z0-9-]+)'\s*:\s*(?:\(|function)/g)) {
+  mainHandle.add(m[1]);
+}
+/* 只针对主窗口的守卫（穿透开关数量 / pet:interactive 这类）必须只看 main.js ——
+   灵动岛窗口自己也调 setIgnoreMouseEvents，混进来会误报「调用点过多」。 */
+const mainOnly = strip(main);
 
 const problems = [];
 for (const c of sends) if (!mainOn.has(c)) problems.push(`主进程缺 ipcMain.on('${c}') 处理器（preload 会 send 它）`);
 for (const c of invokes) if (!mainHandle.has(c)) problems.push(`主进程缺 ipcMain.handle('${c}') 处理器（preload 会 invoke 它）`);
 for (const c of listens) {
-  if (!main.includes(`'${c}'`)) problems.push(`主进程从不发送 '${c}'（preload 在监听它）`);
+  if (!mainCode.includes(`'${c}'`)) problems.push(`主进程从不发送 '${c}'（preload 在监听它）`);
 }
 // 反向：main 发给页面 / 从页面收的通道是否都有对端
 for (const c of mainOn) if (!sends.includes(c)) problems.push(`main 注册了 '${c}'，但 preload 从不 send 它（可能是残留）`);
 
 // 关键的鼠标穿透开关必须存在且只有一处开关（这是"吞鼠标"事故的现场）
-const ime = [...mainCode.matchAll(/setIgnoreMouseEvents\(([^)]*)\)/g)].map((m) => m[1].trim());
+const ime = [...mainOnly.matchAll(/setIgnoreMouseEvents\(([^)]*)\)/g)].map((m) => m[1].trim());
 const guard = [];
-if (!mainCode.includes("ipcMain.on('pet:interactive'")) guard.push("缺少 pet:interactive 处理器 → 窗口会永久吞鼠标");
+if (!mainOnly.includes("ipcMain.on('pet:interactive'")) guard.push("缺少 pet:interactive 处理器 → 窗口会永久吞鼠标");
 if (ime.length > 2) guard.push(`setIgnoreMouseEvents 调用点 ${ime.length} 处（应 ≤2：初始化 + 交互开关）`);
 if (!main.includes('focusWindow') && !main.includes("ipcMain.on('pet:focus'")) guard.push('缺少 pet:focus 处理器');
 
