@@ -25,13 +25,17 @@ lp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lp)
 
 
-def one_run(exe_dir, port, tag):
+def one_run(exe_dir, port, tag, settle=1.5, prewarm="1"):
     iso = os.path.join(exe_dir, "iso-cold-" + tag)
     os.makedirs(os.path.join(iso, "config"), exist_ok=True)
     os.makedirs(os.path.join(iso, "eb"), exist_ok=True)
     env = dict(os.environ,
                CATWHALE_CONFIG_DIR=os.path.join(iso, "config"),
-               WEBVIEW2_USER_DATA_FOLDER=os.path.join(iso, "eb"))
+               WEBVIEW2_USER_DATA_FOLDER=os.path.join(iso, "eb"),
+               # 调试口用环境变量注入（对主窗与子窗同一条环境生效），
+               # 这样被量的 exe 与交付 exe 逐字节相同，不用另建带调试口的构建。
+               WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=" + port,
+               CATWHALE_PREWARM=prewarm)
     proc = subprocess.Popen([os.path.join(exe_dir, "catwhale-poc.exe")], cwd=exe_dir, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     result = {"tag": tag}
@@ -40,7 +44,11 @@ def one_run(exe_dir, port, tag):
         if lp.wait_until(lambda: cdp.value("window.__petReady === true") is True, 40.0, 0.2) is None:
             result["error"] = "主窗未就绪"
             return result
-        time.sleep(1.5)
+        # settle：主窗就绪后再等多久才「点开」。默认 1.5s 是上一轮的口径；
+        # 预热版本在就绪后 2.0s/3.5s 才预建，要量「预热完成后的首开」得用 --settle 5。
+        time.sleep(settle)
+        result["settle_s"] = settle
+        result["prewarm_env"] = prewarm
         for key, js, target in (
             ("panel", "window.__TAURI__.core.invoke('open_panel',{panel:'control'})", "panel"),
             ("chat", "window.__TAURI__.core.invoke('open_panel',{panel:'chat'})", "chat"),
@@ -73,10 +81,14 @@ def main():
     ap.add_argument("--exe", required=True)
     ap.add_argument("--port", default="9223")
     ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--settle", type=float, default=1.5,
+                    help="主窗就绪后再等多久才触发打开（秒）；预热在就绪后 2.0/3.5s 才完成，量预热后首开用 5")
+    ap.add_argument("--prewarm", default="1", help="透传 CATWHALE_PREWARM（旧 exe 忽略）")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    runs = [one_run(args.exe, args.port, str(index)) for index in range(1, args.runs + 1)]
+    runs = [one_run(args.exe, args.port, str(index), args.settle, args.prewarm)
+            for index in range(1, args.runs + 1)]
     summary = {}
     for key in ("panel", "chat"):
         values = [r.get(key + "_cold_ms") for r in runs if r.get(key + "_cold_ms") is not None]

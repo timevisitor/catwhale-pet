@@ -351,6 +351,7 @@ def main():
     ap.add_argument("--exe", required=True)
     ap.add_argument("--port", default="9223")
     ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--prewarm", default="1", help="透传 CATWHALE_PREWARM（旧 exe 忽略）")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -360,7 +361,10 @@ def main():
     os.makedirs(os.path.join(iso, "eb"), exist_ok=True)
     env = dict(os.environ,
                CATWHALE_CONFIG_DIR=os.path.join(iso, "config"),
-               WEBVIEW2_USER_DATA_FOLDER=os.path.join(iso, "eb"))
+               WEBVIEW2_USER_DATA_FOLDER=os.path.join(iso, "eb"),
+               # 调试口用环境变量注入：被量的 exe 与交付 exe 逐字节相同
+               WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=" + args.port,
+               CATWHALE_PREWARM=args.prewarm)
     proc = subprocess.Popen([exe], cwd=args.exe, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cdp = None
