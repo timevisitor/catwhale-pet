@@ -167,9 +167,12 @@ test('重现用户反馈：手动目录有效且自动探测为空时，设置�
 test('重新探测失败保留手动输入，成功才替换为找到的目录', async () => {
   let handler, result = { ok: true, valid: false, path: '' };
   const input = { value: good };
+  /* 页面里的监听都经 on(target, type, fn) 登记（见 bindEvents 上方的监听器登记表），
+     这里给一个同签名的桩：行为与 addEventListener(type, fn) 等价 */
   const c = vm.createContext({ document: { getElementById: id => id === 'setDetect' ? { addEventListener: (_event, fn) => handler = fn } : input },
+    on: (target, type, fn) => target.addEventListener(type, fn),
     SET: {}, setMsg: () => {}, window: { petHost: { detectRepo: async () => result } } });
-  vm.runInContext(between(html, "document.getElementById('setDetect').addEventListener", "document.getElementById('setBrowse').addEventListener"), c);
+  vm.runInContext(between(html, "on(document.getElementById('setDetect'), 'click'", "on(document.getElementById('setBrowse'), 'click'"), c);
   await handler(); assert.equal(input.value, good);
   result = { ok: true, valid: true, path: bare };
   await handler(); assert.equal(input.value, bare);
@@ -206,11 +209,14 @@ test('已有仓库补依赖不要求 Git；部署完成但保存失败必须报�
 });
 test('resolveNode 会退回 Electron 而不是启动 PATH 上过旧的 Node', () => {
   let version = 'v20.19.0';
-  const c = vm.createContext({ supportsHarnessNode, process: { execPath: 'electron.exe' },
+  // nodeResolved 是 main.js 的模块级缓存（声明在 resolveNode 上方几行，不在切片里）：每例从空开始
+  const c = vm.createContext({ supportsHarnessNode, nodeResolved: '', process: { execPath: 'electron.exe' },
     require: () => ({ spawnSync: () => ({ status: 0, stdout: version }) }) });
   vm.runInContext(between(main, 'function resolveNode()', '/* ---------- 本地 http 服务'), c);
   assert.equal(c.resolveNode(), 'electron.exe');
-  version = 'v24.0.0'; assert.equal(c.resolveNode(), 'node');
+  version = 'v24.0.0'; assert.equal(c.resolveNode(), 'electron.exe');   // 进程内已缓存：不再同步探一次
+  c.nodeResolved = '';                                                   // 新进程（未缓存）才会重新探测
+  assert.equal(c.resolveNode(), 'node');
 });
 test('前端所有内联脚本可解析', () => {
   for (const script of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) new vm.Script(script[1]);
