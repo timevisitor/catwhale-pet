@@ -184,6 +184,15 @@ pub fn boot_guard_init_early() -> BootGuard {
 }
 
 fn default_config_dir() -> PathBuf {
+    // 与 chat::config_dir() 认同一个覆盖变量。看门狗在应用对象建立之前就要落状态文件，
+    // 拿不到 Tauri 的 app_config_dir()，于是这里单独算路径 —— 不认覆盖变量的话，
+    // 带 CATWHALE_CONFIG_DIR 的隔离测试每次都会写进用户的真实配置目录
+    // （boot-guard.json / boot-guard.log），隔离就只剩一半。
+    if let Some(dir) = std::env::var_os("CATWHALE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
