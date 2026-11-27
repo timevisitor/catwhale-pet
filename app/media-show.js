@@ -46,6 +46,9 @@ function createMediaShow(opts) {
     enabled: false,          // 页面设置面板 / settings.json 的 media.show.enabled
     pollMs: 2000,            // 采样间隔：实测 1s→单核 2.4%，2s→0.83%，2.5s→0.52%。
                              // 取 2s 折中：人「点播放」到桌宠开演约 2~4 秒，观感自然，开销减到三分之一。
+    slowMs: 2500,            // 自适应节奏（v0.7.2）：有媒体在放时按 pollMs 采样，连续静默后退到这个间隔。
+                             // 灵动岛把 pollMs 压到 600 换波形，常驻就是单核 2.6%；配合 slowMs 实测空闲 0.3%。
+                             // 0 = 关闭自适应，固定 pollMs（旧行为）。
     startMs: 1200,           // 持续多久算「真的开始了」
     stopMs: 2500,            // 停了多久算「真的结束了」
     showInGameMode: false,   // 游戏模式下一律停
@@ -72,6 +75,7 @@ function createMediaShow(opts) {
   let emit = () => {};
   let restartTimer = null;
   let backoff = 1000;
+  let wantRunning = false;          // 探测「应该」在跑（区分有意停止与意外退出，决定 exit 后要不要重启）
 
   function snapshot() {
     return {
@@ -86,6 +90,7 @@ function createMediaShow(opts) {
       lastError: state.lastError,
       lastSampleAge: state.lastSample ? Date.now() - state.lastSample : null,
       pollMs: cfg.pollMs,
+      slowMs: Number(cfg.slowMs) > 0 ? Number(cfg.slowMs) : 0,
     };
   }
 
@@ -163,10 +168,12 @@ function createMediaShow(opts) {
     }
     let child;
     try {
-      child = spawn(powershellExe(), [
+      const psArgs = [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', probeScript(), '-IntervalMs', String(cfg.pollMs),
-      ], {
+      ];
+      if (Number(cfg.slowMs) > 0) psArgs.push('-SlowMs', String(cfg.slowMs));
+      child = spawn(powershellExe(), psArgs, {
         cwd: probeDir(),
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -189,24 +196,31 @@ function createMediaShow(opts) {
       if (t) { state.lastError = t.slice(0, 300); }
     });
     child.on('error', (e) => {
+      if (state.child !== child) return;          // 已被替换/停止的旧进程：别污染当前状态
       state.errors++;
       state.lastError = String(e && e.message || e);
     });
     child.on('exit', (code, sig) => {
+      /* 只有「当前登记的那个进程」退出才代表探测断了。stopProbe() 先把 state.child 清空再 kill，
+         所以有意停止（关闭开关 / 游戏模式 suspend / 换采样节奏）后迟到的 exit 走到这里时
+         state.child 已经不是它 —— 以前这里不看是谁，会把刚起的新进程登记清掉、再退避重启一个，
+         结果是双探测；游戏模式 suspend 也是这样在 1 秒后把 PowerShell 又拉了回来。 */
+      if (state.child !== child) { push(true); return; }
       state.running = false;
       state.child = null;
       state.buf = '';
-      if (!cfg.enabled) { push(true); return; }
+      if (!cfg.enabled || !wantRunning) { push(true); return; }
       /* 非正常退出（脚本崩了/被 kill）→ 退避重启，最多 1 分钟一次 */
       restartTimer = null;
       scheduleRestart();
       push(true);
     });
+    wantRunning = true;
     push(true);
   }
 
   function scheduleRestart() {
-    if (restartTimer || !cfg.enabled) return;
+    if (restartTimer || !cfg.enabled || !wantRunning) return;
     state.restarts++;
     backoff = Math.min(backoff * 2, 60000);
     restartTimer = setTimeout(() => { restartTimer = null; startProbe(); }, backoff);
@@ -214,6 +228,7 @@ function createMediaShow(opts) {
 
   function stopProbe(reason) {
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    wantRunning = false;                           // 有意停止：exit 不再触发重启（游戏模式/关闭开关）
     const child = state.child;
     state.child = null;
     state.running = false;
@@ -226,9 +241,10 @@ function createMediaShow(opts) {
       try { child.kill(); } catch (e) {}
       /* PowerShell 有时不响应 SIGTERM（Windows 上 kill 走 TerminateProcess，通常有效），
          保险起见 3 秒后再确认一次；不强依赖任务管理器式批量杀进程。 */
-      setTimeout(() => {
+      const killer = setTimeout(() => {
         try { if (!child.killed) child.kill('SIGKILL'); } catch (e) {}
       }, 3000);
+      if (killer.unref) killer.unref();           // 兜底定时器不该拖着进程不让退
     }
     backoff = 1000;
     push(true);
@@ -243,13 +259,20 @@ function createMediaShow(opts) {
     apply(next) {
       const merged = Object.assign({}, cfg, next || {});
       const wasOn = cfg.enabled;
+      const oldPoll = cfg.pollMs, oldSlow = cfg.slowMs;
       Object.assign(cfg, merged);
+      const cadenceChanged = (cfg.pollMs !== oldPoll || cfg.slowMs !== oldSlow);
       if (cfg.enabled && (!wasOn || !state.running)) {
         /* 关掉再开时把去抖器清干净，避免带着上一次的候选状态 */
         smoother.reset();
         startProbe();
       } else if (!cfg.enabled && wasOn) {
         stopProbe('disabled');
+      } else if (cfg.enabled && state.running && cadenceChanged) {
+        /* 采样间隔是启动参数：进程已经在跑时只改 cfg 不会生效（灵动岛把 600 压给一个
+           按 2000 起的探测，实际还是 2000）。换节奏就重启一次，让 cfg 与进程一致。 */
+        stopProbe('recadence');
+        startProbe();
       } else {
         push(true);
       }

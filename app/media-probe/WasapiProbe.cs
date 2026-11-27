@@ -124,59 +124,126 @@ namespace PetAudio
             return o as T;
         }
 
+        // Every interface pointer handed out above is an RCW. Left alone they are only
+        // released by a finalizer, i.e. "whenever the next GC happens" - and the GC does
+        // not see the native memory the audio objects hold. In a loop that samples
+        // twice a second that leaked ~0.3 MB of working set per sample (measured).
+        static void Release(object o)
+        {
+            if (o == null || !Marshal.IsComObject(o)) return;
+            try { Marshal.FinalReleaseComObject(o); } catch { }
+        }
+
+        // Process name per audio session. Looking it up costs a process query per
+        // session per sample; names never change under a PID, so cache them.
+        static Dictionary<uint, string> nameCache = new Dictionary<uint, string>();
+        static List<uint> nameCacheOrder = new List<uint>();
+        const int NAME_CACHE_MAX = 256;
+
+        static string ProcName(uint pid)
+        {
+            string n;
+            if (nameCache.TryGetValue(pid, out n)) return n;
+            n = "";
+            try
+            {
+                using (Process p = Process.GetProcessById((int)pid))
+                {
+                    n = p.ProcessName;
+                }
+            }
+            catch { }
+            // Bounded: browsers recycle PIDs all day and a long-lived loop must not grow.
+            if (nameCache.Count >= NAME_CACHE_MAX)
+            {
+                uint oldest = nameCacheOrder[0];
+                nameCacheOrder.RemoveAt(0);
+                nameCache.Remove(oldest);
+            }
+            nameCache[pid] = n;
+            nameCacheOrder.Add(pid);
+            return n;
+        }
+
         public static List<SessionInfo> Sessions()
         {
             var result = new List<SessionInfo>();
-            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-            IMMDeviceCollection coll;
-            if (enumerator.EnumAudioEndpoints(EDataFlow.eRender, 1 /* DEVICE_STATE_ACTIVE */, out coll) != 0 || coll == null)
-                return result;
-            int nDev;
-            coll.GetCount(out nDev);
-            for (int d = 0; d < nDev; d++)
+            object enumeratorObj = new MMDeviceEnumeratorComObject();
+            var enumerator = (IMMDeviceEnumerator)enumeratorObj;
+            IMMDeviceCollection coll = null;
+            try
             {
-                IMMDevice dev;
-                if (coll.Item(d, out dev) != 0 || dev == null) continue;
-                string devId = "";
-                try { dev.GetId(out devId); } catch { }
-                var mgr = Activate<IAudioSessionManager2>(dev, typeof(IAudioSessionManager2).GUID);
-                if (mgr == null) continue;
-                IAudioSessionEnumerator sessEnum;
-                if (mgr.GetSessionEnumerator(out sessEnum) != 0 || sessEnum == null) continue;
-                int nSess;
-                sessEnum.GetCount(out nSess);
-                for (int i = 0; i < nSess; i++)
+                if (enumerator.EnumAudioEndpoints(EDataFlow.eRender, 1 /* DEVICE_STATE_ACTIVE */, out coll) != 0 || coll == null)
                 {
-                    IAudioSessionControl raw;
-                    if (sessEnum.GetSession(i, out raw) != 0 || raw == null) continue;
-                    var c2 = raw as IAudioSessionControl2;
-                    var info = new SessionInfo();
-                    info.device = devId;
-                    AUDIO_SESSION_STATE st;
-                    try { raw.GetState(out st); info.state = st.ToString(); } catch { }
-                    if (c2 != null)
+                    coll = null;
+                    return result;
+                }
+                int nDev;
+                coll.GetCount(out nDev);
+                for (int d = 0; d < nDev; d++)
+                {
+                    IMMDevice dev = null;
+                    if (coll.Item(d, out dev) != 0 || dev == null) continue;
+                    IAudioSessionManager2 mgr = null;
+                    IAudioSessionEnumerator sessEnum = null;
+                    try
                     {
-                        uint pid;
-                        if (c2.GetProcessId(out pid) == 0) info.pid = pid;
-                        try
+                        string devId = "";
+                        try { dev.GetId(out devId); } catch { }
+                        mgr = Activate<IAudioSessionManager2>(dev, typeof(IAudioSessionManager2).GUID);
+                        if (mgr == null) continue;
+                        if (mgr.GetSessionEnumerator(out sessEnum) != 0 || sessEnum == null)
                         {
-                            if (pid > 0)
+                            sessEnum = null;
+                            continue;
+                        }
+                        int nSess;
+                        sessEnum.GetCount(out nSess);
+                        for (int i = 0; i < nSess; i++)
+                        {
+                            IAudioSessionControl raw = null;
+                            if (sessEnum.GetSession(i, out raw) != 0 || raw == null) continue;
+                            try
                             {
-                                var p = Process.GetProcessById((int)pid);
-                                info.proc = p.ProcessName;
+                                var c2 = raw as IAudioSessionControl2;
+                                var info = new SessionInfo();
+                                info.device = devId;
+                                AUDIO_SESSION_STATE st;
+                                try { raw.GetState(out st); info.state = st.ToString(); } catch { }
+                                if (c2 != null)
+                                {
+                                    uint pid;
+                                    if (c2.GetProcessId(out pid) == 0) info.pid = pid;
+                                    if (info.pid > 0) info.proc = ProcName(info.pid);
+                                }
+                                if (info.pid == 0) info.proc = "System";
+                                var meter = raw as IAudioMeterInformation;
+                                if (meter != null)
+                                {
+                                    float peak;
+                                    if (meter.GetPeakValue(out peak) == 0) info.peak = peak;
+                                }
+                                result.Add(info);
+                            }
+                            finally
+                            {
+                                // c2 / meter are QueryInterface views of the same object.
+                                Release(raw);
                             }
                         }
-                        catch { }
                     }
-                    if (info.pid == 0) info.proc = "System";
-                    var meter = raw as IAudioMeterInformation;
-                    if (meter != null)
+                    finally
                     {
-                        float peak;
-                        if (meter.GetPeakValue(out peak) == 0) info.peak = peak;
+                        Release(sessEnum);
+                        Release(mgr);
+                        Release(dev);
                     }
-                    result.Add(info);
                 }
+            }
+            finally
+            {
+                Release(coll);
+                Release(enumeratorObj);
             }
             return result;
         }
