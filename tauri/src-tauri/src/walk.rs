@@ -21,9 +21,15 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWi
 pub const WALK_LEFT: &str = "walk_left";
 pub const WALK_RIGHT: &str = "walk_right";
 const SELECT_LABEL: &str = "walk-select";
-const TICK_MS: u64 = 33;
+/// 走动节拍：16ms = 60Hz，与 Electron 版（rAF 驱动、每帧一步）同一节奏。
+/// 原先是 33ms（30Hz）；而 `thread::sleep(33ms)` 受系统定时器精度限制实际约 46.9ms
+/// （~21Hz），窗口每秒只挪二十来次且间隔不均，走起来一顿一顿 —— 这是 Tauri 版观感
+/// 比 Electron 版差的主要原因之一（Electron 版窗口不动，只在合成层里每帧移动角色）。
+/// 步长按实测时间差计算，所以改节拍不改变速度；节拍由 `timing::sleep_ms` 保证。
+const TICK_MS: u64 = 16;
 /// 巡游速度（逻辑像素/秒），实际步进按 DPI 缩放。
-const WALK_SPEED: f64 = 190.0;
+/// 与 Electron 版的默认值一致（web/index.html 里 `WALK.cfg.speed || 130`）。
+const WALK_SPEED: f64 = 130.0;
 const DEFAULT_DISTANCE: u32 = 200;
 const MAX_DISTANCE: u32 = 5000;
 const MIN_SELECT_PX: f64 = 40.0;
@@ -287,6 +293,11 @@ struct Motion {
     ty: i32,
     dir: i8,
     kind: MotionKind,
+    /// 位移小数部分的累积（物理像素）。窗口位置只能取整，而 60Hz 下每拍步长只有
+    /// 约 2~3 物理像素；不累积的话每拍都把小数丢掉，速度会系统性偏快/偏慢，
+    /// 斜向走时两个轴的取整误差还会让轨迹变成锯齿。
+    rx: f64,
+    ry: f64,
 }
 
 struct WalkInner {
@@ -443,7 +454,7 @@ fn current_size(win: &WebviewWindow) -> (i32, i32) {
 }
 
 /// 手动交互（原生拖动 / 菜单展开）期间，自动移动必须让位。
-/// `drag_begin` 只取消一次在途目标；拖动可能持续数秒，`tick` 每 33ms 都要重新判定，
+/// `drag_begin` 只取消一次在途目标；拖动可能持续数秒，`tick` 每拍都要重新判定，
 /// 否则 1.8 秒后巡游会重新抽目标、把用户按着的窗口搬走。
 fn pet_flags(app: &AppHandle) -> (bool, bool) {
     use std::sync::atomic::Ordering;
@@ -567,7 +578,9 @@ pub fn walk_init(app: AppHandle, engine: WalkEngine) {
     let engine2 = engine.clone();
     let app2 = app.clone();
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(TICK_MS));
+        // TICK_MS = 16ms（60Hz）。原 thread::sleep(33ms) 实际睡成 ~46.9ms（约 21Hz），
+        // 窗口挪动又慢又不均；改高精度休眠后按设计节拍走。
+        crate::timing::sleep_ms(TICK_MS);
         tick(&app2, &engine2);
     });
 }
@@ -575,6 +588,19 @@ pub fn walk_init(app: AppHandle, engine: WalkEngine) {
 fn tick(app: &AppHandle, engine: &WalkEngine) {
     let Some(win) = app.get_webview_window("main") else { return };
     let now = now_ms();
+    // 空闲快路径：没有在途位移、巡游没到点、也没到检查显示器的时候，这一拍不需要碰窗口。
+    // 下面每拍要向主线程做三次同步查询（窗口尺寸 / 窗口位置 / 当前显示器）；
+    // 节拍提到 60Hz 之后，不这样做的话桌宠静止时的无谓轮询会跟着翻倍。
+    // 不变量：walking 为真时必有在途 motion（两处总是同时置位），所以只需看 motion。
+    let idle = {
+        let inner = lock(&engine.inner);
+        inner.motion.is_none()
+            && now < inner.next_cruise_at
+            && now.saturating_sub(inner.last_monitor_check) < 400
+    };
+    if idle {
+        return;
+    }
     let size = current_size(&win);
     let Ok(pos) = win.outer_position() else { return };
 
@@ -682,7 +708,7 @@ fn tick(app: &AppHandle, engine: &WalkEngine) {
         }
         let area = area.unwrap_or(Rect { x: 0, y: 0, w: size.0, h: size.1 });
 
-        if let Some(m) = inner.motion.take() {
+        if let Some(mut m) = inner.motion.take() {
             let dx = (m.tx - pos.x) as f64;
             let dy = (m.ty - pos.y) as f64;
             let dist = (dx * dx + dy * dy).sqrt();
@@ -699,8 +725,15 @@ fn tick(app: &AppHandle, engine: &WalkEngine) {
                 }));
                 inner.next_cruise_at = now + if m.kind == MotionKind::Command { 1200 } else { 2200 + (next_rand(&mut inner) % 3200) };
             } else {
-                let nx = pos.x as f64 + dx / dist * step;
-                let ny = pos.y as f64 + dy / dist * step;
+                // 本拍的位移连同上一拍剩下的小数一起取整；取整后剩下的小数留给下一拍
+                let sx = dx / dist * step + m.rx;
+                let sy = dy / dist * step + m.ry;
+                let ix = sx.trunc();
+                let iy = sy.trunc();
+                m.rx = sx - ix;
+                m.ry = sy - iy;
+                let nx = pos.x as f64 + ix;
+                let ny = pos.y as f64 + iy;
                 let (cx, cy) = clamp_position((nx.round() as i32, ny.round() as i32), size, area);
                 set_pos = Some((cx, cy));
                 if m.dir != inner.dir {
@@ -739,7 +772,7 @@ fn tick(app: &AppHandle, engine: &WalkEngine) {
                 inner.dir
             };
             inner.dir = dir;
-            inner.motion = Some(Motion { tx, ty, dir, kind: MotionKind::Cruise });
+            inner.motion = Some(Motion { tx, ty, dir, kind: MotionKind::Cruise, rx: 0.0, ry: 0.0 });
             inner.walking = true;
             do_emit = Some((true, dir, "cruise"));
         }
@@ -1105,7 +1138,7 @@ pub fn walk_command(app: AppHandle, engine: tauri::State<'_, WalkEngine>, text: 
                 let mut inner = lock(&engine.inner);
                 let d = if dir == 0 { inner.dir } else { dir };
                 inner.dir = d;
-                inner.motion = Some(Motion { tx: cx, ty: cy, dir: d, kind: MotionKind::Command });
+                inner.motion = Some(Motion { tx: cx, ty: cy, dir: d, kind: MotionKind::Command, rx: 0.0, ry: 0.0 });
                 inner.walking = true;
                 inner.seq = inner.seq.wrapping_add(1);
                 inner.next_cruise_at = now_ms() + 1200;

@@ -1624,7 +1624,8 @@ pub fn island_drag_begin(app: AppHandle) -> Value {
         };
         let mut last = (start_win.x, start_win.y);
         loop {
-            std::thread::sleep(Duration::from_millis(8));
+            // 高精度 8ms：原 thread::sleep 实际 ~15.6ms，拖岛时明显一格一格
+            crate::timing::sleep_ms(8);
             if !left_button_down() {
                 break;
             }

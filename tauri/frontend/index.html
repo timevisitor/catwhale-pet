@@ -126,11 +126,13 @@ async function loadSkin() {
   if (skinLoading) { skinPending = true; return; }
   skinLoading = true;
   try {
-    let r = null;
-    try { r = await invoke('skin_load'); } catch (e) { console.warn('skin_load failed', e); }
-    if (!builtinDir) {
-      try { builtinDir = await invoke('builtin_asset_dir'); } catch (e) { console.warn('builtin_asset_dir failed', e); }
-    }
+    let r = null, dir0 = '';
+    // 两路探测互不依赖：并行（原先是串行 await，白白多等一个 IPC 往返）
+    [r, dir0] = await Promise.all([
+      invoke('skin_load').catch(function (e) { console.warn('skin_load failed', e); return null; }),
+      builtinDir ? Promise.resolve(builtinDir) : invoke('builtin_asset_dir').catch(function (e) { console.warn('builtin_asset_dir failed', e); return ''; })
+    ]);
+    if (!builtinDir) builtinDir = dir0;
     // 内置动作与皮肤动作逐项合并。`builtin_asset_dir` 返回的是 **frontend 目录**，
     // BUILTIN 的 file 字段再拼一层 `assets/…`（两边都拼一次就会变成
     // `assets/assets/…` 而全部 404，v0.7.0 第一次打包就是这样）。用户皮肤带着
@@ -147,7 +149,8 @@ async function loadSkin() {
     lastGridSig = '';
     order = Object.keys(states);
     window.__states = states;
-    await loadDirector();
+    // 作息导演层只影响「空闲 12 秒之后」的随机权重，不阻塞首帧：后台加载即可。
+    loadDirector().catch(function () {});
     const base = states.idle || states[order[0]];
     if (base && base.w && base.h) {
       try { await invoke('set_aspect', { a: base.w / base.h }); } catch (e) {}
@@ -287,7 +290,13 @@ function play(id, opts) {
 
   next.loop = !next._segment && !opts.once && st.mode === 'loop';
   next.playbackRate = st.rate;
-  next.src = st.url;
+  /* 复用缓冲：这一路本来就是目标素材（最常见：一次性动作播完回到 idle —— 另一路
+     就是刚才的 idle），就不重设 src。设置 src（哪怕同值）都会触发整套重新加载：
+     取流、重建解复用与解码管线，这是原先「每切一下动作都要等一下」的主要来源。
+     素材已在缓冲里时直接用，go() 里 seek 到片头只需重解一个关键帧。 */
+  const reuse = next._stateId === id && next.getAttribute('src') === st.url &&
+    next.readyState >= 2 && !next.error && !failed.has(id);
+  if (!reuse) next.src = st.url;
   next._stateId = id;
   applyVideoTransform(next, st);
 
@@ -300,6 +309,8 @@ function play(id, opts) {
     failed.add(id);
     stopSegmentLoop(next);
     next._playFail = null;
+    // 复用过的素材播不起来：下一回按新素材重新加载
+    next._stateId = null;
     // 不主动撤掉当前可见帧；idle 在另一缓冲区可播后再交叉淡化。
     if (M.react === id) M.react = null;
     if (M.taskId === id) { M.taskId = null; M.taskSeq++; }
@@ -315,6 +326,8 @@ function play(id, opts) {
     activated = true;
     cleanup();
     primeSegment(next);
+    // 复用缓冲的那一路：从头播（与重新加载后的行为一致）
+    if (reuse && !next._segment) { try { next.currentTime = 0; } catch (e) {} }
     next.classList.add('on');
     if (prev !== next) {
       prev.classList.remove('on');
@@ -1048,8 +1061,14 @@ T.event.listen('skin:changed', function (e) {
 
 /* ============================ 启动 ============================ */
 (async function boot() {
+  // 三项配置互不依赖：并行取（原先是三次串行 await，首帧要白等两个 IPC 往返）
+  const results = await Promise.all([
+    invoke('get_config').catch(function () { return null; }),
+    invoke('animation_loop_get').catch(function () { return null; }),
+    invoke('walk_get').catch(function () { return null; })
+  ]);
   try {
-    const c = await invoke('get_config');
+    const c = results[0];
     const el = document.getElementById('sz');
     if (c && c.h) { el.value = c.h; document.getElementById('szv').textContent = c.h; }
     if (c) {
@@ -1060,11 +1079,11 @@ T.event.listen('skin:changed', function (e) {
     }
   } catch (e) {}
   try {
-    const r = await invoke('animation_loop_get');
+    const r = results[1];
     if (r && r.ok && r.config) animationLoop = Object.assign({}, animationLoop, r.config);
   } catch (e) {}
   try {
-    const w = await invoke('walk_get');
+    const w = results[2];
     if (w && w.ok) {
       M.walking = !!w.walking;
       if (w.dir === 'left' || w.dir === 'right') M.walkDir = w.dir;

@@ -14,6 +14,7 @@ mod notify;
 mod info;
 mod persona;
 mod sysinfo;
+mod timing;
 mod update;
 mod walk;
 
@@ -1645,7 +1646,8 @@ fn drag_begin(win: WebviewWindow, pet: tauri::State<'_, Pet>) {
         };
         let mut tick = 0u32;
         loop {
-            std::thread::sleep(Duration::from_millis(8));
+            // 高精度 8ms（原 thread::sleep 受 15.6ms 定时器精度限制，实际只有 ~64Hz 且步长不均）
+            timing::sleep_ms(8);
             if !left_button_down() {
                 break;
             }
