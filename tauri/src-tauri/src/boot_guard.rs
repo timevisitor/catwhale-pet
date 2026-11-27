@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+
 
 const CRASH_WINDOW_MS: u64 = 10 * 60 * 1000;
 const BOOT_PHASES: [&str; 3] = ["process-boot", "window-created", "page-loaded"];
@@ -173,9 +173,9 @@ fn phase_rank(name: &str) -> Option<u8> {
 }
 
 /// App-handle variant for callers that initialize after Tauri setup.
-pub fn boot_guard_init(app: &tauri::AppHandle) -> BootGuard {
-    let dir = app.path().app_config_dir().unwrap_or_else(|_| default_config_dir());
-    init_in_dir(dir, std::env::args().collect())
+pub fn boot_guard_init(_app: &tauri::AppHandle) -> BootGuard {
+    // 与 early 版同一个解析函数：认 CATWHALE_CONFIG_DIR，否则 APPDATA 下的真实目录。
+    init_in_dir(default_config_dir(), std::env::args().collect())
 }
 
 /// Early variant required to affect WebView2 before any window is created.

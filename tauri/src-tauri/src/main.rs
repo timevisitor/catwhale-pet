@@ -1059,7 +1059,7 @@ fn install_keyboard_hook(app: &AppHandle) {
         GetMessageW, SetWindowsHookExW, MSG, WH_KEYBOARD_LL,
     };
     *HOOK_APP.lock().unwrap() = Some(app.clone());
-    let log_path = app.path().app_config_dir().ok().map(|d| d.join("startup.log"));
+    let log_path = Some(chat::config_dir().join("startup.log"));
     std::thread::spawn(move || unsafe {
         match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_ll_proc), None, 0) {
             Ok(_) => {

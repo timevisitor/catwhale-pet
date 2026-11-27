@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 const POLL_MS: u64 = 8_000;
 const GAME_GUARD_PROCS: [&str; 7] = [
@@ -60,16 +60,10 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn settings_path(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_config_dir()
-        .unwrap_or_else(|_| {
-            std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("com.hermes.catwhalepoc")
-        })
-        .join("settings.json")
+fn settings_path(_app: &AppHandle) -> PathBuf {
+    // 走 chat::config_dir()：默认仍是 app_config_dir（生产路径不变），
+    // 但隔离测试可以靠 CATWHALE_CONFIG_DIR 把它挪走。
+    crate::chat::config_dir().join("settings.json")
 }
 
 fn read_settings(app: &AppHandle) -> (bool, Vec<String>) {

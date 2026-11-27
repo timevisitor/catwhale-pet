@@ -50,8 +50,8 @@ fn failure(error: impl Into<String>) -> Value {
     json!({ "ok": false, "error": error.into() })
 }
 
-fn store_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("characters"))
+fn store_dir(_app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(crate::chat::config_dir().join("characters"))
 }
 
 fn valid_id(id: &str) -> bool {

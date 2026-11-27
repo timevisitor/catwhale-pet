@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 const PROBE_PS1: &str = include_str!("media_probe.ps1");
 const PROBE_CS: &str = include_str!("WasapiProbe.cs");
@@ -195,12 +195,9 @@ struct Runtime {
 
 impl Runtime {
     fn new(app: &AppHandle) -> Self {
-        let config_dir = app.path().app_config_dir().unwrap_or_else(|_| {
-            std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("com.hermes.catwhalepoc")
-        });
+        // 走 chat::config_dir()：settings.json 与媒体探针目录都要能被
+        // CATWHALE_CONFIG_DIR 隔离，否则每次测试启动都会重写用户真实配置。
+        let config_dir = crate::chat::config_dir();
         let _ = std::fs::create_dir_all(&config_dir);
         let settings_path = config_dir.join("settings.json");
         let cfg = load_config(&settings_path);

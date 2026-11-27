@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const MIN_SPAN_SEC: f64 = 0.2;
 const SPAN_EPSILON: f64 = 1e-6;
@@ -120,8 +120,8 @@ pub fn normalize_animation_loop(input: &Value) -> Result<AnimationLoopConfig, St
     Ok(config)
 }
 
-fn animation_file(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("animation-loop.json"))
+fn animation_file(_app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(crate::chat::config_dir().join("animation-loop.json"))
 }
 
 fn atomic_animation_write(path: &Path, config: &AnimationLoopConfig) -> Result<(), String> {
@@ -226,18 +226,13 @@ fn active_skin_dir() -> Option<PathBuf> {
 /// A missing file yields `cfg:null`; a malformed higher-priority file is reported
 /// rather than silently falling back to a different configuration.
 #[tauri::command]
-pub fn director_get(app: AppHandle) -> Value {
+pub fn director_get(_app: AppHandle) -> Value {
     let mut candidates = Vec::new();
     if let Some(dir) = active_skin_dir() {
         candidates.push(dir.join("director.json"));
     }
-    match app.path().app_config_dir() {
-        Ok(dir) => candidates.push(dir.join("director.json")),
-        Err(error) if candidates.is_empty() => {
-            return json!({ "ok": false, "file": Value::Null, "error": error.to_string(), "cfg": Value::Null })
-        }
-        Err(_) => {}
-    }
+    // 配置目录同样走 chat::config_dir()，隔离测试不会再去读用户真实目录
+    candidates.push(crate::chat::config_dir().join("director.json"));
     for path in candidates {
         if !path.exists() {
             continue;

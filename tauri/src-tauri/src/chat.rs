@@ -40,11 +40,21 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// 记录一次解析好的配置目录，并在启动时就把它建出来。
+///
+/// 覆盖变量优先：`app.path().app_config_dir()` 走 Windows KnownFolder，读不到
+/// `CATWHALE_CONFIG_DIR`，若这里无脑写它就等于把隔离变量废掉（其余模块都走
+/// `config_dir()`，唯一没被隔离的那条路径会继续写用户真实目录）。
 fn init_config_dir(app: &AppHandle) {
-    if let Ok(dir) = app.path().app_config_dir() {
-        let _ = fs::create_dir_all(&dir);
-        let _ = APP_CONFIG_DIR.set(dir);
-    }
+    let dir = match std::env::var_os("CATWHALE_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => match app.path().app_config_dir() {
+            Ok(dir) => dir,
+            Err(_) => return,
+        },
+    };
+    let _ = fs::create_dir_all(&dir);
+    let _ = APP_CONFIG_DIR.set(dir);
 }
 
 /// App config directory, also usable before the first Tauri command.

@@ -38,8 +38,10 @@ fn cancelled(message: &str) -> Value {
     json!({ "ok": false, "cancelled": true, "code": "CANCELLED", "error": message })
 }
 
-fn app_root(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_config_dir().map_err(|e| e.to_string())
+/// 配置根目录：统一走 `chat::config_dir()`，它认同 `CATWHALE_CONFIG_DIR`。
+/// 直接用 `app.path().app_config_dir()` 会绕过隔离变量，隔离测试就会写进用户真实目录。
+fn app_root(_app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(crate::chat::config_dir())
 }
 
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
