@@ -209,7 +209,7 @@ function showPage(page,focus){
   try{const u=new URL(location.href);u.searchParams.set('p',page);history.replaceState(null,'',u.href);}catch(e){}
   if(page==='search')renderSearch();
   if(page==='chat'){renderChat();refreshHarnessStatus();if(!loaded.chat)refreshChat();}
-  if(page==='control')startControl();
+  if(page==='control'){const skip=window.__panelSkipControlOnce;window.__panelSkipControlOnce=false;if(!skip)startControl();}
   if(page==='settings'){if(!loaded.settings)loadConfig();loadWalk();}
   if(page==='persona')refreshPersonas();
   if(page==='dock')refreshDock();
@@ -571,7 +571,11 @@ function init(){
   listen('walk:config',p=>{if(p&&p.ok!==false)renderWalk(p);});
   listen('walk:state',p=>{if(!p||!WK.status)return;WK.status.walking=!!p.walking;if(p.dir)WK.status.dir=p.dir;renderWalk(WK.status);});
   listen('walk:selection',p=>{if(!p)return;if(p.ok){loadWalk();toast('活动范围已保存','ok');}else{toast('已取消框选','bad');}});
-  const query=new URLSearchParams(location.search).get('p');showPage(PAGES.includes(query)?query:'control',false);
+  const search=new URLSearchParams(location.search),query=search.get('p');
+  /* 预热窗（Rust 以 panel.html?prewarm=1 预建、保持隐藏）：加载时先不启动 sysinfo 完整采样
+     和媒体探测，等真正显示时的 panel:show 再走一次 showPage，行为和按需创建一致。 */
+  if(search.get('prewarm')==='1')window.__panelSkipControlOnce=true;
+  showPage(PAGES.includes(query)?query:'control',false);
   window.__panelReady=true;
   window.addEventListener('beforeunload',()=>{clearInterval(SYS.timer);for(const un of listeners){try{un();}catch(e){}}});
 }

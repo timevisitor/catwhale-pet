@@ -126,6 +126,18 @@ python scripts/verify-walk-media.py   # 素材文件级回验（解码两片 web
 搜索和聊天浮窗优先贴角色左侧，空间不足时换到右侧，并驱动角色朝向对应浮窗。拖动角色时浮窗同步跟随，工作区边缘会限制浮窗位置，避免被移出屏幕。
 
 聊天凭据使用 Windows DPAPI 加密保存；文档和日志不应记录真实 API Key。
+**首次打开的预热**：主窗就绪后约 2.5s / 4.2s，应用会在后台把综合面板与聊天浮窗的 WebView2
+**预先创建好并保持隐藏**，所以第一次点开只是 `show()`（实测面板 128→55ms、聊天 301→118ms），
+代价是常驻多两个 WebView2 渲染进程（工作集约 +145MB）。想省内存可以关掉：
+
+```bash
+CATWHALE_PREWARM=0 ./catwhale-poc.exe          # 环境变量
+# 或 settings.json 里加 {"ui": {"prewarm": false}}
+```
+
+关掉后回到「首次打开时按需创建」。用户在这两个时点前后 3 秒内已经点过菜单/面板/浮窗时，
+预建会自动让路（`startup.log` 里是 `[prewarm] panel skip:busy`），不跟用户抢主线程。
+
 
 ## 五、当前验收结果
 

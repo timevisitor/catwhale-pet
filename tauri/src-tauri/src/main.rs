@@ -738,6 +738,7 @@ fn win_has_focus(win: &WebviewWindow) -> bool {
 
 #[tauri::command]
 async fn open_sao(app: AppHandle) -> Result<(), String> {
+    LAST_UI_OPEN_MS.store(wall_ms(), Ordering::SeqCst);
     walk::pause_for_interaction(&app, "menu");
     let win = ensure_sao(&app)?;
     if let Some(pet) = app.try_state::<Pet>() {
@@ -1133,7 +1134,9 @@ fn sao_escape(app: AppHandle) {
 /* ===================== 原版搜索 / 聊天独立浮窗 =====================
    Electron 原版把浮窗放在全屏透明 DOM 里；Tauri 版用独立 WebviewWindow
    复刻同一套贴角色定位。窗口隐藏而不销毁，聊天在后台继续接收流式事件。 */
-fn ensure_float(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
+/// `prewarm=true` 时页面带 `?prewarm=1`：页面据此跳过「加载即开始后台采样/抢输入框焦点」，
+/// 等真正 show 的 float:show 再补（见 chat.html 尾部）。窗口参数与按需创建完全一致。
+fn ensure_float(app: &AppHandle, label: &str, prewarm: bool) -> Result<WebviewWindow, String> {
     if let Some(win) = app.get_webview_window(label) {
         return Ok(win);
     }
@@ -1142,7 +1145,8 @@ fn ensure_float(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
         "chat" => ("chat.html", "猫鲸 · DeepSeek 聊天", 470.0, 570.0),
         _ => return Err("未知浮窗".to_string()),
     };
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
+    let url = if prewarm { format!("{page}?prewarm=1") } else { page.to_string() };
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title(title)
         .inner_size(width, height)
         .decorations(false)
@@ -1227,6 +1231,7 @@ fn sync_float_mirror(app: &AppHandle) {
 }
 
 async fn open_float(app: AppHandle, label: String) -> Result<(), String> {
+    LAST_UI_OPEN_MS.store(wall_ms(), Ordering::SeqCst);
     close_sao_now(&app);
     for other in ["search", "chat"] {
         if other != label {
@@ -1245,7 +1250,7 @@ async fn open_float(app: AppHandle, label: String) -> Result<(), String> {
         let label2 = label.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
-            let _ = sender.send(ensure_float(&app2, &label2));
+            let _ = sender.send(ensure_float(&app2, &label2, false));
         })
         .map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn_blocking(move || receiver.recv())
@@ -1296,9 +1301,110 @@ fn float_layout(app: AppHandle, label: String, width: Option<f64>, height: Optio
     position_float(&app, &label, false);
 }
 
+/// 最近一次用户主动打开菜单/面板/浮窗的时刻（SystemTime 毫秒）。预热前用它避开
+/// 「用户刚点开」的竞态：预建要占主线程，正好撞上用户请求会让他多等一次创建时间。
+static LAST_UI_OPEN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 预建延迟（毫秒）：默认面板 3400、聊天 5000。菜单窗在 600ms 建、页面约 2.7s 初始化完，
+/// 实测把面板预建放在 2.5s 会把 sao 页就绪推后约 0.4s（2729→3195ms），所以整体后挪到
+/// 菜单就绪之后，再彼此错开。
+/// `CATWHALE_PREWARM_DELAY="3400,5000"` 可覆盖，用于量「预热与用户点击撞车」的时序。
+fn prewarm_delays() -> (u64, u64) {
+    let raw = std::env::var("CATWHALE_PREWARM_DELAY").unwrap_or_default();
+    let mut parts = raw.split(',').filter_map(|part| part.trim().parse::<u64>().ok());
+    match (parts.next(), parts.next()) {
+        (Some(panel), Some(chat)) => (panel, chat),
+        _ => (3400, 5000),
+    }
+}
+
+/// 综合工具面板窗口。`prewarm=true` 时页面带 `?prewarm=1`：面板页据此跳过
+/// 「加载即启动 sysinfo 完整采样 + 媒体探测」等后台工作，改由首次 panel:show 触发，
+/// 否则一个从没打开过的预热面板会一直占着采样线程（见 panel.html 的 init）。
+fn ensure_panel(app: &AppHandle, prewarm: bool) -> Result<WebviewWindow, String> {
+    if let Some(win) = app.get_webview_window("panel") {
+        return Ok(win);
+    }
+    let page = if prewarm { "panel.html?prewarm=1" } else { "panel.html" };
+    WebviewWindowBuilder::new(app, "panel", WebviewUrl::App(page.into()))
+        .title("猫鲸 · 工具面板")
+        .inner_size(1060.0, 720.0)
+        .min_inner_size(760.0, 520.0)
+        .resizable(true)
+        .visible(false)
+        .additional_browser_args(WEBVIEW_ARGS)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// 预建隐藏浮窗的开关。默认开：`CATWHALE_PREWARM=0/false/off/no` 或
+/// `settings.json` 里 `{"ui":{"prewarm":false}}` 关闭（环境变量优先）。
+fn prewarm_enabled() -> bool {
+    if let Some(raw) = std::env::var_os("CATWHALE_PREWARM") {
+        let text = raw.to_string_lossy().trim().to_ascii_lowercase();
+        if !text.is_empty() {
+            return !matches!(text.as_str(), "0" | "false" | "off" | "no");
+        }
+    }
+    std::fs::read_to_string(chat::config_dir().join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            value.get("ui").and_then(|ui| ui.get("prewarm")).and_then(|on| on.as_bool())
+        })
+        .unwrap_or(true)
+}
+
+/// 空闲时段预建一个隐藏浮窗（panel / chat），把「首次打开」从 WebView2
+/// 冷启动的 0.4~1.7s 压到 show() 量级。延迟数毫秒后回到主线程建窗。
+/// 规矩和 sao 预建一致：不在 main 与其它窗之间做 SetFocus/SetForegroundWindow，
+/// 建完只把前台交还外部应用，避免重新引入输入法注入链的同步等待；建窗失败只记日志，
+/// 之后 open_panel/open_float 仍按需创建，等于静默降级。
+fn prewarm_window(app: &AppHandle, label: &'static str, delay_ms: u64) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let log = chat::config_dir().join("startup.log");
+            // 已经建过（用户先点开了）就不用再建，顺带把这个窗的预建作废。
+            if app2.get_webview_window(label).is_some() {
+                wlog(&log, &format!("[prewarm] {label} skip:exists"));
+                return;
+            }
+            // 用户 3 秒内刚点过菜单/面板/浮窗：这次预建要让路，否则他点开时要排在预建后面等。
+            let last = LAST_UI_OPEN_MS.load(Ordering::SeqCst);
+            if last != 0 && wall_ms().saturating_sub(last) < 3000 {
+                wlog(&log, &format!("[prewarm] {label} skip:busy"));
+                return;
+            }
+            let started = std::time::Instant::now();
+            let result = if label == "panel" {
+                ensure_panel(&app2, true)
+            } else {
+                ensure_float(&app2, label, true)
+            };
+            match result {
+                Ok(_) => wlog(&log, &format!("[prewarm] {label} ok in {}ms", started.elapsed().as_millis())),
+                Err(e) => wlog(&log, &format!("[prewarm] {label} ERR {e}")),
+            }
+            #[cfg(windows)]
+            keep_foreground_external();
+        });
+    });
+}
+
 /// 综合工具面板：控制 / 设置等仍共用一个窗口；搜索与聊天走原版独立浮窗。
 #[tauri::command]
 async fn open_panel(app: AppHandle, panel: String) -> Result<(), String> {
+    LAST_UI_OPEN_MS.store(wall_ms(), Ordering::SeqCst);
     if panel == "search" || panel == "chat" {
         return open_float(app, panel).await;
     }
@@ -1320,16 +1426,7 @@ async fn open_panel(app: AppHandle, panel: String) -> Result<(), String> {
         let app2 = app.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
-            let result = WebviewWindowBuilder::new(&app2, "panel", WebviewUrl::App("panel.html".into()))
-                .title("猫鲸 · 工具面板")
-                .inner_size(1060.0, 720.0)
-                .min_inner_size(760.0, 520.0)
-                .resizable(true)
-                .visible(false)
-                .additional_browser_args(WEBVIEW_ARGS)
-                .build()
-                .map_err(|e| e.to_string());
-            let _ = sender.send(result);
+            let _ = sender.send(ensure_panel(&app2, false));
         })
         .map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn_blocking(move || receiver.recv())
@@ -2088,6 +2185,16 @@ fn main() {
                     }
                 }
             });
+
+            // ---- 预建 panel / chat（隐藏）：把「首次打开」从 WebView2 冷启动
+            //      0.4~1.7s 压到 show() 量级。时机排在菜单预建(600ms)之后、彼此错开，
+            //      避免连续两次占用主线程拖慢启动首帧；面板排到菜单页就绪(约 2.7s)之后。可关：
+            //      CATWHALE_PREWARM=0 或 settings.json {"ui":{"prewarm":false}}。
+            if prewarm_enabled() {
+                let (panel_delay, chat_delay) = prewarm_delays();
+                prewarm_window(app.handle(), "panel", panel_delay);
+                prewarm_window(app.handle(), "chat", chat_delay);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

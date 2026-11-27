@@ -89,7 +89,11 @@ $('cPersona').addEventListener('click',()=>{$('personaPane').hidden=false;refres
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();if(!$('personaPane').hidden){$('personaPane').hidden=true;$('cinput').focus();}else closeFloat();}});
 listen('harness:event',onHarnessEvent);listen('harness:status',onHarnessStatus);listen('float:show',label=>{if(label&&label!=='chat')return;setTimeout(()=>{$('cinput').focus();refreshPersonas();refreshChat();refreshHarnessStatus();},40);});
 window.addEventListener('beforeunload',()=>{clearInterval(C.timer);for(const un of listeners){try{un();}catch(e){}}});
-renderChat();refreshPersonas();refreshChat();refreshHarnessStatus();setTimeout(()=>{$('cinput').focus();window.__chatTest.ready=true;},50);
+/* 预热窗（Rust 以 chat.html?prewarm=1 预建、保持隐藏）：只画静态骨架，
+   角色/历史/Harness 状态与输入框焦点留给真正显示时的 float:show 再补，
+   避免一个从没打开过的聊天窗在后台读文件、抢焦点。 */
+if(new URLSearchParams(location.search).get('prewarm')==='1'){window.__chatTest.ready=true;}
+else{refreshPersonas();refreshChat();refreshHarnessStatus();setTimeout(()=>{$('cinput').focus();window.__chatTest.ready=true;},50);}
 })();
 </script>
 </body>
