@@ -89,7 +89,7 @@ pre{white-space:pre-wrap;word-break:break-word;user-select:text;font:10px/1.5 va
           <div class="actions"><button type="button" id="animationApply" class="primary">应用配置</button><button type="button" id="animationStop">停止循环</button><button type="button" id="animationReload">重新读取</button></div><div id="animationStatus" class="status"></div>
         </div>
         <div class="card"><h3>游戏模式 <span id="gameBadge" class="right badge">读取中</span></h3><div id="gameNow" class="status">检测反作弊进程，必要时隐藏桌宠。</div><div class="actions"><button type="button" data-game="on">手动开启</button><button type="button" data-game="off">手动关闭</button><button type="button" data-game="auto">恢复自动</button><button type="button" id="gameReload">刷新</button></div><div id="gameProcs" class="hint"></div></div>
-        <div class="card"><h3>版本更新 <span id="updateVersion" class="right">—</span></h3><div id="updateNow" class="status">尚未检查</div><div class="actions"><button type="button" id="updateCheck" class="primary">检查新版本</button><button type="button" id="updateOpenRelease">发布页</button><button type="button" id="updateOpenDownload">下载地址</button></div><div id="updateNotes" class="update-notes"></div>
+        <div class="card"><h3>在线升级 <span id="updateVersion" class="right">—</span></h3><div id="updateNow" class="status">尚未检查</div><div id="updatePhase" class="status" hidden></div><div class="bar" id="updateBar" hidden><i id="updateBarFill"></i></div><div id="updateReason" class="hint" hidden></div><div class="actions"><button type="button" id="updateCheck" class="primary">检查更新</button><button type="button" id="updateStart" hidden>立即升级</button><button type="button" id="updateCancelBtn" hidden>取消</button><button type="button" id="updateRestart" hidden>立即重启并完成升级</button><button type="button" id="updateOpenRelease">发布页</button><button type="button" id="updateOpenDownload">手动下载</button></div><div id="updateNotes" class="update-notes"></div>
         </div>
       </div>
     </section>
@@ -383,10 +383,52 @@ async function saveAnimation(forceOff){const cfg={enabled:forceOff?false:$('anim
 function renderGame(g){if(!g)return;setBadge('gameBadge',g.active?'已开启':'未开启',g.active?'warn':'ok');$('gameNow').textContent=(g.active?'桌宠窗口应由游戏模式隐藏。':'当前未进入游戏模式。')+'\n原因：'+(g.reason||'无')+' · 模式：'+(g.manual==='on'?'手动开':g.manual==='off'?'手动关':'自动')+' · 扫描 '+(g.scans||0)+' 次';$('gameProcs').textContent='监控进程：'+(Array.isArray(g.procs)?g.procs.join('、'):'—');}
 async function loadGame(){const r=await invokeCmd('gamemode_get');if(r)renderGame(r);else $('gameNow').textContent='读取失败';}
 async function setGame(mode){const on=mode==='auto'?null:mode==='on';const r=await invokeCmd('gamemode_set_manual',{on});renderGame(r);toast('游戏模式已切换为'+(mode==='auto'?'自动':mode==='on'?'手动开启':'手动关闭'),'ok');}
-function renderUpdate(r){if(!r)return;if(r.currentVersion)$('updateVersion').textContent='v'+r.currentVersion;const latest=r.latest||r;if(latest&&latest.hasUpdate){$('updateNow').textContent='发现新版本 v'+latest.latestVersion+'（当前 v'+(latest.currentVersion||r.currentVersion)+'）';$('updateNotes').textContent=latest.notes||'';}else if(latest&&latest.noRelease){$('updateNow').textContent='仓库暂未发布版本。';}else if(r.ok===false){$('updateNow').textContent='检查失败：'+failText(r);}else if(r.hasUpdate===false){$('updateNow').textContent='当前已是最新版本。';}else if(r.ok&&r.latest===null){$('updateNow').textContent='尚未发现缓存的新版本。';}}
-async function checkUpdate(){$('updateNow').textContent='正在检查 GitHub Releases…';const r=await invokeCmd('update_check');renderUpdate(r);}
-async function openUpdate(which){const cached=await invokeCmd('update_status');const latest=cached&&cached.latest||{};const url=which==='download'?(latest.downloadUrl||latest.releaseUrl||''):(latest.releaseUrl||'');const r=await invokeCmd('update_open_url',{url});toast(r&&r.ok?'已用系统浏览器打开':failText(r,'打开失败'),r&&r.ok?'ok':'bad');}
-function startControl(){startSys(false);loadMedia();loadAnimation();loadGame();invokeCmd('update_status').then(renderUpdate);}
+let updateInfo=null,updateLastPhase='',updateResultShown=false;
+function fmtSpeed(b){b=Number(b)||0;return b>1?fmtSize(b)+'/s':'—';}
+function updatePhaseText(st){const p=Math.max(0,Math.min(100,Number(st.percent)||0)),got=fmtSize(st.received||0),tot=fmtSize(st.total||0);switch(st.phase){case 'checking':return '正在检查更新…';case 'downloading':return '正在下载 '+p.toFixed(0)+'%（'+got+' / '+tot+'，'+fmtSpeed(st.bytesPerSec)+'）';case 'verifying':return '正在校验完整性…';case 'extracting':return '正在解包…';case 'ready':return '下载完成，重启后生效';case 'applying':return '正在切换文件并重启…';case 'error':return '失败：'+(st.error||'未知原因');case 'unsupported':return '当前环境不支持自动升级';default:return '';}}
+function renderUpdateState(st){
+  st=st||{};const phase=st.phase||'idle';
+  const busy=phase==='downloading'||phase==='verifying'||phase==='extracting';
+  const txt=updatePhaseText(st);
+  const ph=$('updatePhase');ph.hidden=!txt;ph.textContent=txt;ph.className='status'+(phase==='error'?' bad':'');
+  $('updateBar').hidden=phase!=='downloading';
+  $('updateBarFill').style.width=(phase==='downloading'?Math.max(0,Math.min(100,Number(st.percent)||0)):0)+'%';
+  const canStart=!!(updateInfo&&updateInfo.hasUpdate&&updateInfo.canAutoUpdate&&!busy&&phase!=='ready'&&phase!=='applying');
+  $('updateStart').hidden=!canStart;
+  $('updateCancelBtn').hidden=!busy;
+  $('updateRestart').hidden=phase!=='ready';
+  if(st.lastResult&&st.lastResult.result==='ok'&&!updateResultShown){updateResultShown=true;toast('已升级到 v'+(st.lastResult.to||'新版本'),'ok');}
+  updateLastPhase=phase;
+}
+function renderUpdate(r){
+  if(!r)return;
+  if(r.currentVersion)$('updateVersion').textContent='v'+r.currentVersion;
+  const latest=r.latest||r;
+  if(latest&&latest.hasUpdate){
+    updateInfo=latest;
+    const size=latest.assetSize?('（'+fmtSize(latest.assetSize)+'）'):'';
+    $('updateNow').textContent='发现 v'+(latest.latestVersion||'?')+size+'，当前 v'+(latest.currentVersion||r.currentVersion||'?');
+    $('updateNotes').textContent=latest.notes||'';
+    const can=latest.canAutoUpdate===true;
+    $('updateStart').disabled=!can;
+    $('updateReason').hidden=can;
+    $('updateReason').textContent=can?'':'自动升级不可用：'+(latest.reason||'原因未知')+'。可点「手动下载」拿到整包后自行替换。';
+  }else{
+    updateInfo=null;
+    $('updateStart').hidden=true;$('updateStart').disabled=false;$('updateReason').hidden=true;$('updateReason').textContent='';
+    if(latest&&latest.noRelease)$('updateNow').textContent='仓库暂未发布版本。';
+    else if(r.ok===false)$('updateNow').textContent='检查失败：'+failText(r);
+    else if(r.hasUpdate===false)$('updateNow').textContent='当前已是最新版本。';
+    else if(r.ok&&r.latest===null)$('updateNow').textContent='尚未发现缓存的新版本。';
+  }
+  renderUpdateState(Object.assign({phase:(r.state&&r.state.phase)||'idle'},r.state||{}));
+}
+async function checkUpdate(){$('updateNow').textContent='正在检查 GitHub Releases…';$('updateReason').hidden=true;const r=await invokeCmd('update_check');renderUpdate(r);}
+async function startUpdate(){if(!updateInfo||!updateInfo.canAutoUpdate)return;const r=await invokeCmd('update_download');if(!isOk(r)){toast(failText(r,'开始下载失败'),'bad');}renderUpdateState(Object.assign({phase:(r&&r.phase)||'downloading'},r||{}));}
+async function cancelUpdate(){const r=await invokeCmd('update_cancel');toast(isOk(r)?'已取消下载':'取消失败：'+failText(r),isOk(r)?'ok':'bad');const st=await invokeCmd('update_state');renderUpdateState(st);}
+async function applyUpdate(){const r=await invokeCmd('update_apply');if(!isOk(r)){toast(failText(r,'无法开始重启升级'),'bad');return;}toast('正在切换文件并重启，进程即将退出…','ok');}
+async function openUpdate(which){const cached=await invokeCmd('update_status');const latest=cached&&cached.latest||{};const url=which==='download'?(latest.assetUrl||latest.downloadUrl||latest.releaseUrl||''):(latest.releaseUrl||'');const r=await invokeCmd('update_open_url',{url});toast(r&&r.ok?'已用系统浏览器打开':failText(r,'打开失败'),r&&r.ok?'ok':'bad');}
+function startControl(){startSys(false);loadMedia();loadAnimation();loadGame();invokeCmd('update_status').then(renderUpdate);invokeCmd('update_state').then(renderUpdateState);}
 
 /* 设置 */
 function toggleBackend(){const api=$('cfgBackend').value==='api';$('cfgApiFields').hidden=!api;$('cfgHarnessFields').hidden=api;}
@@ -551,7 +593,7 @@ function bindEvents(){
   $('mediaApply').addEventListener('click',saveMedia);$('mediaEnabled').addEventListener('change',saveMedia);$('mediaProbe').addEventListener('click',async()=>{output('mediaOutput','正在独立探测系统媒体…');const r=await invokeCmd('media_probe_once');output('mediaOutput',r);});$('mediaDiag').addEventListener('click',async()=>output('mediaOutput',await invokeCmd('media_diag')));
   $('animationApply').addEventListener('click',()=>saveAnimation(false));$('animationStop').addEventListener('click',()=>saveAnimation(true));$('animationReload').addEventListener('click',loadAnimation);
   $$('[data-game]').forEach(b=>b.addEventListener('click',()=>setGame(b.dataset.game)));$('gameReload').addEventListener('click',loadGame);
-  $('updateCheck').addEventListener('click',checkUpdate);$('updateOpenRelease').addEventListener('click',()=>openUpdate('release'));$('updateOpenDownload').addEventListener('click',()=>openUpdate('download'));
+  $('updateCheck').addEventListener('click',checkUpdate);$('updateStart').addEventListener('click',startUpdate);$('updateCancelBtn').addEventListener('click',cancelUpdate);$('updateRestart').addEventListener('click',applyUpdate);$('updateOpenRelease').addEventListener('click',()=>openUpdate('release'));$('updateOpenDownload').addEventListener('click',()=>openUpdate('download'));
   $('cfgBackend').addEventListener('change',toggleBackend);$('cfgSave').addEventListener('click',saveConfig);$('cfgTest').addEventListener('click',testConfig);$('cfgReload').addEventListener('click',loadConfig);$('cfgEnv').addEventListener('click',()=>{if(!$('envHarnessDir').value)$('envHarnessDir').value=$('cfgRepo').value;showPage('env');});$('cfgDetect').addEventListener('click',()=>detectHarness(false));$('cfgBrowse').addEventListener('click',()=>detectHarness(true));
   $('walkEnabled').addEventListener('change',()=>setWalkEnabled($('walkEnabled').checked));$('walkSelect').addEventListener('click',beginWalkSelect);$('walkClear').addEventListener('click',clearWalkBounds);$('walkRefresh').addEventListener('click',loadWalk);
   $('envCheck').addEventListener('click',refreshEnv);$('envBack').addEventListener('click',()=>showPage('settings'));$('envCancel').addEventListener('click',cancelEnv);$('envDeployHarness').addEventListener('click',()=>deployEnv('harness'));$('envDeployEverything').addEventListener('click',()=>deployEnv('everything'));$('envLaunchEverything').addEventListener('click',launchEverything);$('envHarnessSite').addEventListener('click',()=>openEnvUrl('https://github.com/deepseek-ai/deepseek-harness'));$('envEverythingSite').addEventListener('click',()=>openEnvUrl('https://www.voidtools.com/zh-cn/downloads/'));
@@ -567,7 +609,7 @@ function init(){
   hostAvailable=!!(window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke);$('hostDot').className='dot '+(hostAvailable?'ok':'bad');$('hostText').textContent=hostAvailable?'Tauri 已连接':'Tauri 不可用';
   bindEvents();
   listen('panel:show',payload=>{const p=typeof payload==='string'?payload:payload&&(payload.p||payload.panel||payload.page||payload.view);if(PAGES.includes(p))showPage(p);});
-  listen('harness:event',onHarnessEvent);listen('harness:status',onHarnessStatus);listen('sysinfo',renderSys);listen('media:state',renderMediaState);listen('pet:gamemode',e=>{if(active==='control')loadGame();});listen('env:log',onEnvLog);listen('dock:update',renderDock);
+  listen('harness:event',onHarnessEvent);listen('harness:status',onHarnessStatus);listen('sysinfo',renderSys);listen('media:state',renderMediaState);listen('pet:gamemode',e=>{if(active==='control')loadGame();});listen('env:log',onEnvLog);listen('dock:update',renderDock);listen('update:progress',renderUpdateState);
   listen('walk:config',p=>{if(p&&p.ok!==false)renderWalk(p);});
   listen('walk:state',p=>{if(!p||!WK.status)return;WK.status.walking=!!p.walking;if(p.dir)WK.status.dir=p.dir;renderWalk(WK.status);});
   listen('walk:selection',p=>{if(!p)return;if(p.ok){loadWalk();toast('活动范围已保存','ok');}else{toast('已取消框选','bad');}});
