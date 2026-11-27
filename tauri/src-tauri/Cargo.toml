@@ -17,6 +17,7 @@ sysinfo = "0.30"
 semver = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 base64 = "0.22"
+regex = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 crc32fast = "1"

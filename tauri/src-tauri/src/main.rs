@@ -2195,6 +2195,9 @@ fn main() {
                 prewarm_window(app.handle(), "panel", panel_delay);
                 prewarm_window(app.handle(), "chat", chat_delay);
             }
+            // ---- 在线升级：读上次升级回执（成功→面板提示「已升级到 vX」）、
+            //      报告残留 .bak、清理旧包目录。全部落在 %LOCALAPPDATA%\catwhale-update\。
+            update::startup_notice(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2269,6 +2272,11 @@ fn main() {
             update::update_check,
             update::update_status,
             update::update_open_url,
+            update::update_download,
+            update::update_cancel,
+            update::update_stage,
+            update::update_apply,
+            update::update_state,
             media::media_get,
             media::media_set,
             media::media_probe_once,
