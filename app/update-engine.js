@@ -530,9 +530,9 @@ class UpdateEngine {
     const ts = stamp();
     const backupDir = this.installDir + '.bak-' + ts;
     const logName = `apply-${ts}.log`;
-    let text = '';
+    let built = null;
     try {
-      text = buildApplyCmd({
+      built = buildApplyCmd({
         installDir: this.installDir,
         stageDir: staging,
         exeName: this.exeName,
@@ -552,19 +552,20 @@ class UpdateEngine {
     const cmdPath = path.join(this.root, `apply-${ts}.cmd`);
     try {
       fs.mkdirSync(this.root, { recursive: true });
-      fs.writeFileSync(cmdPath, text, 'utf8');       // 无 BOM：有 BOM 的话 cmd 连 @echo off 都读不对
+      // 脚本纯 ASCII、无 BOM；中文路径通过环境变量传给子进程（见 apply-cmd.js 顶部说明）
+      fs.writeFileSync(cmdPath, built.cmd, 'utf8');
     } catch (e) {
       return { ok: false, error: '写升级脚本失败：' + ((e && e.message) || e) };
     }
     this.setState({ phase: 'applying' }, true);
-    const rawPath = path.join(this.root, 'apply-last.cmd');
-    try { fs.writeFileSync(rawPath, text, 'utf8'); } catch (e) {}
+    try { fs.writeFileSync(path.join(this.root, 'apply-last.cmd'), built.cmd, 'utf8'); } catch (e) {}
     // cwd 必须离开安装目录 —— 任何进程把安装目录当 CWD，move "<INSTALL>" 就必然失败
     const comspec = process.env.ComSpec || 'cmd.exe';
     let child = null;
     try {
       child = spawn(comspec, ['/c', cmdPath], {
         cwd: this.root, detached: true, stdio: 'ignore', windowsHide: true,
+        env: { ...process.env, ...built.env },
       });
       child.unref();
     } catch (e) {
