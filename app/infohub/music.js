@@ -9,18 +9,30 @@
  * 为什么按需探：media_probe.ps1 每次要起 PowerShell（约 0.6~1.2s），
  * 常驻轮询会在桌宠空闲时白烧 CPU；面板打开时探一次、操作后探一次足够。
  *
+ * 为什么必须异步（2026-11 实测）：这里原先是 spawnSync —— 在**主进程**上同步等 PowerShell。
+ * 探测正常时要冻住整个应用 0.25~0.6 秒（托盘、IPC、点击穿透、灵动岛跟随全停，就是
+ * 「开机卡一下」）；探测脚本一旦卡住就是整整 12 秒超时。信息中枢启动时会调一次 start()，
+ * 所以每次开机必中。改成 execFile + Promise：等它的只有「音乐」这一块自己的数据。
+ * 这也是 media-show.js 里早就写下的硬约束：主进程绝不用 spawnSync/execSync。
+ *
  * @module infohub/music
  */
 'use strict';
 
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 
+/** 跑一次探测/控制脚本，完成后 resolve { stdout, stderr, status }（超时或起不来 → status -1） */
 function runPs(script, args, timeoutMs) {
-  const r = spawnSync('powershell',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script].concat(args || []),
-    { timeout: timeoutMs || 12000, encoding: 'utf8', windowsHide: true });
-  return { stdout: String((r && r.stdout) || ''), stderr: String((r && r.stderr) || ''), status: r ? r.status : -1 };
+  return new Promise((resolve) => {
+    execFile('powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script].concat(args || []),
+      { timeout: timeoutMs || 12000, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const status = err ? (Number.isFinite(err.code) ? err.code : -1) : 0;
+        resolve({ stdout: String(stdout || ''), stderr: String(stderr || ''), status });
+      });
+  });
 }
 
 module.exports = function create(ctx) {
@@ -31,8 +43,8 @@ module.exports = function create(ctx) {
   let detail = '未探测';
 
   /** 探一次当前媒体状态；失败返回 {ok:false, error} */
-  function probeOnce() {
-    const r = runPs(probe, ['-Once'], 12000);
+  async function probeOnce() {
+    const r = await runPs(probe, ['-Once'], 12000);
     const lines = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => s.startsWith('{'));
     if (!lines.length) return { ok: false, error: '探针没有输出' + (r.stderr ? ('（' + r.stderr.slice(0, 120) + '）') : '') };
     let data = null;
@@ -62,7 +74,7 @@ module.exports = function create(ctx) {
 
     async start() {
       try {
-        const r = probeOnce();
+        const r = await probeOnce();
         ready = !!r.ok;
         detail = r.ok ? (r.hasSession ? ('当前：' + (r.title || '未知曲目') + (r.playing ? '（播放中）' : '（暂停）')) : '没有可控制的播放器') : ('探针失败：' + r.error);
         ctx.snapshot('music', r.ok ? r : { ok: false, error: r.error });
@@ -72,10 +84,10 @@ module.exports = function create(ctx) {
     },
     async stop() { },
     status() { return { ready, detail }; },
-    async refresh() { const r = probeOnce(); ctx.snapshot('music', r); detail = r.ok ? (r.hasSession ? r.title : '没有可控制的播放器') : r.error; return r; },
+    async refresh() { const r = await probeOnce(); ctx.snapshot('music', r); detail = r.ok ? (r.hasSession ? r.title : '没有可控制的播放器') : r.error; return r; },
 
     async state() {
-      const r = probeOnce();
+      const r = await probeOnce();
       ctx.snapshot('music', r);
       ready = !!r.ok;
       return r;
@@ -88,12 +100,12 @@ module.exports = function create(ctx) {
       if (!allowed.includes(v)) return { ok: false, error: '不支持的操作: ' + v };
       const args = ['-Action', v];
       if (v === 'seek') args.push('-Seconds', String(Math.max(0, Math.round(Number((arg && arg.seconds) || 0)))));
-      const r = runPs(ctl, args, 12000);
+      const r = await runPs(ctl, args, 12000);
       const out = (r.stdout || '').trim().split(/\r?\n/).pop() || '';
       const ok = out === 'ok';
       if (!ok) ctx.log('控制 ' + v + ' 失败: ' + (out || r.stderr.slice(0, 120)));
-      // 操作后刷新一次快照，让面板立刻反映新状态
-      setTimeout(() => { try { const s = probeOnce(); ctx.snapshot('music', s); } catch (e) {} }, 350);
+      // 操作后刷新一次快照，让面板立刻反映新状态（不阻塞返回）
+      setTimeout(() => { probeOnce().then((s) => ctx.snapshot('music', s)).catch(() => {}); }, 350);
       return { ok, detail: out };
     },
   };

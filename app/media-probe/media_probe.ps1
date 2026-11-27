@@ -33,10 +33,18 @@ function Await($op, $type) {
   try {
     $asTask = $asTaskGeneric.MakeGenericMethod($type)
     $task = $asTask.Invoke($null, @($op))
-    $task.Wait(-1) | Out-Null
+    # 有界等待。原先是 Wait(-1)：WinRT 的完成通知并不保证到达 —— 实测 SMTC 的 RequestAsync
+    # 会一直不回调，无限等待就永久挂住：常驻循环从此不再输出任何采样（媒体演出静默失效），
+    # 一次性探测则把调用方一路拖到超时。到点拿不到就按「这一项缺失」处理，循环照常继续。
+    $task.Wait($AWAIT_MAX_MS) | Out-Null
+    if (-not $task.IsCompleted -or $task.IsFaulted) { return $null }
     return $task.Result
   } catch { return $null }
 }
+$AWAIT_MAX_MS = 2000
+# SMTC 刚超时过：先歇这么久再试，不然系统媒体会话一卡，每个采样都要白等一轮
+$SMTC_BACKOFF_MS = 30000
+$smtcSkipUntil = 0
 $SMTC_TYPE = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
 $MEDIA_PROPS = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType = WindowsRuntime]
 
@@ -50,10 +58,11 @@ $TITLE_TTL_MS = 5000
 
 function GetSmtc {
   $list = @()
+  if ([Environment]::TickCount -lt $smtcSkipUntil) { return $list }   # 退避期内：这一轮不碰 SMTC
   $mgr = $null
   try {
     $mgr = Await ($SMTC_TYPE::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
-    if ($null -eq $mgr) { return $list }
+    if ($null -eq $mgr) { $script:smtcSkipUntil = [Environment]::TickCount + $SMTC_BACKOFF_MS; return $list }
     foreach ($s in $mgr.GetSessions()) {
       $item = @{ app = ''; status = ''; pbType = '' }
       try { $item.app = [string]$s.SourceAppUserModelId } catch { }

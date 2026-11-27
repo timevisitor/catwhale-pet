@@ -1305,7 +1305,12 @@ function alLoadMeta(id){
     timer = setTimeout(()=> finish({ ok:false, error:'读取视频时长超时' }), 3000);
     try{
       v.preload = 'auto';
-      if (v.readyState < 1) v.load();
+      /* 只在「根本没在加载」时才 load()。视频正在加载中（NETWORK_LOADING）就等事件 ——
+         对正在加载/播放的视频调 load() 会把它整个重置：启动时默认动作正好是 idle，
+         元数据还没到就被这里重置，上面 init 刚起的 play() 随之中止（AbortError），
+         之后没人再 play() → 角色停在第一帧不动。原先靠「窗口稍后才显示」触发的
+         visibilitychange 碰巧续播；页面在窗口可见时重载（托盘「重新加载界面」/换皮肤）就必然静帧。 */
+      if (v.readyState < 1 && v.networkState !== 2) v.load();
     }catch(e){}
   });
 }
@@ -3788,6 +3793,11 @@ async function init(){
   /* 桌面走动：读范围/巡游开关（默认关），框选与设置区一并就绪。
      放在最后：它要读真实工作区尺寸并可能把角色夹回范围内。 */
   await walkInit();
+  /* 启动过程中任何一步若把当前这路视频重置了（例如读元数据时的 load()），状态机以为还在播、
+     实际已停在第一帧。这里兜底：片段循环没接管时，当前视频若被暂停就续播。 */
+  if (!AL.run && cur && videos[cur] && videos[cur].paused && !M.gameMode && !document.hidden){
+    play(cur);
+  }
   window.__petInitOK = true;
   toast('拖动我 · 单击互动 · 右键菜单');
 }

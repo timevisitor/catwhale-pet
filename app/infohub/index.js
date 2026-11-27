@@ -390,11 +390,15 @@ function createHub(opts) {
         };
         const procs = map[target] || [target];
         let out = 'not-running';
+        /* 异步跑：原先是 spawnSync（超时 8s），用户点一下「打开」整只桌宠就冻到脚本返回 */
+        const runPs = (psArgs) => new Promise((resolve) => {
+          require('node:child_process').execFile('powershell',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'activate.ps1')].concat(psArgs),
+            { timeout: 8000, encoding: 'utf8', windowsHide: true },
+            (_e, stdout) => resolve(String(stdout || '').trim()));
+        });
         for (const proc of procs) {
-          const r = require('node:child_process').spawnSync('powershell',
-            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'activate.ps1'), '-Name', proc],
-            { timeout: 8000, encoding: 'utf8', windowsHide: true });
-          out = String((r && r.stdout) || '').trim();
+          out = await runPs(['-Name', proc]);
           if (out === 'ok') break;
         }
         return { ok: out === 'ok', detail: out || '未启动或没有窗口' };

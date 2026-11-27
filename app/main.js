@@ -317,6 +317,18 @@ function resolveNode() {
   } catch (e) { nodeResolved = process.execPath; }
   return nodeResolved;                    // 结果进程内缓存：harness 闲置回收后重开不再同步起 node -v
 }
+/* 启动后在后台把 resolveNode() 的缓存填好。它本身是 spawnSync('node', '-v')（上限 8 秒），
+   第一次聊天冷启动时会同步卡住主进程；开机后台先探一次，真正用到时直接命中缓存。
+   探不到就什么都不做（resolveNode 自己会退回 Electron），不改变任何结论。 */
+function prewarmNode() {
+  if (nodeResolved) return;
+  try {
+    execFile('node', ['-v'], { windowsHide: true, encoding: 'utf8', timeout: 8000 }, (err, stdout) => {
+      if (nodeResolved) return;          // envTools() 可能已经填了更准确的路径
+      nodeResolved = (!err && supportsHarnessNode(String(stdout || '').trim())) ? 'node' : process.execPath;
+    });
+  } catch (e) { /* 保持未缓存：resolveNode() 走原来的同步兜底 */ }
+}
 
 /* ---------- 本地 http 服务 ----------
    必须走 http 而不是 file://：file:// 下 canvas 会被污染，
@@ -364,6 +376,10 @@ async function createWindow() {
   // ⚠ did-finish-load 必须在 loadURL 之前注册：await loadURL 返回时它已经触发过了
   win.webContents.once('did-finish-load', () => {
     bootGuard.phase('page-loaded');
+    /* 主窗口的缩放必须是 1。灵动岛的胶囊缩放原先与主窗口同源共享（已用独立 partition 隔离），
+       但旧版本留下的缩放系数按主机名持久化在配置里 —— 用过旧版的用户一打开角色就小 20%、
+       灵动岛落点错位。这里显式归一，顺手把存量配置洗回来。 */
+    try { if (Math.abs(win.webContents.getZoomFactor() - 1) > 1e-3) win.webContents.setZoomFactor(1); } catch (e) {}
     /* 胶囊可能比页面先起来（启动顺序不定），加载完再补一次「收起旧浮层」 */
     try { if (island && island.cfg().enabled) send('island:panels-off', true); } catch (e) {}
     if (PAGEMARK3) win.webContents.insertCSS('#pet{background:#ff0000 !important}').catch(()=>{});
@@ -2434,6 +2450,7 @@ if (!app.requestSingleInstanceLock()) {
     buildTray();
     // 启动 5 秒后在后台静默检查一次 GitHub 新版本
     setTimeout(() => { runUpdateCheck(true).catch(() => {}); }, 5000);
+    { const t = setTimeout(prewarmNode, 4000); if (t.unref) t.unref(); }   // 后台预热聊天运行时探测，避免首次聊天同步卡主进程
     if (AUTOSTART) {                                   // --autostart=on|off：命令行设置（托盘里也有开关）
       const want = ['on', '1', 'true', 'yes'].includes(AUTOSTART.toLowerCase());
       const applied = setAutoLaunch(want);

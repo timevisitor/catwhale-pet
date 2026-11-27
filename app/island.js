@@ -490,6 +490,12 @@ function createIsland(deps) {
       webPreferences: {
         preload: path.join(__dirname, 'island-preload.js'),
         contextIsolation: true, nodeIntegration: false, backgroundThrottling: false,
+        /* 必须独立 partition。Chromium 的页面缩放是「同一 BrowserContext 内按源共享」的：
+           岛和主窗口都加载 http://127.0.0.1:<port>/…，下面 applyZoom() 给岛设的 0.8
+           会直接作用到主窗口 —— 角色被画小 20%，页面坐标与主进程的屏幕 DIP 也差 20%，
+           岛就被摆到角色旁边而不是头顶（实测 zoom={main:0.8,island:0.8}）。
+           独立 session 有自己的缩放表，两边的缩放从此互不影响。岛不需要任何持久化存储。 */
+        partition: 'island',
       },
     });
     win.setAlwaysOnTop(true, 'screen-saver');

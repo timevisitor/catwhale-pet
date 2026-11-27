@@ -157,3 +157,16 @@ test('球还不可见（没角色矩形）：不因为签名去重而漏掉首�
   const n = w.sent.filter((s) => s.ch === 'island:data').length;
   assert.ok(n >= 1, '未显示时照常推送（与旧行为一致）');
 });
+
+test('灵动岛窗口用独立 session：胶囊缩放不得泄漏到主窗口', () => {
+  /* Chromium 的页面缩放按「同一 BrowserContext 内同源」共享。岛和主窗口都是
+     http://127.0.0.1:<port>/…，岛为了跟随角色缩放会 setZoomFactor(0.8) ——
+     不隔离的话主窗口也变成 0.8：角色画小 20%，页面坐标与屏幕 DIP 差 20%，
+     岛被摆到角色旁边而不是头顶（实测 zoom={main:0.8,island:0.8}）。 */
+  const t = newIsland({ todoOpen: 0 });
+  t.tick();
+  const prefs = t.win().opts.webPreferences || {};
+  assert.equal(typeof prefs.partition, 'string');
+  assert.ok(prefs.partition.length > 0, '岛必须有自己的 partition');
+  assert.notEqual(prefs.partition, 'persist:session', '不能与主窗口共用默认 session');
+});

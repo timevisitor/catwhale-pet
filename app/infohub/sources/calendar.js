@@ -26,7 +26,7 @@
  *   - 定时器 unref()，stop() 清干净；日历标题里不会有密钥，但 open_id 一律脱敏后再进日志。
  */
 
-const { spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -228,47 +228,49 @@ module.exports = function create(ctx) {
   }
 
   /**
-   * 同步跑一次 lark-cli（20s 上限）。
+   * 跑一次 lark-cli（20s 上限），完成后 resolve 同样的 { ok, stdout, stderr, code, timedOut? }。
    * Windows 上必须经过 cmd.exe 才能跑 .cmd 包装脚本，参数用引号包好。
+   *
+   * 必须异步（2026-11 实测）：原先是 spawnSync —— 在**主进程**上同步等 lark-cli，
+   * 每次 10 分钟定时刷新都把整个桌宠冻住 0.2s（本机实测）到最长 20s：托盘、IPC、
+   * 点击穿透、灵动岛跟随全停。等它的只应该是日历这一块自己的数据。
    */
   function runCli(args) {
     const bin = findCli();
-    if (!bin) return { ok: false, stdout: '', stderr: '没找到 lark-cli（%LOCALAPPDATA%\\hermes\\node 与 PATH 都没有）', code: -1 };
-    let r;
-    try {
-      if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
-        const line = [bin].concat(args).map(quote).join(' ');
-        r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', line], {
-          timeout: CLI_TIMEOUT_MS,
-          encoding: 'utf8',
-          windowsHide: true,
-          maxBuffer: 4 * 1024 * 1024,
-        });
-      } else {
-        r = spawnSync(bin, args, {
-          timeout: CLI_TIMEOUT_MS,
-          encoding: 'utf8',
-          windowsHide: true,
-          maxBuffer: 4 * 1024 * 1024,
-        });
+    if (!bin) return Promise.resolve({ ok: false, stdout: '', stderr: '没找到 lark-cli（%LOCALAPPDATA%\\hermes\\node 与 PATH 都没有）', code: -1 });
+    let exe, argv;
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
+      const line = [bin].concat(args).map(quote).join(' ');
+      exe = process.env.ComSpec || 'cmd.exe';
+      argv = ['/d', '/s', '/c', line];
+    } else {
+      exe = bin; argv = args;
+    }
+    return new Promise((resolve) => {
+      try {
+        execFile(exe, argv, { timeout: CLI_TIMEOUT_MS, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            if (err && (err.killed || err.signal)) {
+              return resolve({ ok: false, stdout: String(stdout || ''), stderr: 'lark-cli 超时（' + CLI_TIMEOUT_MS + 'ms）', code: -1, timedOut: true });
+            }
+            if (err && !Number.isFinite(err.code)) {            // 起不来（ENOENT 等）
+              return resolve({ ok: false, stdout: String(stdout || ''), stderr: '启动失败：' + err.message, code: -1 });
+            }
+            resolve({ ok: true, stdout: String(stdout || ''), stderr: String(stderr || ''), code: err ? err.code : 0 });
+          });
+      } catch (e) {
+        resolve({ ok: false, stdout: '', stderr: '启动失败：' + e.message, code: -1 });
       }
-    } catch (e) {
-      return { ok: false, stdout: '', stderr: '启动失败：' + e.message, code: -1 };
-    }
-    if (r.error) {
-      const timedOut = r.error.code === 'ETIMEDOUT' || /timed? ?out/i.test(r.error.message || '');
-      return { ok: false, stdout: String(r.stdout || ''), stderr: timedOut ? 'lark-cli 超时（' + CLI_TIMEOUT_MS + 'ms）' : 'lark-cli 出错：' + r.error.message, code: -1, timedOut };
-    }
-    return { ok: true, stdout: String(r.stdout || ''), stderr: String(r.stderr || ''), code: r.status };
+    });
   }
 
   /* ---------- 主流程 ---------- */
 
-  function refreshNow() {
+  async function refreshNow() {
     const now = clock();
     const day = ymd(now);
     const args = ['calendar', '+agenda', '--format', 'json', '--start', day, '--end', day];
-    const r = runCli(args);
+    const r = await runCli(args);
     let parsed;
     if (!r.ok) {
       parsed = { ok: false, error: r.stderr || '命令失败' };
@@ -327,14 +329,14 @@ module.exports = function create(ctx) {
       const c = cfg();
       if (c.enabled === false) { state = { ready: false, detail: '已关闭' }; return; }
       state = { ready: false, detail: '首次取数中' };
-      // 同步子进程会阻塞主进程一点点（≤20s），放到下一拍避免卡住窗口创建
+      // 首刷放到下一拍，避免和窗口创建抢主线程；取数本身是异步的，不阻塞任何人
       setTimeout(() => {
         if (!started) return;                        // stop() 后不再补刷
-        try { refreshNow(); } catch (e) { log('首刷异常：' + e.message); }
+        refreshNow().catch((e) => { log('首刷异常：' + e.message); });
       }, 1500).unref();
       // 10 分钟刷新（配置 refreshMin 可覆盖）
       const mins = Math.max(1, Number(c.refreshMin) || 10);
-      timer = setInterval(() => { try { refreshNow(); } catch (e) { log('刷新异常：' + e.message); } }, mins * 60 * 1000);
+      timer = setInterval(() => { refreshNow().catch((e) => { log('刷新异常：' + e.message); }); }, mins * 60 * 1000);
       if (timer.unref) timer.unref();
       state = { ready: false, detail: '已启动，等待首次取数' };
     },
@@ -353,7 +355,7 @@ module.exports = function create(ctx) {
     },
 
     async refresh() {
-      const r = refreshNow();
+      const r = await refreshNow();
       return r.ok ? { ok: true, count: (r.data && r.data.today.length) || 0 } : { ok: false, error: r.error };
     },
 
@@ -361,7 +363,7 @@ module.exports = function create(ctx) {
     async probe() {
       const bin = findCli();
       if (!bin) return { ok: false, detail: '没找到 lark-cli' };
-      const r = runCli(['auth', 'status']);
+      const r = await runCli(['auth', 'status']);
       if (!r.ok) return { ok: false, detail: r.stderr || 'auth status 失败' };
       const j = parseAgendaSafe(r.stdout) || {};
       const idt = j.identities || {};
