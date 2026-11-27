@@ -53,7 +53,9 @@
     transform-origin:50% 96.67%;      /* 缩放基准＝脚底基线(1450/1500)，放大不会离地 */
     transform:scale(1);
   }
-  #pet video.active{opacity:1;}
+  #pet video.active,#pet video.leaving{opacity:1;}
+  /* .leaving：上一个动作已经暂停，但下一路视频还没解出第一帧 —— 这一帧先留着，
+     否则中间会透明几帧（角色「闪一下」）。新视频一出帧就摘掉，走上面那条 .12s 淡出。 */
   #shadow{
     position:fixed; z-index:9; pointer-events:none;
     background:radial-gradient(closest-side, rgba(0,0,0,.40), rgba(0,0,0,0) 100%);
@@ -418,6 +420,10 @@
   /* 显隐动画：轻快、只动透明度与位移（照说明第 7 节） */
   #search.show,#chat.show,#settings.show,#menu.show,#panel.show,#envwiz.show{ animation:sao-open .18s cubic-bezier(.2,.8,.2,1); }
   @keyframes sao-open{ 0%{opacity:0;transform:translateX(-6px);} 100%{opacity:1;transform:translateX(0);} }
+  /* 面板翻到角色右侧时位移方向跟着镜像：始终「朝角色探出」，左右两侧观感对称
+     （类名由 placePanel / placeMenu 按实际落点写上，只在真正翻边时才换动画） */
+  #search.show.from-right,#chat.show.from-right,#settings.show.from-right,#envwiz.show.from-right,#menu.show.from-right{ animation-name:sao-open-r; }
+  @keyframes sao-open-r{ 0%{opacity:0;transform:translateX(6px);} 100%{opacity:1;transform:translateX(0);} }
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
   /* ---------- 环境自检 / 一键部署向导 ---------- */
@@ -1063,12 +1069,14 @@ function loungeSpan(ctx){
 
 /* 空闲时段的一次决策：先掷「要不要做一次性小动作」，否则在循环池里挑一个。
    注意「倍率 0」的语义：该时段被禁用的动作不会被抽到；如果所有小动作都被禁用，
-   就老老实实不做（不能回落到第一个），否则深夜照样会吃米饭。 */
-function rollLounge(){
+   就老老实实不做（不能回落到第一个），否则深夜照样会吃米饭。
+   preselect=true 只「预选」下一个空闲状态并预热，不起播 —— 启动和打开自动行为时用：
+   那一刻要的是「待机一段再开始」，不是一上来就演一段吃米饭（原先 35% 概率如此）。 */
+function rollLounge(preselect){
   const ctx = directorCtx();
   const acts = Object.keys(states).filter((id)=> usable(id) && states[id].role === 'idle_act');
   const chance = ctx ? director.idleActChance(ctx) : IDLE_ACT_CHANCE;
-  if (acts.length && Math.random() < chance){
+  if (!preselect && acts.length && Math.random() < chance){
     let pick = null;
     if (ctx){
       const bw = {}; for (const id of acts) bw[id] = baseWeightOf(id);
@@ -1104,6 +1112,10 @@ function rollLounge(){
 
 function tick(){
   if (M.gameMode) return;                    // 游戏模式：窗口已隐藏，别再切状态/起播解码
+  /* 托盘「隐藏」/最小化同理：窗口不可见时视频已被 visibilitychange 暂停，
+     这里若继续跑，空闲随机会挑一个新状态并 play() —— 隐藏着的桌宠照样解码。
+     窗口 backgroundThrottling:false，不会自动帮我们停，必须自己停。 */
+  if (document.hidden) return;
   if (M.react && now() >= M.reactUntil) M.react = null;
   if (M.emote && now() >= M.emoteUntil) M.emote = null;
   if (MEDIA.m) { try{ mediaTick(); }catch(e){} }   // 媒体演出：数循环遍数 / 结束休息
@@ -1354,7 +1366,7 @@ function alEnterSegment(){
     return false;
   }
   ensureVideoData(id);
-  for (const k in videos){ if (videos[k] !== v) videos[k].classList.remove('active'); }
+  for (const k in videos){ if (videos[k] !== v){ videos[k].classList.remove('active','leaving'); } }
   pauseOthers(v);
   v.classList.add('active');
   v.style.transform = videoTransform(id);
@@ -1376,7 +1388,7 @@ function alEnterSegment(){
 function alClearVideos(){
   for (const id in videos){
     const v = videos[id];
-    try{ v.classList.remove('active'); if (!v.paused) v.pause(); }catch(e){}
+    try{ v.classList.remove('active','leaving'); if (!v.paused) v.pause(); }catch(e){}
   }
 }
 
@@ -1648,6 +1660,30 @@ function pauseOthers(keep){
   }
   return n;
 }
+/* 动作交接：旧视频已被 pauseOthers 暂停（最后一帧还在），而新视频从「开始加载」到
+   「解出第一帧」之间是透明的。原先这里立刻把旧的摘掉 → 没预载过的动作第一次演时会闪一下
+   （点击互动、聊天表情、看板动作都不预热）。
+   现在旧的挂 .leaving 继续显示，等新视频真的出了帧（requestVideoFrameCallback）再摘，
+   走 CSS 的 .12s 淡出 = 一次真正的交叉淡化。拿不到帧回调 / 素材缺失时由超时兜底，
+   绝不会把旧的一帧永远钉在屏幕上。 */
+const HANDOVER_MAX_MS = 800;
+let handOverT = 0;
+function clearHandOver(){
+  if (handOverT){ clearTimeout(handOverT); handOverT = 0; }
+  for (const id in videos){
+    const v = videos[id];
+    if (v && v.classList.contains('leaving')) v.classList.remove('leaving');
+  }
+}
+function handOver(prev, next){
+  if (!next || !prev || prev === next) return;
+  let done = false;
+  const fin = ()=>{ if (done) return; done = true; clearTimeout(handOverT); handOverT = 0; prev.classList.remove('leaving'); };
+  try{
+    if (typeof next.requestVideoFrameCallback === 'function') next.requestVideoFrameCallback(()=>fin());
+  }catch(e){}
+  handOverT = setTimeout(fin, HANDOVER_MAX_MS);
+}
 function play(id){
   // 固定片段走自己的起播：从 start 开始、由引擎管边界（不是媒体 loop）
   if (AL.run && AL.run.actionId === id && AL.engine){ alEnterSegment(); return; }
@@ -1657,7 +1693,8 @@ function play(id){
   if (AL.engine && AL.engine.isRunning()) AL.engine.pause('switch-away');
   ensureVideoData(id);            // 按需加载：第一次演到的状态，此时才把视频数据拉起来
   const prev = cur ? videos[cur] : null;
-  if (prev && prev !== next) prev.classList.remove('active');
+  clearHandOver();
+  if (prev && prev !== next){ prev.classList.add('leaving'); prev.classList.remove('active'); }
   pauseOthers(next);
   next.classList.add('active');
   next.style.transform = videoTransform(id);
@@ -1669,6 +1706,7 @@ function play(id){
     const p = next.play();
     if (p && p.catch) p.catch(()=>{});
   }catch(e){}
+  handOver(prev, next);
   updateShadow();
   /* 动作换了 → 头顶在角色矩形里的位置要重新量一次（代价高的逐像素识别就在这里发生，
      走动/呼吸这些帧不碰它）。island-anchor.js 用 key 变化触发，这里只负责通知。 */
@@ -1687,13 +1725,23 @@ function ensureVideoData(id){
   return false;
 }
 
+/* 一次性动作 / 表情的「最晚退出时间」上界。
+   真正的结束由视频的 ended 事件驱动（见 init 里的监听）：播完的瞬间就接回状态机。
+   这里的定时只是兜底 —— 视频没播起来 / 素材损坏时也要能按时退出。
+   原先按「duration ÷ 动作速率」估算，没算「速度」滑块和深夜降速：播放比估算慢
+   就播到一半被切走，比估算快就最后一帧定住几秒。 */
+function oneShotMs(id){
+  const dur = (states[id] && states[id].duration) || 4.04;
+  const rate = Math.max(0.05, baseRate * stateRate(id) * (String(id).indexOf('emo_') === 0 ? 1 : directorRate()));
+  return Math.round(dur * 1000 / rate) + 400;
+}
 function playOnce(id, ms, user){
   if (window.__petDebug){ window.__petDebug.lastPlayOnce = { id, at: now(),
     stack: String((new Error()).stack || '').split('\n').slice(1, 5).join(' <- ') }; }
   if (!states[id]) return;
   M.react = id;
   M.reactUser = !!user;                       // 固定片段只给用户点的动作插播
-  M.reactUntil = now() + (ms ?? Math.round((states[id].duration || 4.04) * 1000 / stateRate(id)));
+  M.reactUntil = now() + (ms ?? oneShotMs(id));
   applyState();
 }
 
@@ -1713,7 +1761,7 @@ function showEmotion(emotion, source, text){
   const id = emoteId(emotion);
   if (!id || !states[id] || states[id].__missing) return false;
   M.emote = id;
-  M.emoteUntil = now() + Math.round((states[id].duration || 5.0) * 1000 / stateRate(id));
+  M.emoteUntil = now() + oneShotMs(id);
   EMO.last = { emotion, id, source: source || '', at: Date.now(), text: String(text || '').slice(0, 80) };
   ensureVideoData(id);
   applyState();
@@ -1769,8 +1817,11 @@ function initHostBridge(){
       try{host.setInteractive(inter);lastInter=inter;}catch(e){}
     }
   };
-  const onMove=e=>{lastPos={x:e.clientX,y:e.clientY};evaluate();};
-  const onLeave=()=>{lastPos=null;evaluate();};
+  /* 鼠标移动：同一次物理移动会同时触发 mousemove 和 pointermove，原先每次都做一轮
+     elementFromPoint 命中（必要时强制 layout）。按帧合并：一帧最多算一次，结论不变。 */
+  let moveRaf=0;
+  const onMove=e=>{lastPos={x:e.clientX,y:e.clientY};if(moveRaf||disposed)return;moveRaf=requestAnimationFrame(()=>{moveRaf=0;evaluate();});};
+  const onLeave=()=>{if(moveRaf){cancelAnimationFrame(moveRaf);moveRaf=0;}lastPos=null;evaluate();};
   addEventListener('mousemove',onMove,true);
   addEventListener('pointermove',onMove,true);
   addEventListener('mouseleave',onLeave);
@@ -1785,10 +1836,19 @@ function initHostBridge(){
       evaluate();
     }catch(e){evaluate();}finally{pollBusy=false;}
   };
-  const persist=()=>{try{host.saveState({x:parseFloat(pet.style.left)||0,y:parseFloat(pet.style.top)||0,size:opt.size});}catch(e){}};
+  /* 位置/大小没变就不写盘：原先每 5 秒无条件让主进程同步读+写一次 pet-state.json，
+     桌宠静止时整天都在做无意义的磁盘 I/O。 */
+  let savedSig='';
+  const persist=()=>{
+    const s={x:parseFloat(pet.style.left)||0,y:parseFloat(pet.style.top)||0,size:opt.size};
+    const sig=s.x+'|'+s.y+'|'+s.size;
+    if(sig===savedSig)return;
+    try{host.saveState(s);savedSig=sig;}catch(e){}
+  };
   const mouseTimer=setInterval(poll,50),saveTimer=setInterval(persist,5000);
   const dispose=()=>{
     disposed=true;clearInterval(mouseTimer);clearInterval(saveTimer);
+    if(moveRaf){cancelAnimationFrame(moveRaf);moveRaf=0;}
     removeEventListener('mousemove',onMove,true);removeEventListener('pointermove',onMove,true);
     removeEventListener('mouseleave',onLeave);removeEventListener('beforeunload',onUnload);
   };
@@ -1921,7 +1981,18 @@ function walkClampAll(animate){
   const box = walkFits().ok ? walkBox() : GEOM.petBox(walkAreaNow(), s.w, s.h);
   const c = GEOM.clampPet(p.x, p.y, box);
   if (c.clamped) place(c.x, c.y, !!animate); else updateShadow();
+  if (c.clamped) followPanelsAfterClamp(!!animate);
   return c.clamped;
+}
+/* 角色被程序挪动（夹回工作区/走动范围变化）后，已经打开的面板要跟着重摆 ——
+   面板是按角色位置摆的。原先不跟：开「设置」→ walkLoad 把半个身子在屏幕外的角色
+   夹回来 → 面板留在原地、正好压在角色身上，抬手镜像也还是按旧位置算的
+   （tests 里的 --panelmirrortest：settings × 角色在右 一例）。
+   带 .5s 位移动画时等动画走完再量角色位置。 */
+let clampFollowT = 0;
+function followPanelsAfterClamp(animate){
+  clearTimeout(clampFollowT);
+  clampFollowT = setTimeout(()=>{ clampFollowT = 0; replaceOpenPanels(); }, animate ? 540 : 0);
 }
 
 async function walkRefreshArea(){
@@ -2380,6 +2451,7 @@ function placeMenu(){                              // 菜单永远开在"抬手�
   m.style.top  = top + 'px';
   m.classList.toggle('side-left',  side < 0);      // 三角朝向指尖
   m.classList.toggle('side-right', side > 0);
+  m.classList.toggle('from-right', side > 0);       // 出场位移朝指尖方向（镜像时跟着翻）
 }
 
 /* ===================== 文件搜索（Everything） =====================
@@ -2438,6 +2510,8 @@ function placePanel(el){                      // 通用：面板贴角色**左�
   el.style.left = Math.round(left) + 'px';
   el.style.top  = Math.round(top) + 'px';
   syncMirrorFromPanels();                      // 面板落在哪一侧 → 抬手动画跟着镜像
+  /* 面板翻到角色右侧时出场位移跟着镜像（sao-open-r）：始终朝角色方向探出 */
+  el.classList.toggle('from-right', panelOnRight(el) === true);
 }
 /* ---------- 镜像：任何"开在角色右侧"的界面都应让抬手指向右侧 ----------
    原先只有 SAO 菜单算了镜像，文件搜索 / 聊天 / 设置 / 自检向导翻到右侧时没镜像 →
@@ -3351,13 +3425,14 @@ function renderChat(){
   // 工具卡片 + 流式气泡（都是"本轮尚未落盘"的实时内容）
   for (const t of C.tools) items.push(toolLine(t));
   if (C.stream) items.push('<div class="cline assistant stream">' + mdLite(C.stream) + '<span class="caret"></span></div>');
-  if (C.reasoning) items.push('<div class="creason"><details><summary>思考过程（' + C.reasoning.length + ' 字）</summary>'
+  if (C.reasoning) items.push('<div class="creason"><details><summary>思考过程（<span class="r-len">' + C.reasoning.length + '</span> 字）</summary>'
                               + '<div>' + mdLite(C.reasoning) + '</div></details></div>');
   if (C.state === 'starting' && C.backend !== 'api') items.push('<div class="thinking"><span class="spinner"></span>正在启动 harness 运行时…</div>');
   else if (C.busy){
     const secs = C.t0 ? Math.round((now() - C.t0) / 1000) : 0;
-    items.push('<div class="thinking"><span class="spinner"></span>' + (C.backend === 'api' ? (C.persona || '模型') + ' 正在输入… ' : 'harness 正在处理… ') + secs + ' 秒'
-             + (secs > 25 ? '（带工具的任务会久一些；可点下方“停止生成”）' : '') + '</div>');
+    /* 秒数 / 提示各包一层：chatBusyTick 每秒只改这两个文本节点，不重排整段记录 */
+    items.push('<div class="thinking"><span class="spinner"></span>' + (C.backend === 'api' ? (C.persona || '模型') + ' 正在输入… ' : 'harness 正在处理… ') + '<span class="t-secs">' + secs + '</span> 秒'
+             + '<span class="t-hint">' + (secs > 25 ? CHAT_SLOW_HINT : '') + '</span></div>');
   }
   if (C.tail) items.push('<div class="cline err">' + mdLite(C.tail) + '</div>');
   if (!items.length) items.push('<div class="cline assistant" style="color:var(--ui-dim);background:transparent;border:none">'
@@ -3378,7 +3453,27 @@ function renderChat(){
   schedulePlaceChat();                    // 高度变了 → 重新摆位
 }
 
-/* ---------- 流式增量（高频，直接改 DOM，避免整块重绘） ---------- */
+/* ---------- 流式增量（高频，直接改 DOM，避免整块重绘） ----------
+   「稳定前缀」：mdLite 的行内规则（`码`、**粗体**）都不跨行，代码块以 ``` 成对出现。
+   所以只要切点落在「行首，且此前 ``` 成对」的位置，就有
+        mdLite(全文) === mdLite(前缀) + mdLite(尾段)
+   前缀渲染一次就缓存（按行往后追加），每来一个 token 只重排最后一两行。
+   原先每个 token 都把整段回答重新 mdLite + innerHTML：长回答是每 token O(n)、一轮 O(n²)。 */
+const SP = { len: 0, html: '', src: '' };
+function streamStable(t){
+  const MIN_TAIL = 48;                      // 尾段至少留这么多字符，免得每来一行都动前缀
+  const n = t.length;
+  if (n < SP.len || !t.startsWith(SP.src)){ SP.len = 0; SP.html = ''; SP.src = ''; }   // 新的一轮 / 文本被整段替换
+  let i = SP.len, parity = 0, last = -1;
+  while (i < n){
+    const c = t.charCodeAt(i);
+    if (c === 96 && t.charCodeAt(i + 1) === 96 && t.charCodeAt(i + 2) === 96){ parity ^= 1; i += 3; continue; }
+    if (c === 10 && parity === 0 && n - (i + 1) >= MIN_TAIL) last = i + 1;
+    i++;
+  }
+  if (last > SP.len){ SP.html += mdLite(t.slice(SP.len, last)); SP.len = last; SP.src = t.slice(0, last); }
+  return SP.len;
+}
 function patchStream(){
   const box = els.cmsg;
   const follow=chatAtBottom(box), scrollTop=box.scrollTop;
@@ -3386,18 +3481,41 @@ function patchStream(){
   if (!el){
     el = document.createElement('div');
     el.className = 'cline assistant stream';
-    el.innerHTML = '<span class="caret"></span>';
-    box.appendChild(el);
+    /* 顺序与 renderChat 一致：回答气泡排在「思考过程 / 处理中…」上面 */
+    box.insertBefore(el, box.querySelector('.creason, .thinking'));
   }
-  el.innerHTML = mdLite(C.stream) + '<span class="caret"></span>';
+  let st = el.querySelector('.s-stable'), tl = el.querySelector('.s-tail');
+  if (!st || !tl){                       // 这一块是 renderChat 整块渲染出来的：换成两段式
+    el.innerHTML = '<div class="s-stable"></div><div class="s-tail"></div>';
+    st = el.querySelector('.s-stable'); tl = el.querySelector('.s-tail');
+  }
+  const p = streamStable(C.stream);
+  if (st.__len !== SP.len){ st.innerHTML = SP.html; st.__len = SP.len; }
+  tl.innerHTML = mdLite(C.stream.slice(p)) + '<span class="caret"></span>';
   box.scrollTop=follow?box.scrollHeight:scrollTop;
+}
+const CHAT_SLOW_HINT = '（带工具的任务会久一些；可点下方“停止生成”）';
+/* 处理中每秒只改两个数字（秒数 / 思考字数），不再把整段聊天记录重排一遍。
+   「处理中」那一行或思考块还没出现时（比如思考块刚到）才整块渲染一次。 */
+function chatBusyTick(){
+  if (!C.busy || !C.open) return;
+  const box = els.cmsg;
+  const secs = String(C.t0 ? Math.round((now() - C.t0) / 1000) : 0);
+  const s = box.querySelector('.thinking .t-secs');
+  const rl = box.querySelector('.creason .r-len');
+  if (!s || (C.reasoning && !rl)){ renderChat(); return; }
+  if (s.textContent !== secs) s.textContent = secs;
+  const hint = box.querySelector('.thinking .t-hint');
+  if (hint && Number(secs) > 25 && !hint.textContent) hint.textContent = CHAT_SLOW_HINT;
+  const len = String(C.reasoning ? C.reasoning.length : 0);
+  if (rl && rl.textContent !== len) rl.textContent = len;
 }
 
 function chatBusyStart(){
   C.busy = true; C.t0 = now();
   M.chatBusy = true;                      // → 桌宠演"操作中"（优先级高于菜单）
   clearInterval(C.timer);
-  C.timer = setInterval(()=>{ if (C.busy) renderChat(); }, 1000);
+  C.timer = setInterval(chatBusyTick, 1000);
   renderChat(); applyState();
 }
 function chatBusyEnd(){
@@ -3507,14 +3625,21 @@ async function clearChat(){
   saveChatToStorage();  // 优化：清空后同步持久化
 }
 
-/* ===================== 聊天记录持久化 ===================== */
+/* ===================== 聊天记录持久化 =====================
+   只服务于**没有桌面宿主**的网页演示页。桌面版里对话记录由主进程落盘
+   （%APPDATA%\桌宠\chat-history.json，每次打开聊天都从宿主重读，见 refreshChat），
+   这里那份 localStorage 拷贝是第二份真相：启动时要把整份历史 JSON.parse 一遍、
+   对着还没显示的聊天面板整块渲染，随后一打开聊天又被主进程的版本覆盖重写。
+   有宿主就两边都不做。 */
 function saveChatToStorage(){
+  if (window.petHost && window.petHost.chatHistory) return;
   try{
     const data = { msgs: C.msgs, title: C.title, savedAt: Date.now() };
     localStorage.setItem('petChatHistory', JSON.stringify(data));
   }catch(e){ /* 存储失败不影响主流程 */ }
 }
 function loadChatFromStorage(){
+  if (window.petHost && window.petHost.chatHistory) return;
   try{
     const saved = localStorage.getItem('petChatHistory');
     if (saved){
@@ -3617,7 +3742,17 @@ async function init(){
     v.preload = EAGER_STATES.includes(id) ? 'auto' : 'metadata';
     v.loop = (st.mode === 'loop');
     v.disablePictureInPicture = true;
-    v.addEventListener('ended', ()=>{ try{ v.pause(); }catch(e){} });   // 一次性动作播完别占着解码器
+    v.addEventListener('ended', ()=>{
+      try{ v.pause(); }catch(e){}             // 一次性动作播完别占着解码器
+      /* 播完的瞬间就把一次性动作 / 表情交还给状态机（原先只靠 reactUntil/emoteUntil 估算，
+         调速或深夜降速时对不上：要么最后一帧定住几秒，要么播到一半被切走）。 */
+      if (cur !== id) return;
+      if (AL.engine && AL.engine.isRunning()) return;   // 片段循环：边界由引擎管，ended 前就已回卷
+      let changed = false;
+      if (M.react === id){ M.react = null; changed = true; }
+      if (M.emote === id){ M.emote = null; changed = true; }
+      if (changed) applyState();
+    });
     v.addEventListener('error', ()=>{ st.__missing = true; console.warn('[pet] 素材缺失，已跳过:', id, v.src); });
     pet.appendChild(v);
     videos[id] = v;
@@ -3625,7 +3760,7 @@ async function init(){
 
   M.lastInteract = now();
   M.loungeUntil = M.lastInteract + IDLE_HOLD_MS;
-  rollLounge();
+  rollLounge(true);                  // 只预选 + 预热，不起播：启动先老老实实待机
 
   applySize(opt.size);
   els.size.value = opt.size;
@@ -3669,10 +3804,17 @@ function applySize(h){
   document.documentElement.style.setProperty('--pet-w', Math.round(h * CANVAS_ASPECT) + 'px');
   clampToScreen(false); updateShadow();
 }
+/* 坐标贴到物理像素网格。角色是一路被缩放显示的视频层：落在半个物理像素上时整层
+   都要重采样，静止时边缘发虚、走动时逐帧抖动。拖动/走动/夹回带来的小数坐标在这里归位；
+   读取侧（walkPos / clampToScreen / persist）读的就是写进去的值，前后自洽。 */
+function snapPx(v){
+  const dpr = window.devicePixelRatio || 1;
+  return Math.round(v * dpr) / dpr || 0;       // || 0：把 -0 归成 0
+}
 function place(x, y, animate){
   if (!pet) return;        // 皮肤加载/热重载期间可能有定时器先触发，pet 还没赋值
   if (animate) pet.classList.add('moving');
-  pet.style.left = x + 'px'; pet.style.top = y + 'px';
+  pet.style.left = snapPx(x) + 'px'; pet.style.top = snapPx(y) + 'px';
   if (animate) setTimeout(()=> pet.classList.remove('moving'), 520);
   updateShadow();
   /* 灵动岛：所有让角色位移的路径（拖动 / 自动走动 / 夹回屏幕 / 换尺寸）最终都过这里。
@@ -4228,10 +4370,14 @@ function bindEvents(){
   on(window, 'resize', ()=>{ clampToScreen(false); replaceOpenPanels(); });
 
   // 首次点击 → 解锁自动播放
+  /* 自动播放兜底：Electron 的 autoplayPolicy 默认 no-user-gesture-required，静音视频
+     在 init() 里本来就能自动播（桌宠启动即在动）。这里只在「当前这路真的被暂停了」时续播。
+     原先对全部 26 路视频调 load()：会把正在播的那一路重置并重新取流 —— 第一次点角色时
+     画面闪一下；还同时发起 26 个请求。 */
   on(document, 'pointerdown', function unlock(){
-    for (const id in videos){ try{ videos[id].load(); }catch(e){} }
-    applyRates();
-    play(cur || 'idle');
+    const v = videos[cur];
+    if (!v || !v.paused || document.hidden || M.gameMode) return;
+    try{ const p = v.play(); if (p && p.catch) p.catch(()=>{}); }catch(e){}
   }, {once:true});
   on(window, 'beforeunload', unbindAll);        // 卸载 → 显式摘掉本函数登记的全部监听器
 }
@@ -4239,7 +4385,7 @@ function bindEvents(){
 function setAuto(on){
   opt.auto = on;
   document.getElementById('btnAuto').classList.toggle('on', on);
-  if (on) rollLounge(); else M.lounge = 'idle';
+  if (on) rollLounge(true); else M.lounge = 'idle';     // 开关拨回「开」只预选，不立刻演
   applyState();
 }
 function setShadow(on){
@@ -4270,7 +4416,11 @@ function updateStateLine(id){
   else if (M.react) why = '一次性动作';
   else if (opt.auto && now() - M.lastInteract >= IDLE_HOLD_MS) why = '长时间空闲随机';
   else why = '操作后待机';
-  els.stateLine.textContent = '状态：' + (st.name || id) + '（' + why + '）';
+  /* 本函数每 150ms 被调用一次：控制面板藏着（桌面版默认 controls=0）或文字没变就不碰 DOM */
+  const panel = els.panel || document.getElementById('panel');
+  if (panel && panel.classList.contains('hidden')) return;
+  const text = '状态：' + (st.name || id) + '（' + why + '）';
+  if (els.stateLine.textContent !== text) els.stateLine.textContent = text;
 }
 
 let t0 = now(), fc = 0, fpsOn = true;
