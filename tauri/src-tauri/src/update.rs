@@ -530,8 +530,26 @@ fn run_check() -> (Value, Option<Plan>) {
         );
     }
     if !response.status().is_success() {
+        // 403/429 基本都是 GitHub 未认证接口按出口 IP 限流（60 次/小时）。
+        // 共用代理/VPN 时容易被同 IP 的其他人用光；直说人话，别丢一个裸 HTTP 码。
+        let code = response.status().as_u16();
+        if code == 403 || code == 429 {
+            return (
+                json!({
+                    "ok": false,
+                    "hasUpdate": false,
+                    "currentVersion": CURRENT_VERSION,
+                    "latestVersion": Value::Null,
+                    "canAutoUpdate": false,
+                    "rateLimited": true,
+                    "reason": "检查更新被 GitHub 限流（HTTP 403/429）：未登录接口按出口 IP 每小时只给 60 次，同一条代理/VPN 上的其他人也会占用。等一会儿再试，或点「手动下载」直接拿整包。",
+                    "releaseUrl": GITHUB_RELEASES_PAGE
+                }),
+                None,
+            );
+        }
         return (
-            update_error(format!("升级接口 HTTP {}", response.status().as_u16())),
+            update_error(format!("升级接口 HTTP {code}")),
             None,
         );
     }
