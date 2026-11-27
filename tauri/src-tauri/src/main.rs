@@ -18,6 +18,8 @@ mod timing;
 mod update;
 mod walk;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -200,7 +202,12 @@ fn set_role_rect(pet: tauri::State<'_, Pet>, x: f64, y: f64, w: f64, h: f64) {
     *pet.rect.lock().unwrap() = [x, y, w, h];
 }
 
-/// 前端上传命中网格：w/h 网格尺寸，bbox 归一化包围盒，data 为 w*h 个 0/1 字节（base64 前按原始字节传）
+/// 前端上传命中网格：w/h 网格尺寸，bbox 归一化包围盒。
+///
+/// `bits` 是 w*h 个 0/1 按低位优先打包后再 base64 的串（96×160 → 1920 字节 → 2560 字符）。
+/// 早先直接传 `Vec<u8>`，serde_json 会把 15360 个数字展开成约 30 KB 文本，
+/// 每次姿态变化都要付一次 JSON 解析 + IPC 拷贝，实测单次 2.2 ms；打包后只剩 2.5 KB。
+/// 位序与前端 `packBits` 一致：第 i 格 = bytes[i>>3] >> (i&7) & 1。
 #[tauri::command]
 fn set_hit_grid(
     app: AppHandle,
@@ -208,11 +215,14 @@ fn set_hit_grid(
     w: u32,
     h: u32,
     bbox: Vec<f64>,
-    data: Vec<u8>,
+    bits: String,
 ) {
-    if w == 0 || h == 0 || w > 512 || h > 512 || data.len() != (w * h) as usize || bbox.len() != 4 {
+    if w == 0 || h == 0 || w > 512 || h > 512 || bbox.len() != 4 {
         return;
     }
+    let Some(data) = unpack_hit_bits(&bits, w, h) else {
+        return;
+    };
     // 逐像素 alpha 网格顺带喂给灵动岛：它拿「头顶」（跳过呆毛）当跟随锚点
     island::note_pet_box(&bbox, w, h, &data);
     let mut g = pet.grid.lock().unwrap();
@@ -223,6 +233,36 @@ fn set_hit_grid(
     drop(g);
     // 姿态/皮肤换帧可能让锚点重定，顺便让岛对齐一次
     island::pet_moved(&app);
+}
+
+/// 把 base64 位图还原成 w*h 个 0/1 字节；长度不对或不是合法 base64 就拒绝
+/// （宁可保留上一份网格，也不要把半截数据塞进命中判定）。
+fn unpack_hit_bits(bits: &str, w: u32, h: u32) -> Option<Vec<u8>> {
+    let n = (w as usize).checked_mul(h as usize)?;
+    if n == 0 || n > 512 * 512 {
+        return None;
+    }
+    let bytes = BASE64.decode(bits).ok()?;
+    if bytes.len() != n.div_ceil(8) {
+        return None;
+    }
+    let mut data = Vec::with_capacity(n);
+    for i in 0..n {
+        data.push((bytes[i >> 3] >> (i & 7)) & 1);
+    }
+    Some(data)
+}
+
+/// `unpack_hit_bits` 的逆运算，只给单元测试用（前端在 JS 侧打包）。
+#[cfg(test)]
+fn pack_hit_bits(data: &[u8]) -> String {
+    let mut bytes = vec![0u8; data.len().div_ceil(8)];
+    for (i, value) in data.iter().enumerate() {
+        if *value != 0 {
+            bytes[i >> 3] |= 1 << (i & 7);
+        }
+    }
+    BASE64.encode(bytes)
 }
 
 
@@ -2229,5 +2269,58 @@ mod builtin_asset_dir_tests {
         assert!(pick_asset_dir(vec![empty.clone()]).is_none());
         assert!(pick_asset_dir(Vec::new()).is_none());
         let _ = std::fs::remove_dir_all(&empty);
+    }
+}
+
+#[cfg(test)]
+mod hit_grid_tests {
+    use super::*;
+
+    /// 固定图案：既有不透明也有透明格，覆盖整条行优先顺序。
+    fn pattern(w: usize, h: usize) -> Vec<u8> {
+        (0..w * h).map(|i| u8::from((i * 7 + i / w) % 5 == 0)).collect()
+    }
+
+    #[test]
+    fn bit_pack_roundtrip_preserves_every_cell() {
+        let (w, h) = (96usize, 160usize);
+        let data = pattern(w, h);
+        let packed = pack_hit_bits(&data);
+        // 1920 字节 → base64 2560 字符；比原来 15360 个数字的 JSON 小一个数量级
+        assert_eq!(packed.len(), 2560);
+        let back = unpack_hit_bits(&packed, w as u32, h as u32).unwrap();
+        assert_eq!(back, data);
+    }
+
+    #[test]
+    fn hit_grid_decision_is_identical_after_pack() {
+        // 行优先顺序错一位会整体错位，所以逐格比对 Grid::hit 的结论。
+        let (w, h) = (96u32, 160u32);
+        let data = pattern(w as usize, h as usize);
+        let unpacked = unpack_hit_bits(&pack_hit_bits(&data), w, h).unwrap();
+        let grid = |bytes: Vec<u8>| Grid { w, h, bbox: [0.0, 0.0, 1.0, 1.0], data: bytes };
+        let direct = grid(data);
+        let packed = grid(unpacked);
+        let mut hits = 0u32;
+        for gy in 0..h {
+            for gx in 0..w {
+                let fx = (gx as f64 + 0.5) / w as f64;
+                let fy = (gy as f64 + 0.5) / h as f64;
+                let a = direct.hit(fx, fy);
+                assert_eq!(a, packed.hit(fx, fy), "格 ({gx},{gy}) 结论不一致");
+                if a {
+                    hits += 1;
+                }
+            }
+        }
+        assert!(hits > 0, "测试图案必须包含不透明格");
+    }
+
+    #[test]
+    fn malformed_payload_is_rejected() {
+        assert!(unpack_hit_bits("", 96, 160).is_none());
+        assert!(unpack_hit_bits("AAAA", 96, 160).is_none()); // 字节数不足
+        assert!(unpack_hit_bits("!!!!", 96, 160).is_none()); // 非 base64
+        assert!(unpack_hit_bits("AAAA", 0, 160).is_none()); // 尺寸为 0
     }
 }

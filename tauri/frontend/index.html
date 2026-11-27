@@ -694,57 +694,100 @@ function publishRect() {
 
 /* ---- 命中网格：把当前视频帧缩到 96×160 采 alpha，交给 Rust 做逐像素穿透判定 ----
    Electron 版是页面自己 elementFromPoint 判断后上报「交互/穿透」二态；
-   Tauri 版把判定搬到 Rust 侧（零全局钩子），这里只负责定期喂网格。 */
-const GW = 96, GH = 160;
-let hitCanvas = null, hitCtx = null, hitBusy = false, lastGridSig = '';
+   Tauri 版把判定搬到 Rust 侧（零全局钩子），这里只负责定期喂网格。
+
+   成本结构（本机实测，见 scripts/hitgrid-bench.cjs）：drawImage(video) 一次约
+   1.9~2.0ms，且与目标画布尺寸几乎无关（24×40、96×160、204×340 的差异都在噪声
+   或小幅内）——瓶颈是把视频帧从合成器搬到 CPU，所以“把回读缩得更小”不省时间。
+   真能省的是另外两段：
+     · 上传：原来发 15360 个 0/1 的 JSON 数组（约 30KB，单次 IPC 实测 2.2ms），
+       改成按位打包 + base64（2.5KB）；
+     · 扫描：Uint32 视图一次读一格（小端下 alpha 在最高字节），免掉 15360 次
+       乘 4 和字节索引。
+   另外同一段视频的同一帧 + 同一朝向 + 同一动作时整段跳过（像素必然相同）。 */
+const GW = 96, GH = 160, GN = GW * GH;
+const GRID_BYTES = (GN + 7) >> 3;
+let hitCanvas = null, hitCtx = null, hitBusy = false, lastGridSig = '', hitFrameKey = '';
+let hitBits = new Uint8Array(GRID_BYTES);
+
+/* 帧身份：currentTime 前进 = 新的一帧。配合朝向与动作，足以判定“画面没变”。 */
+function hitFrameSignature(v, mirrored) {
+  return v.currentSrc + '|' + v.currentTime.toFixed(4) + '|' + (mirrored ? 1 : 0) + '|' + cur;
+}
+
+function hitDraw(ctx, v, mirrored) {
+  ctx.clearRect(0, 0, GW, GH);   // 透明帧叠在上一帧上会变半透明，先清空
+  if (mirrored) ctx.setTransform(-1, 0, 0, 1, GW, 0);
+  ctx.drawImage(v, 0, 0, GW, GH);
+  if (mirrored) ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return ctx.getImageData(0, 0, GW, GH);
+}
+
+/* 视频元素在窗口内的实际矩形 → 归一化包围盒 */
+function hitBbox(v, x0, y0, x1, y1) {
+  const vr = v.getBoundingClientRect();
+  const wr = { w: window.innerWidth || 1, h: window.innerHeight || 1 };
+  return [
+    (vr.left + (x0 / GW) * vr.width) / wr.w,
+    (vr.top + (y0 / GH) * vr.height) / wr.h,
+    (vr.left + ((x1 + 1) / GW) * vr.width) / wr.w,
+    (vr.top + ((y1 + 1) / GH) * vr.height) / wr.h,
+  ];
+}
+
+/* 生产实现：采一帧 → 位打包（低位优先，与 Rust unpack_hit_bits 对应）。 */
+function hitSampleFast(v) {
+  if (!hitCanvas) {
+    hitCanvas = document.createElement('canvas');
+    hitCanvas.width = GW; hitCanvas.height = GH;
+    hitCtx = hitCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  const mirrored = effectiveMirror(v._stateId);
+  const img = hitDraw(hitCtx, v, mirrored);
+  const px = new Uint32Array(img.data.buffer, img.data.byteOffset, GN); // 小端：alpha = >>> 24
+  hitBits.fill(0);
+  let x0 = GW, y0 = GH, x1 = -1, y1 = -1, any = 0, i = 0;
+  for (let y = 0; y < GH; y++) {
+    for (let x = 0; x < GW; x++, i++) {
+      if ((px[i] >>> 24) > 24) {
+        hitBits[i >> 3] |= 1 << (i & 7);
+        any++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (!any) return null;   // 全透明帧（切换瞬态）不更新，保留上一份
+  return { bbox: hitBbox(v, x0, y0, x1, y1), bits: hitBits, mirrored: mirrored };
+}
+
+function b64FromBytes(bytes) {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(text);
+}
 
 function sampleHitGrid() {
   if (hitBusy) return;
   const v = activeVideo();
   if (!v || v.readyState < 2 || !v.videoWidth) return;
+  const frameKey = hitFrameSignature(v, effectiveMirror(v._stateId));
+  if (frameKey === hitFrameKey) return;   // 画面没变，结论必然相同
   hitBusy = true;
   try {
-    if (!hitCanvas) {
-      hitCanvas = document.createElement('canvas');
-      hitCanvas.width = GW; hitCanvas.height = GH;
-      hitCtx = hitCanvas.getContext('2d', { willReadFrequently: true });
-    }
-    hitCtx.clearRect(0, 0, GW, GH);
-    hitCtx.save();
-    const mirrored = effectiveMirror(v._stateId);
-    if (mirrored) {
-      hitCtx.translate(GW, 0);
-      hitCtx.scale(-1, 1);
-    }
-    hitCtx.drawImage(v, 0, 0, GW, GH);
-    hitCtx.restore();
-    const img = hitCtx.getImageData(0, 0, GW, GH);
-    const n = GW * GH;
-    const data = new Uint8Array(n);
-    let x0 = GW, y0 = GH, x1 = -1, y1 = -1, any = 0;
-    for (let i = 0; i < n; i++) {
-      if (img.data[i * 4 + 3] > 24) {
-        data[i] = 1; any++;
-        const x = i % GW, y = (i / GW) | 0;
-        if (x < x0) x0 = x; if (x > x1) x1 = x;
-        if (y < y0) y0 = y; if (y > y1) y1 = y;
-      }
-    }
-    if (!any) return;   // 全透明帧（切换瞬态）不更新，保留上一份
-    // 视频元素在窗口内的实际矩形 → 归一化包围盒
-    const vr = v.getBoundingClientRect();
-    const wr = { w: window.innerWidth || 1, h: window.innerHeight || 1 };
-    const bbox = [
-      (vr.left + (x0 / GW) * vr.width) / wr.w,
-      (vr.top + (y0 / GH) * vr.height) / wr.h,
-      (vr.left + ((x1 + 1) / GW) * vr.width) / wr.w,
-      (vr.top + ((y1 + 1) / GH) * vr.height) / wr.h,
-    ];
-    const sig = (mirrored ? 'mirror|' : 'normal|') + cur + '|' + bbox.map(function (n2) { return n2.toFixed(3); }).join(',');
+    const sample = hitSampleFast(v);
+    if (!sample) return;
+    hitFrameKey = frameKey;
+    const bbox = sample.bbox;
+    const sig = (sample.mirrored ? 'mirror|' : 'normal|') + cur + '|' + bbox.map(function (n2) { return n2.toFixed(3); }).join(',');
     if (sig === lastGridSig) return;
     lastGridSig = sig;
     invoke('set_hit_grid', {
-      w: GW, h: GH, bbox: bbox, data: Array.from(data),
+      w: GW, h: GH, bbox: bbox, bits: b64FromBytes(sample.bits),
     }).catch(function () {});
   } catch (e) {
     // 视频跨源取不到像素时退回矩形命中（Rust 侧行为一致），不反复刷日志
@@ -753,6 +796,66 @@ function sampleHitGrid() {
     hitBusy = false;
   }
 }
+
+/* ---- 量测钩子：仅供 scripts/hitgrid-bench.cjs 做新旧逐格对比 ----
+   legacy 是改造前那份实现的原样拷贝（独立画布），不在运行路径上调用。 */
+let hitLegacyCanvas = null, hitLegacyCtx = null;
+function hitSampleLegacy(v) {
+  if (!hitLegacyCanvas) {
+    hitLegacyCanvas = document.createElement('canvas');
+    hitLegacyCanvas.width = GW; hitLegacyCanvas.height = GH;
+    hitLegacyCtx = hitLegacyCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  const ctx = hitLegacyCtx;
+  const mirrored = effectiveMirror(v._stateId);
+  ctx.clearRect(0, 0, GW, GH);
+  ctx.save();
+  if (mirrored) { ctx.translate(GW, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(v, 0, 0, GW, GH);
+  ctx.restore();
+  const img = ctx.getImageData(0, 0, GW, GH);
+  const data = new Uint8Array(GN);
+  let x0 = GW, y0 = GH, x1 = -1, y1 = -1, any = 0;
+  for (let i = 0; i < GN; i++) {
+    if (img.data[i * 4 + 3] > 24) {
+      data[i] = 1; any++;
+      const x = i % GW, y = (i / GW) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (!any) return null;
+  return { bbox: hitBbox(v, x0, y0, x1, y1), data: data, mirrored: mirrored };
+}
+
+window.__hitGridDiag = {
+  w: GW, h: GH,
+  fast: function () { const v = activeVideo(); return v ? hitSampleFast(v) : null; },
+  legacy: function () { const v = activeVideo(); return v ? hitSampleLegacy(v) : null; },
+  unpack: function (bits) {
+    const out = new Uint8Array(GN);
+    for (let i = 0; i < GN; i++) out[i] = (bits[i >> 3] >> (i & 7)) & 1;
+    return out;
+  },
+  /* 复刻 Rust Grid::hit，用于在采样点上比较新旧网格的结论 */
+  decide: function (grid, fx, fy) {
+    const b = grid.bbox;
+    if (fx < b[0] || fx > b[2] || fy < b[1] || fy > b[3]) return false;
+    const ux = (fx - b[0]) / Math.max(b[2] - b[0], 1e-6);
+    const uy = (fy - b[1]) / Math.max(b[3] - b[1], 1e-6);
+    const gx = Math.min(Math.floor(ux * GW), GW - 1);
+    const gy = Math.min(Math.floor(uy * GH), GH - 1);
+    return grid.data[gy * GW + gx] > 0;
+  },
+  /* IPC 对照：老格式（15360 个数字的数组） vs 新格式（1920 字节 base64） */
+  pushLegacy: function (sample) {
+    return invoke('set_hit_grid', { w: GW, h: GH, bbox: sample.bbox, data: Array.from(sample.data) });
+  },
+  pushPacked: function (sample, bits) {
+    return invoke('set_hit_grid', { w: GW, h: GH, bbox: sample.bbox, bits: b64FromBytes(bits) });
+  },
+  state: function () { return { sig: lastGridSig, frameKey: hitFrameKey }; },
+};
 setInterval(sampleHitGrid, 220);
 window.addEventListener('resize', publishRect);
 
