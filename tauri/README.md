@@ -212,3 +212,62 @@ cd tauri && bash scripts/build-walk.sh
 - 本地视频需要 `assetProtocol` 与 `protocol-asset` 同时启用。
 - Harness 的 Node 入口使用普通盘符/UNC 路径，不传 `\\?\` verbatim 路径。
 - 测试结束清理 HKCU Run 中 `CatwhalePet` 测试自启项，并正常关闭验收实例。
+
+## 八、在线升级（v0.7.1 起）与「发版必须带 SHA256SUMS.txt」
+
+设置面 →「在线升级」卡片：检查 → 下载 → sha256 校验 → 解包 → 退出 → 外部 cmd 换目录 → 自动重启 → 新实例提示「已升级到 vX」。
+整包替换（没有安装器），命令名/字段名与 Electron 端共用一份规格。
+
+### 8.1 发版清单（发布侧必须遵守）
+
+GitHub Release 的 assets 里**必须同时有**：
+
+| 资产 | 必需 | 说明 |
+|---|---|---|
+| `catwhale-poc-v<版本>-win-x64.zip` | 是 | Tauri 端整包（exe + `WebView2Loader.dll` + `assets\es.exe` + `frontend\assets\*.webm` 等） |
+| `SHA256SUMS.txt` | 是 | 每个 zip 一行，GNU `sha256sum` 格式：`<64位小写hex>  <文件名>` |
+
+**没有清单 → 客户端的「立即升级」直接禁用**，只会显示「该版本没有校验清单」和手动下载链接。
+所以：
+
+```bash
+# 1) 打包出 zip 之后，给放 zip 的目录生成清单（只收录 zip）
+python tauri/scripts/gen-sha256sums.py out/ --only "*.zip" -o out/SHA256SUMS.txt
+
+# 2) 上传前自检（谁改了字节都会报 CHANGED）
+python tauri/scripts/gen-sha256sums.py out/ --verify -o out/SHA256SUMS.txt
+
+# 3) 交付目录内的自证清单（会被客户端逐文件校验，改文件必须重生成）
+python tauri/scripts/gen-sha256sums.py "交付/tauri-round4"
+```
+
+### 8.2 资产选择规则（不是「取第一个 zip」）
+
+按名字正则选，**绝不按 assets 顺序取**：Tauri 端用 `catwhale-(tauri|poc)[-_]v?[0-9]`（忽略大小写、搜索语义），
+兜底 `^catwhale-poc-`；匹配 0 个 → 拒绝（「该版本没有适用于本端的升级包」），≥2 个 → 拒绝（「该版本有多个升级包，无法确定」）。
+同 release 里放 Electron 的 `catwhale-pet-*.zip` 是安全的。
+
+### 8.3 磁盘布局与手工排查
+
+```
+%LOCALAPPDATA%\catwhale-update\
+  state.json          当前状态快照（phase/percent/error…）
+  last-result.json    升级回执（纯 ASCII：from/to/result/at/log[/error]）
+  v<VER>\package.zip   下载的包
+  v<VER>\staging\     解包后的包根（内容就是包根，换目录时整体 move 过去）
+  apply-<ts>.cmd/.log  升级脚本与日志（脚本日志里有每一步的时间戳）
+```
+
+- 升级失败先看 `apply-<ts>.log` 最后几行；`last-result.json` 里的 `error` 是短码
+  （`backup_failed` / `swap_failed` / `unlock_timeout` / `proc_timeout` / `start_failed`）。
+- 备份目录是 `<安装目录>.bak-<ts>`：脚本成功后自己删；应用启动时只**报告**不删。
+- 更新目录必须与安装目录**同一个盘**（换目录靠同卷 `move`），不同盘会直接禁用自动升级。
+- 本目录只从环境变量 `LOCALAPPDATA` 解析，不走 KnownFolder —— 隔离测试请同时设
+  `CATWHALE_CONFIG_DIR` 与 `LOCALAPPDATA`。
+
+### 8.4 调试用环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `CATWHALE_UPDATE_API` | 覆盖 release API 地址；**只有设置它时才允许** `http://127.0.0.1:<port>` 下载源（生产只认 https） |
+| `CATWHALE_UPDATE_ASSET` | 正则源，直接覆盖本端资产匹配规则（调试/验收用） |
