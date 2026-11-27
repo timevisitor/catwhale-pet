@@ -143,6 +143,68 @@ function getDefaultFetch() {
 }
 
 /**
+ * 直连兜底用的最小 fetch（Node https，**不经过 Chromium 网络栈/系统代理**）。
+ *
+ * 为什么需要它：GitHub 的未认证接口按**出口 IP** 限流（60 次/小时）。Electron 的 net.fetch
+ * 跟随系统代理，而代理出口常常是共享 IP —— 同一条代理上的其他人把配额用光，我们就会收到
+ * 403。本项目实测量到过这一幕：同一时刻直连剩 56/60，经代理剩 0/60，于是「检查更新」
+ * 直接显示 HTTP 403。换成 Node https 走本机出口再试一次，多数情况下就通了。
+ *
+ * 只实现 GET + headers + text/json，够本文件用；返回形状与 Response 对齐（ok/status/headers.get）。
+ */
+function getNodeFetch() {
+  const https = require('https');
+  return function nodeFetch(url, opts = {}) {
+    return new Promise((resolve, reject) => {
+      const req = https.get(
+        url,
+        { headers: (opts && opts.headers) || {} },
+        (res) => {
+          let data = '';
+          res.setEncoding('utf8');
+          res.on('data', (c) => { data += c; });
+          res.on('end', () => resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: { get: (k) => res.headers[String(k).toLowerCase()] || '' },
+            text: async () => data,
+            json: async () => JSON.parse(data),
+          }));
+        },
+      );
+      req.on('error', reject);
+      const timer = setTimeout(() => req.destroy(new Error('timeout')), (opts && opts.timeoutMs) || 8000);
+      req.on('close', () => clearTimeout(timer));
+    });
+  };
+}
+
+const BASE_HEADERS = {
+  'User-Agent': 'catwhale-pet-updater',
+  'Accept': 'application/vnd.github.v3+json',
+};
+
+/**
+ * 带「限流直连兜底」的 GET。
+ * 先按正常通道（可能是跟随系统代理的 net.fetch）请求；只有遇到 403/429 才换直连再试一次。
+ * 返回 { res, via: 'normal'|'direct' }。
+ */
+async function fetchWithRateLimitFallback(url, { fetchFn, directFn, timeoutMs = 8000, signal } = {}) {
+  let res = await fetchFn(url, { method: 'GET', headers: BASE_HEADERS, signal });
+  if (!res.ok && (res.status === 403 || res.status === 429)) {
+    try {
+      const r2 = await directFn(url, { headers: BASE_HEADERS, timeoutMs });
+      if (r2 && r2.ok) return { res: r2, via: 'direct' };
+      // 直连也被限流/失败，就把原始响应交回去，错误文案里如实说明
+      return { res, via: 'normal', directStatus: r2 ? r2.status : 0 };
+    } catch (e) {
+      return { res, via: 'normal', directStatus: -1 };
+    }
+  }
+  return { res, via: 'normal' };
+}
+
+/**
  * 检查 GitHub 上是否有新版本
  * @param {Object} opts
  * @param {string} opts.currentVersion 当前版本号（例如 "0.7.1"）
@@ -159,25 +221,44 @@ async function checkUpdate(opts = {}) {
   const apiUrl = opts.apiUrl || GITHUB_API_URL;
   const end = opts.end === 'tauri' ? 'tauri' : 'electron';
   const fetchFn = opts.fetcher || getDefaultFetch();
+  // 直连兜底：优先用注入的（测试用），否则 Node https（不经系统代理）
+  const directFn = opts.directFetcher || (opts.fetcher ? opts.fetcher : getNodeFetch());
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetchFn(apiUrl, {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'catwhale-pet-updater',
-        'Accept': 'application/vnd.github.v3+json',
-      },
-      signal: controller.signal,
+    const got = await fetchWithRateLimitFallback(apiUrl, {
+      fetchFn, directFn, timeoutMs, signal: controller.signal,
     });
+    const res = got.res;
 
     clearTimeout(timer);
 
     if (!res.ok) {
       if (res.status === 404) {
         return { ok: true, hasUpdate: false, currentVersion, message: '暂无已发布的 Release', assetCount: 0 };
+      }
+      // 403/429 基本都是 GitHub 的未认证接口按出口 IP 限流（60 次/小时）。
+      // 共用代理/VPN 时很容易被同 IP 的其他人用光，直连兜底也救不回来时要给人话。
+      if (res.status === 403 || res.status === 429) {
+        let hint = '';
+        try {
+          const b = await res.text();
+          if (/rate limit/i.test(b)) hint = '（GitHub 返回：rate limit exceeded）';
+        } catch (e) {}
+        const triedDirect = typeof got.directStatus === 'number';
+        return {
+          ok: false,
+          currentVersion,
+          canAutoUpdate: false,
+          rateLimited: true,
+          error: `GitHub 接口被限流（HTTP ${res.status}）${hint}`,
+          reason: '检查更新被 GitHub 限流：未登录接口按出口 IP 每小时只给 60 次，'
+            + '同一条代理/VPN 上的其他人也会占用。'
+            + (triedDirect ? '已试过直连仍不通，' : '')
+            + '等一会儿再试，或点「手动下载」直接拿整包。',
+        };
       }
       return { ok: false, error: `GitHub API 响应异常 (HTTP ${res.status})`, currentVersion };
     }
@@ -202,7 +283,8 @@ async function checkUpdate(opts = {}) {
     let expectedSha256 = '';
     if (asset && sumsAsset) {
       try {
-        const sr = await fetchFn(sumsUrl, { method: 'GET', headers: { 'User-Agent': 'catwhale-pet-updater' } });
+        const sgot = await fetchWithRateLimitFallback(sumsUrl, { fetchFn, directFn, timeoutMs });
+        const sr = sgot.res;
         if (sr && sr.ok) {
           const sums = parseSums(await sr.text());
           expectedSha256 = sums[asset.name] || '';
@@ -213,6 +295,8 @@ async function checkUpdate(opts = {}) {
     return {
       ok: true,
       hasUpdate,
+      // 这次是不是靠直连兜底才成功的（排查时有用，不影响判定）
+      viaDirectFallback: got.via === 'direct',
       currentVersion,
       latestVersion: cleanTag || tagName,
       tagName,
