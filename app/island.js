@@ -142,6 +142,11 @@ function createIsland(deps) {
   /* 自动截图/自检时用：冻结若干毫秒，期间不再把实时状态推给页面，
      这样页面里手工 render 的状态不会被 500ms 一次的推送冲掉。 */
   let frozenUntil = 0;
+  /* 球态签名：球里能变的只有 尖角位置 / 是否钉住 / 角标数字。签名没变就不往页面推
+     （球态没有波形、歌词、进度这些随时间走的内容）。原本不管变没变都是 500ms 一推，
+     island 渲染进程整天每秒被叫醒两次重跑一遍 render。 */
+  let lastIdleSig = '';
+  const idleSig = (p) => p.tailX + '|' + (p.pinned ? 1 : 0) + '|' + (p.badge || 0);
   const lyricCache = new Map();    // key -> {lines:[[ms,text]]} | null
 
   /* ---------------- Agent 看板 ---------------- */
@@ -494,6 +499,8 @@ function createIsland(deps) {
     const rearm = () => {
       if (!win || win.isDestroyed()) return;
       try { win.setIgnoreMouseEvents(true, { forward: true }); } catch (e) {}
+      /* 页面重载后是空白球（没拿到过内容）：下一拍必须重推，哪怕球态签名没变 */
+      lastIdleSig = '';
     };
     win.webContents.on('did-finish-load', rearm);
     win.webContents.on('did-navigate', rearm);
@@ -691,6 +698,13 @@ function createIsland(deps) {
           }
         } else if (payload.mode !== modeBefore || Math.abs(wantZoom() - zoom) > 0.014) {
           place(true);                                   // 球↔胶囊：可见高度不同，纵向必须重算
+        }
+        if (payload.mode === 'idle'){
+          const sig = idleSig(payload);
+          if (w.isVisible() && sig === lastIdleSig) return;   // 球没变：不推，页面继续睡
+          lastIdleSig = sig;
+        } else {
+          lastIdleSig = '';                              // 离开球态：下次回到球态至少推一次
         }
         w.webContents.send('island:data', payload);
       } else {

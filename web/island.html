@@ -62,17 +62,23 @@
     box-shadow:inset 0 0 0 1px rgba(255,255,255,.10),inset 0 1px 0 rgba(255,255,255,.16);
     animation:breathe 2.4s ease-in-out infinite;
     transition:opacity .18s ease}
+  /* 胶囊态球整体透明：看不见的东西别让它还在后台逐帧动画 */
   #isl.open .ballcore{opacity:0;animation:none;transition:opacity .14s ease}
+  #isl.open .bars i{animation-play-state:paused}
   @keyframes breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(1.13)}}
 
   .bars{display:flex;align-items:center;justify-content:center;gap:3px;height:24px}
-  .bars i{display:block;width:3px;border-radius:2px;height:9px;
+  /* 呼吸条动的是 scaleY 而不是 height：height 每帧都要走主线程 layout + 重绘，
+     而这枚球是常驻的 —— 等于 island 渲染进程永远没有空闲帧。scaleY 只在合成器里跑。
+     基准高 22px、绕中心缩放 8/22：几何与原来 height 8px↔22px 居中伸缩一致。 */
+  .bars i{display:block;width:3px;height:22px;border-radius:2px;
     background:linear-gradient(180deg,#F4D68C 0%,#E7B84B 60%,#C9962F 100%);
     box-shadow:0 0 7px rgba(231,184,75,.45);
+    transform-origin:50% 50%;
     animation:bar 2.4s ease-in-out infinite}
   .bars i:nth-child(2){animation-delay:.28s}
   .bars i:nth-child(3){animation-delay:.56s}
-  @keyframes bar{0%,100%{height:8px;opacity:.68}50%{height:22px;opacity:1}}
+  @keyframes bar{0%,100%{transform:scaleY(.364);opacity:.68}50%{transform:scaleY(1);opacity:1}}
 
   /* ================= 内容层 ================= */
   .content{position:absolute;inset:0;opacity:0;visibility:hidden;
@@ -158,6 +164,12 @@
   #isl[data-mode="info"] .body{display:flex;flex-direction:column;gap:2px;line-height:1.35}
   #isl[data-mode="info"] .body .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #isl[data-mode="info"] .body .more{opacity:.55}
+
+  /* 系统开了「减少动态效果」：球不呼吸、条停在不跳动的 9px（与原静态高度一致） */
+  @media (prefers-reduced-motion:reduce) {
+    .ballcore { animation:none !important }
+    .bars i { animation:none !important; transform:scaleY(.41) !important }
+  }
 </style>
 </head>
 <body>
