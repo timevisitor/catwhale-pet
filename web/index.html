@@ -188,6 +188,8 @@
             font:inherit;font-size:12.5px;padding:6px 13px;border-radius:8px;cursor:pointer;}
   #settings .sform button:hover{background:rgba(91,157,255,.34);}
   #settings .sform button:disabled{opacity:.5;cursor:default;}
+  #settings .sform .progress{height:6px;background:rgba(103,112,106,.18);border-radius:3px;overflow:hidden;margin-top:6px;}
+  #settings .sform .progress > i{display:block;height:100%;width:0;background:var(--accent-hi);transition:width .2s;}
   #settings .sform .ok{color:#8fe3b0;} #settings .sform .bad{color:#ff9d9d;}
 
   /* ---------- 控制面板 ---------- */
@@ -658,8 +660,24 @@ body.island-on #dockchip{display:none !important}
     <div class="hint" id="setRepoPrereq">聊天前置条件：harness 仓库要先装好依赖（官方 <b>pnpm install</b>）；只 clone 不装依赖会报 Cannot find package 'tsx'</div>
     <div class="hint" id="setEverything"></div>
     <div class="hint">环境自检：<span class="clink" id="setEnvWiz">打开自检 / 一键部署向导</span></div>
-    <div class="hint">版本更新：<span id="setAppVersion">v0.1.4</span> · <span class="clink" id="setCheckUpdate">检查新版本</span></div>
-    <div class="hint" id="setUpdateHint" style="display:none"></div>
+    <div class="hint">版本更新：<span id="setAppVersion">v0.1.4</span> · <span class="clink" id="setCheckUpdate">检查更新</span></div>
+    <div id="setUpdateBox" style="display:none;margin-top:2px">
+      <div class="hint" id="setUpdateHead"></div>
+      <div class="hint" id="setUpdateReason" style="display:none"></div>
+      <div id="setUpdateNotesWrap" style="display:none;margin-top:2px">
+        <div class="hint"><span class="clink" id="setUpdateNotesToggle">更新说明（展开）</span></div>
+        <div id="setUpdateNotes" style="display:none;max-height:96px;overflow:auto;white-space:pre-wrap;font-size:11px;line-height:1.55;color:var(--ui-dim);border-left:2px solid rgba(103,112,106,.28);padding-left:7px;margin-top:2px"></div>
+      </div>
+      <div class="row" style="margin-top:4px;flex-wrap:wrap">
+        <button id="setUpdateGo" style="display:none">立即升级</button>
+        <button id="setUpdateCancel" style="display:none">取消</button>
+        <button id="setUpdateRestart" style="display:none">立即重启并完成升级</button>
+        <span class="clink" id="setUpdateManual" style="display:none">手动下载</span>
+        <span class="clink" id="setUpdateRelease" style="display:none">查看发布页</span>
+      </div>
+      <div class="progress" id="setUpdateBar" style="display:none"><i></i></div>
+      <div class="hint" id="setUpdateProg"></div>
+    </div>
     <div class="row" style="margin-top:4px">
       <button id="setSave">保存</button><button id="setTest">保存并测试连接</button>
     </div>
@@ -3118,6 +3136,7 @@ function openSettings(){
   if (cHostOk() && window.petHost.getConfig){
     try{ window.petHost.focusWindow(true); }catch(e){}
     loadSettingsForm();
+    updSyncFromHost();                       // 打开设置时把主进程当前的升级阶段拉一次（可能正在下载）
   } else {
     setMsg('setResult', '设置需要在桌面版里用（浏览器 Demo 没有配置通道）', 'bad');
   }
@@ -3238,52 +3257,204 @@ async function testSettings(){
   else setMsg('setResult', '连接失败：' + ((r && (r.error || r.text)) || '未知错误'), 'bad');
 }
 
-async function triggerUpdateCheck(){
-  const uh = document.getElementById('setUpdateHint');
-  if (!uh) return;
-  uh.style.display = 'block';
-  uh.className = 'hint';
-  uh.textContent = '正在检查 GitHub Releases…';
-  if (!(window.petHost && window.petHost.checkUpdate)){
-    uh.className = 'hint bad';
-    uh.textContent = '当前环境不支持检查更新（仅在桌面版可用）';
+/* ===================== 在线升级（规格 §9） =====================
+   检查 → 下载（百分比/速率）→ 校验 → 解包 → 立即重启并替换。
+   canAutoUpdate=false：按钮禁用 + 显示原因（人话）+ 仍然给「手动下载」兜底。
+   状态来自主进程 update:state / update:progress，页面不自己猜阶段。 */
+const UPD = { info:null, state:null, notesOpen:false, busy:false };
+
+function updEl(id){ return document.getElementById(id); }
+function updShow(id, show, text){
+  const e = updEl(id); if (!e) return;
+  e.style.display = show ? '' : 'none';
+  if (text !== undefined) e.textContent = text;
+}
+function fmtBytes(n){
+  n = Number(n) || 0;
+  if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+function fmtSpeed(n){ n = Number(n) || 0; return n > 0 ? fmtBytes(n) + '/s' : ''; }
+
+function updRender(){
+  const box = updEl('setUpdateBox'); if (!box) return;
+  const info = UPD.info, st = UPD.state || {};
+  const phase = st.phase || 'idle';
+  if (!info){ box.style.display = 'none'; return; }
+  box.style.display = '';
+  const go = updEl('setUpdateGo'), cancelB = updEl('setUpdateCancel'), restart = updEl('setUpdateRestart');
+  const manual = updEl('setUpdateManual'), relLink = updEl('setUpdateRelease');
+  const bar = updEl('setUpdateBar'), prog = updEl('setUpdateProg'), reasonEl = updEl('setUpdateReason');
+  const notesWrap = updEl('setUpdateNotesWrap'), notes = updEl('setUpdateNotes');
+  const busy = phase === 'downloading' || phase === 'verifying' || phase === 'extracting' || phase === 'applying';
+
+  // 「手动下载」「查看发布页」任何时候都给（兜底永远在）
+  if (manual){ manual.style.display = ''; manual.dataset.url = info.assetUrl || info.downloadUrl || ''; }
+  if (relLink){ relLink.style.display = info.releaseUrl ? '' : 'none'; relLink.dataset.url = info.releaseUrl || ''; }
+
+  if (!info.hasUpdate){
+    updEl('setUpdateHead').innerHTML = '当前已是最新版本（v' + (info.currentVersion || '?') + '）';
+    updShow('setUpdateReason', false); updShow('setUpdateGo', false); updShow('setUpdateCancel', false);
+    updShow('setUpdateRestart', false); updShow('setUpdateBar', false); updShow('setUpdateNotesWrap', false);
+    updShow('setUpdateProg', false);
     return;
+  }
+
+  const sizeTxt = info.assetSize ? '（' + fmtBytes(info.assetSize) + '）' : '';
+  updEl('setUpdateHead').innerHTML = '发现新版本 <b>v' + info.latestVersion + '</b>' + sizeTxt;
+
+  // 更新说明：默认折叠、限高可滚
+  if (notesWrap && notes){
+    if (info.notes){
+      notesWrap.style.display = '';
+      notes.textContent = info.notes;
+      notes.style.display = UPD.notesOpen ? '' : 'none';
+      const tg = updEl('setUpdateNotesToggle');
+      if (tg) tg.textContent = UPD.notesOpen ? '更新说明（收起）' : '更新说明（展开）';
+    } else {
+      notesWrap.style.display = 'none';
+    }
+  }
+
+  // 拒绝自动升级：按钮禁用 + 原因
+  const canAuto = info.canAutoUpdate !== false;
+  if (reasonEl){
+    const showReason = !canAuto && !busy && phase !== 'ready';
+    reasonEl.style.display = showReason ? '' : 'none';
+    reasonEl.className = 'hint bad';
+    reasonEl.textContent = showReason ? ('不能自动升级：' + (info.reason || '未知原因') + '（可用「手动下载」自己替换）') : '';
+  }
+
+  if (go){
+    const show = canAuto && !busy && phase !== 'ready';
+    go.style.display = show ? '' : 'none';
+    go.disabled = !canAuto;
+    go.title = canAuto ? '' : (info.reason || '');
+    go.textContent = phase === 'error' ? '重试升级' : '立即升级';
+  }
+  updShow('setUpdateCancel', phase === 'downloading');
+  updShow('setUpdateRestart', phase === 'ready');
+  updShow('setUpdateBar', busy || phase === 'ready');
+
+  // 阶段文案 + 百分比 + 速度
+  let line = '';
+  if (phase === 'downloading'){
+    const pct = Math.max(0, Math.min(100, st.percent || 0));
+    const got = fmtBytes(st.received || 0), tot = fmtBytes(st.total || info.assetSize || 0);
+    const sp = fmtSpeed(st.bytesPerSec);
+    line = '正在下载 ' + pct.toFixed(0) + '%（' + got + ' / ' + tot + (sp ? '，' + sp : '') + '）';
+  } else if (phase === 'verifying'){
+    line = '正在校验完整性…';
+  } else if (phase === 'extracting'){
+    line = '正在解包…';
+  } else if (phase === 'ready'){
+    line = '下载完成，重启后生效';
+  } else if (phase === 'applying'){
+    line = '正在退出并替换文件…';
+  } else if (phase === 'error'){
+    line = '升级失败：' + (st.error || '未知错误');
+  } else if (phase === 'unsupported'){
+    line = '';
+  }
+  if (prog){
+    prog.style.display = line ? '' : 'none';
+    prog.textContent = line;
+    prog.className = 'hint' + (phase === 'error' ? ' bad' : (phase === 'ready' ? ' ok' : ''));
+  }
+  if (bar){
+    const i = bar.querySelector('i');
+    if (i){
+      const pct = phase === 'ready' ? 100 : (phase === 'downloading' ? Math.max(0, Math.min(100, st.percent || 0)) : (busy ? 100 : 0));
+      i.style.width = pct + '%';
+    }
+  }
+}
+
+function updSyncFromHost(){
+  if (!(window.petHost && window.petHost.updateState)) return;
+  window.petHost.updateState().then((s) => { UPD.state = s || null; updRender(); }).catch(()=>{});
+}
+
+async function triggerUpdateCheck(){
+  const box = updEl('setUpdateBox');
+  if (!(window.petHost && window.petHost.checkUpdate)){
+    if (box){ box.style.display = ''; updEl('setUpdateHead').textContent = '当前环境不支持检查更新（仅在桌面版可用）'; }
+    return;
+  }
+  UPD.info = null; UPD.state = { phase:'checking' }; UPD.notesOpen = false;
+  if (box){
+    box.style.display = '';
+    updEl('setUpdateHead').textContent = '正在检查 GitHub Releases…';
+    updShow('setUpdateReason', false); updShow('setUpdateGo', false); updShow('setUpdateCancel', false);
+    updShow('setUpdateRestart', false); updShow('setUpdateBar', false); updShow('setUpdateProg', false);
+    updShow('setUpdateNotesWrap', false);
   }
   let r = null;
   try{ r = await window.petHost.checkUpdate(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
-  if (r && r.ok){
-    if (r.hasUpdate){
-      uh.className = 'hint ok';
-      uh.innerHTML = '🎉 发现新版本 <b>v' + r.latestVersion + '</b>！<span class="clink" id="btnGoDownloadRelease">点击前往下载</span>';
-      const btn = document.getElementById('btnGoDownloadRelease');
-      if (btn) btn.addEventListener('click', ()=> window.petHost.openUpdateUrl(r.releaseUrl || r.downloadUrl));
-      if (typeof toast === 'function') toast('🎉 发现新版本 v' + r.latestVersion);
-    } else {
-      uh.className = 'hint ok';
-      uh.textContent = '当前已是最新版本（v' + (r.currentVersion || '0.1.4') + '）';
+  if (!r || !r.ok){
+    UPD.info = { hasUpdate:false, currentVersion:(r && r.currentVersion) || '' };
+    if (box){
+      updEl('setUpdateHead').textContent = '检查更新失败：' + ((r && r.error) || '未知网络错误');
+      updEl('setUpdateHead').className = 'hint bad';
+      updShow('setUpdateRelease', true);
     }
-  } else {
-    uh.className = 'hint bad';
-    uh.textContent = '检查更新失败：' + ((r && r.error) || '未知网络错误');
+    UPD.state = { phase:'error', error:(r && r.error) || '' };
+    return;
   }
+  UPD.info = r;
+  const head = updEl('setUpdateHead'); if (head) head.className = 'hint';
+  updSyncFromHost();
+  updRender();
+  if (r.hasUpdate && typeof toast === 'function') toast('🎉 发现新版本 v' + r.latestVersion);
+  else if (!r.hasUpdate && typeof toast === 'function') toast('已是最新版本 v' + (r.currentVersion || ''));
 }
 window.triggerUpdateCheck = triggerUpdateCheck;
 
+async function updStartDownload(){
+  if (!UPD.info || UPD.info.hasUpdate !== true) return;
+  if (UPD.busy) return;
+  UPD.busy = true;
+  UPD.state = { phase:'downloading', percent:0, received:0, total: UPD.info.assetSize || 0, bytesPerSec:0 };
+  updRender();
+  let r = null;
+  try{ r = await window.petHost.updateDownload(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
+  UPD.busy = false;
+  if (!r || !r.ok){
+    UPD.state = { phase:'error', error:(r && r.error) || '启动下载失败' };
+    updRender();
+  }
+}
+async function updCancelDownload(){
+  try{ await window.petHost.updateCancel(); }catch(e){}
+  UPD.state = { phase:'idle' };
+  updRender();
+}
+async function updApplyNow(){
+  const restart = updEl('setUpdateRestart');
+  if (restart){ restart.disabled = true; restart.textContent = '正在退出…'; }
+  let r = null;
+  try{ r = await window.petHost.updateApply(); }catch(e){ r = { ok:false, error:String(e && e.message || e) }; }
+  if (!r || !r.ok){
+    if (restart){ restart.disabled = false; restart.textContent = '立即重启并完成升级'; }
+    UPD.state = { phase:'error', error:(r && r.error) || '启动替换失败' };
+    updRender();
+    return;
+  }
+  if (typeof toast === 'function') toast('正在退出并替换文件，稍等几秒会自动重开');
+}
+
 function onNewVersionAvailable(info){
   if (!info || !info.latestVersion) return;
-  const uh = document.getElementById('setUpdateHint');
-  if (uh){
-    uh.style.display = 'block';
-    uh.className = 'hint ok';
-    uh.innerHTML = '🎉 发现新版本 <b>v' + info.latestVersion + '</b>！<span class="clink" id="btnGoDownloadReleaseAuto">点击前往下载</span>';
-    const btn = document.getElementById('btnGoDownloadReleaseAuto');
-    if (btn) btn.addEventListener('click', ()=> window.petHost.openUpdateUrl(info.releaseUrl || info.downloadUrl));
-  }
+  UPD.info = info;
+  updSyncFromHost();
+  updRender();
   const st = document.getElementById('setStatus');
   if (st && !st.textContent.includes('新版本')) {
     st.textContent = '[有新版本 v' + info.latestVersion + '] ' + st.textContent;
   }
-  if (typeof toast === 'function') toast('🎉 发现新版本 v' + info.latestVersion + '，可前往设置下载');
+  if (typeof toast === 'function') toast('🎉 发现新版本 v' + info.latestVersion + '，可在设置里一键升级');
 }
 window.onNewVersionAvailable = onNewVersionAvailable;
 
@@ -4163,6 +4334,31 @@ function bindEvents(){
   on(document.getElementById('setKeyClear'), 'click', ()=> clearKeySettings());
   const _chkUpd = document.getElementById('setCheckUpdate');
   if (_chkUpd) on(_chkUpd, 'click', ()=> triggerUpdateCheck());
+  // 在线升级：按钮绑定 + 进度订阅（只订阅一次，面板开关不重建）
+  [
+    ['setUpdateGo', ()=> updStartDownload()],
+    ['setUpdateCancel', ()=> updCancelDownload()],
+    ['setUpdateRestart', ()=> updApplyNow()],
+    ['setUpdateManual', ()=>{
+      const e = document.getElementById('setUpdateManual');
+      const u = (e && e.dataset.url) || (UPD.info && (UPD.info.assetUrl || UPD.info.downloadUrl)) || '';
+      if (u && window.petHost) window.petHost.openUpdateUrl(u);
+    }],
+    ['setUpdateRelease', ()=>{
+      const e = document.getElementById('setUpdateRelease');
+      const u = (e && e.dataset.url) || (UPD.info && UPD.info.releaseUrl) || '';
+      if (u && window.petHost) window.petHost.openUpdateUrl(u);
+    }],
+    ['setUpdateNotesToggle', ()=>{ UPD.notesOpen = !UPD.notesOpen; updRender(); }],
+  ].forEach((pair) => {
+    const el = document.getElementById(pair[0]);
+    if (el) on(el, 'click', pair[1]);
+  });
+  try {
+    if (window.petHost && window.petHost.onUpdateProgress) {
+      window.petHost.onUpdateProgress((s) => { UPD.state = s; if (UPD.info) updRender(); });
+    }
+  } catch(e) {}
   try {
     if (window.petHost && window.petHost.onUpdateAvailable) {
       window.petHost.onUpdateAvailable((info) => onNewVersionAvailable(info));
