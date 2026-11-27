@@ -46,7 +46,7 @@ function createMediaShow(opts) {
     enabled: false,          // 页面设置面板 / settings.json 的 media.show.enabled
     pollMs: 2000,            // 采样间隔：实测 1s→单核 2.4%，2s→0.83%，2.5s→0.52%。
                              // 取 2s 折中：人「点播放」到桌宠开演约 2~4 秒，观感自然，开销减到三分之一。
-    slowMs: 2500,            // 自适应节奏（v0.7.2）：有媒体在放时按 pollMs 采样，连续静默后退到这个间隔。
+    slowMs: 2500,            // 自适应节奏：有媒体在放时按 pollMs 采样，连续静默后退到这个间隔。
                              // 灵动岛把 pollMs 压到 600 换波形，常驻就是单核 2.6%；配合 slowMs 实测空闲 0.3%。
                              // 0 = 关闭自适应，固定 pollMs（旧行为）。
     startMs: 1200,           // 持续多久算「真的开始了」

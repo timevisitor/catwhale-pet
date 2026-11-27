@@ -8,7 +8,7 @@
 #           the apps SMTC misses, and catches "SMTC says Playing but silent".
 #   usage: powershell -NoProfile -ExecutionPolicy Bypass -File media_probe.ps1 [-Once] [-IntervalMs 1000] [-SlowMs 2500]
 #
-# Cadence (v0.7.2 optimization):
+# Cadence (adaptive, added 2026-11):
 #   -IntervalMs is the FAST cadence used while something is audible (waveform / lyrics
 #   need it). -SlowMs > 0 enables the idle cadence: after IDLE_ROUNDS consecutive quiet
 #   samples the loop falls back to -SlowMs and returns to fast on the first loud sample.

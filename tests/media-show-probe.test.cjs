@@ -5,7 +5,7 @@
  * 不起真的 PowerShell：把 child_process.spawn 换成假进程（EventEmitter），
  * 只验证「谁该活、谁该重启、启动参数是什么」。
  *
- * 钉住的三个回归点（v0.7.2 修复）：
+ * 钉住的三个回归点：
  *   1. 游戏模式 suspend() 后，被杀进程的 exit **不得**把探测重新拉起来
  *      （旧代码只看 cfg.enabled，1 秒后 PowerShell 就又回来了）；
  *   2. 换采样节奏（stopProbe → startProbe）后，旧进程迟到的 exit 不得清掉新进程、
