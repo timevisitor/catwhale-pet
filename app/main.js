@@ -76,6 +76,25 @@ const ENVDEPLOY = (() => {
 const TESTMODE = ['--envcheck', '--envdeploy=', '--detecttest', '--mirrortest', '--searchtest=',
                   '--shot=', '--eattest', '--chattest=', '--settest', '--repotest=', '--panelmirrortest', '--startuptest', '--walktest'].some((p) => process.argv.some((a) => a.startsWith(p)));
 const APP_VERSION = (function () { try { return require('./package.json').version || ''; } catch (e) { return ''; } }());
+/* ---------- 在线升级（规格：在线升级-共享规格.md）----------
+   状态机在 update-engine.js（下载/校验/解包/替换脚本），纯逻辑在 updater.js / apply-cmd.js。
+   这里只做三件事：把环境事实喂给它、把 IPC 接上、把进度转发到页面。 */
+const { UpdateEngine } = require('./update-engine.js');
+let updateEngine = null;
+function ensureUpdateEngine() {
+  if (updateEngine) return updateEngine;
+  updateEngine = new UpdateEngine({
+    currentVersion: APP_VERSION,
+    installDir: path.dirname(process.execPath),
+    exeName: path.basename(process.execPath),
+    end: 'electron',
+    // 重启时原样带回命令行：--user-data-dir / --remote-debugging-port 丢了，重启后就是另一个实例
+    relaunchArgs: process.argv.slice(1),
+    quit: () => { quitting = true; app.quit(); },
+    onState: (snap) => { try { if (win && !win.isDestroyed()) win.webContents.send('update:progress', snap); } catch (e) {} },
+  });
+  return updateEngine;
+}
 // 唤起文件搜索框的全局热键：按顺序试，注册成功即用（Ctrl+Alt+F 常被显卡/远程工具占用）
 const SEARCH_HOTKEYS = ['Control+Alt+F', 'Control+Shift+F', 'Alt+Shift+F', 'Control+Alt+Space', 'Control+Alt+P'];
 let searchHotkey = '';
@@ -1368,6 +1387,11 @@ ipcMain.handle('config:test', async () => {
 
 /* ---------- 版本更新检测 ---------- */
 ipcMain.handle('update:check', async () => runUpdateCheck(false));
+ipcMain.handle('update:download', () => ensureUpdateEngine().download());
+ipcMain.handle('update:cancel', () => ensureUpdateEngine().cancel());
+ipcMain.handle('update:stage', () => ensureUpdateEngine().stage());
+ipcMain.handle('update:apply', () => ensureUpdateEngine().apply());
+ipcMain.handle('update:state', () => ensureUpdateEngine().snapshot());
 ipcMain.handle('update:openUrl', (_e, url) => {
   try {
     shell.openExternal(url || (latestReleaseInfo && latestReleaseInfo.releaseUrl) || GITHUB_RELEASES_PAGE);
@@ -1578,13 +1602,13 @@ async function runUpdateCheck(silent = false) {
   const t0 = Date.now();
   let out = null;
   try {
-    const res = await checkUpdate({ currentVersion: APP_VERSION });
-    out = res;
-    if (res && res.ok && res.hasUpdate) {
-      latestReleaseInfo = res;
+    // 真正的检查（含 §7 的 canAutoUpdate 判定）在 update-engine.js；CATWHALE_UPDATE_API 等调试覆盖也在那里读
+    out = await ensureUpdateEngine().check();
+    if (out && out.ok && out.hasUpdate) {
+      latestReleaseInfo = out;
       if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu());
-      if (win && !win.isDestroyed()) win.webContents.send('app:update-available', res);
-      sendToPage(`typeof onNewVersionAvailable==='function' && onNewVersionAvailable(${JSON.stringify(res)})`);
+      if (win && !win.isDestroyed()) win.webContents.send('app:update-available', out);
+      sendToPage(`typeof onNewVersionAvailable==='function' && onNewVersionAvailable(${JSON.stringify(out)})`);
     }
   } catch (e) {
     out = { ok: false, error: (e && e.message) || String(e), currentVersion: APP_VERSION };
@@ -1626,6 +1650,23 @@ function runStartupIdleTasks() {
   console.log('STARTUP_IDLE_RUN ' + JSON.stringify({ atMs: t0 - moduleT0 }));
   prewarmNode();                                  // 只填缓存，不改变行为
   runUpdateCheck(true).catch(() => {});
+  // 升级目录体积清理（§5）：v* 只留最近 3 天内的；.bak-* 归脚本管，这里只报告不删
+  try {
+    const c = ensureUpdateEngine().cleanupOld();
+    if (c && (c.removed.length || c.baks.length)) console.log('UPDATE_CLEANUP ' + JSON.stringify(c));
+  } catch (e) { /* 清理失败不该影响任何事 */ }
+}
+
+/* 上次升级的结果回执（脚本写的 last-result.json）→ 一句 toast。
+   10 分钟内的才提示，避免每次启动都叨叨；失败时带上日志文件名。 */
+function reportUpdateResult() {
+  try {
+    const r = ensureUpdateEngine().startupReport();
+    if (!r) return;
+    console.log('UPDATE_REPORT ' + JSON.stringify(r));
+    const text = JSON.stringify(r.text);
+    setTimeout(() => { sendToPage(`typeof toast==='function' && toast(${text})`); }, 5000);
+  } catch (e) { /* 回执读不到就算了 */ }
 }
 
 function scheduleStartupIdleTasks() {
@@ -2514,6 +2555,7 @@ if (!app.requestSingleInstanceLock()) {
     watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();
+    reportUpdateResult();                          // 上次升级的回执 → toast（失败也带日志文件名）
     // 启动阶段最忙的几秒里不跑后台任务：等窗口显示 + 首帧就绪后再等 15 秒跑一次更新检查
     // （顺带预热聊天运行时探测）。详见 scheduleStartupIdleTasks() 的注释与实测数据。
     scheduleStartupIdleTasks();

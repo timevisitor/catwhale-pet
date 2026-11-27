@@ -171,10 +171,20 @@ contextBridge.exposeInMainWorld('petHost', {
     },
   },
 
-  /* ---- 版本检测与更新 ---- */
+  /* ---- 版本检测与更新（§4.1：名字不许变）---- */
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   openUpdateUrl: (url) => ipcRenderer.invoke('update:openUrl', url),
   updateStatus: () => ipcRenderer.invoke('update:status'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateCancel: () => ipcRenderer.invoke('update:cancel'),
+  updateStage: () => ipcRenderer.invoke('update:stage'),
+  updateApply: () => ipcRenderer.invoke('update:apply'),
+  updateState: () => ipcRenderer.invoke('update:state'),
+  onUpdateProgress: (cb) => {
+    const h = (_e, v) => { try { cb(v); } catch (e) {} };
+    ipcRenderer.on('update:progress', h);
+    return () => ipcRenderer.removeListener('update:progress', h);
+  },
   onUpdateAvailable: (cb) => {
     const h = (_e, info) => { try { cb(info); } catch (e) {} };
     ipcRenderer.on('app:update-available', h);
