@@ -838,6 +838,50 @@ python tools/check-mirror-pixels.py <自检输出> "--prefix=MIRRORTEST_PANEL " 
 **发布版实测**（在成品目录里跑）：通道检查 CHANNELS-PASS ✔ / Everything 搜索真结果 ✔ /
 harness 聊天回复"都正常"(9.0s) ✔ / 页面自检 idle 无错误 ✔ / 设置面板回显与几何正确 ✔
 
+## 十二·五、在线升级（自动更新）与**发版必须带 SHA256SUMS.txt**
+
+设置面板 → 「检查更新」→ 有新版就显示「发现新版本 vX（大小）」「立即升级」。
+点「立即升级」后：下载（百分比+速率）→ sha256 校验 → 解包 → 退出 → 外部 `apply.cmd` 换安装目录 → 自动重启 →
+新实例弹「已升级到 vX」。失败会回滚到旧版并留下日志。
+
+- 规格：`在线升级-共享规格.md`（与 Tauri 端共用，命令名/字段名/磁盘布局不许改）。
+- 实现：`app/updater.js`（选包/清单解析/拒绝理由，纯逻辑）、`app/zip-extract.js`（无依赖解包 + 防 Zip Slip）、
+  `app/apply-cmd.js`（脚本生成，纯函数）、`app/update-engine.js`（状态机）。
+- 状态目录：`%LOCALAPPDATA%\catwhale-update\`（**只从环境变量 `LOCALAPPDATA` 解析**，验收台靠改它隔离）：
+  `state.json`、`last-result.json`（纯 ASCII，由脚本写）、`v<VER>\package.zip`、`v<VER>\staging\`、`apply-<ts>.cmd/.log`。
+
+### 发版硬要求（少这一步，客户端就不会自动升级）
+
+GitHub Release 的 assets 里必须同时有：
+
+1. 本端整包：`catwhale-pet-vX.Y.Z-win-x64.zip`（名字必须能被 `catwhale-(electron|pet)[-_]v?[0-9]` 匹配到；
+   **同一个 release 里同时放 Tauri 的 `catwhale-poc-*.zip` 没问题**，客户端按名字选，不按顺序）。
+2. `SHA256SUMS.txt`：GNU `sha256sum` 格式，每个 zip 一行 `<64位小写hex><两个空格><文件名>`。
+
+生成清单：
+
+```sh
+node tools/make-sha256sums.js dist           # → dist/SHA256SUMS.txt
+node tools/make-sha256sums.js dist -o dist/SHA256SUMS.txt --include 桌宠_便携版.zip
+```
+
+没有 `SHA256SUMS.txt` → `canAutoUpdate=false`，理由「该版本没有校验清单（SHA256SUMS.txt）」，用户只能手动下载。
+清单里没有这个文件名 → 理由「校验清单里没有这个升级包」。这两种都是**故意拒绝自动升级**，不是 bug。
+
+### 为什么是整包替换 + 外部脚本
+
+绿色版目录（`桌宠.exe` + `resources\` + 运行时 DLL）没有安装器，`electron-updater` 用不了；
+Windows 上运行中的 exe 不能覆盖，只能由外部进程在应用退出后 `move` 目录换掉。
+所以 `update:apply` 会生成 `%LOCALAPPDATA%\catwhale-update\apply-<ts>.cmd` 并 detached 启动它，然后应用自己退出。
+脚本里 **cwd 一定先离开安装目录**（任何进程把安装目录当 CWD，`move "<INSTALL>"` 就必然失败）。
+
+### 调试用的环境变量（只在本地验收该用）
+
+| 变量 | 作用 |
+|---|---|
+| `CATWHALE_UPDATE_API` | 覆盖 GitHub releases API 地址；只有设了它，才允许 `http://127.0.0.1:<port>` 的下载源 |
+| `CATWHALE_UPDATE_ASSET` | 覆盖「按端选包」的正则源（调试本地假包用） |
+
 ## 十三、事故复盘：打开面板后同屏窗口全都点不动（2026-09-19）
 
 **症状**：一进行 DeepSeek 对话，屏幕上其它窗口都点不动了（关掉面板也不恢复）。
