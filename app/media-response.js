@@ -25,7 +25,7 @@ const urlmod = require('node:url');
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json; charset=utf-8', '.webm': 'video/webm',
-  '.png': 'image/png', '.ico': 'image/x-icon'
+  '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp'
 };
 
 function mimeFor(file) {
