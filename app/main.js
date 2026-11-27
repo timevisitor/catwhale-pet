@@ -15,6 +15,8 @@ const { checkUpdate, GITHUB_RELEASES_PAGE } = require('./updater.js');
 // 详见 boot-guard.js 顶部注释：透明窗口 + 输入法注入会让 Chromium 原生 CHECK 崩，JS 接不住，
 // 只能靠"下一次启动降级"兜底。
 const bootGuard = require('./boot-guard.js')(app);
+/* 主进程模块加载时刻：日志里的 atMs 都相对它，方便把两段日志（不同启动）对齐比时间线 */
+const moduleT0 = Date.now();
 if (bootGuard.level >= 2) {
   try { app.disableHardwareAcceleration(); } catch (e) { /* 老版本没有也不影响 */ }
   app.commandLine.appendSwitch('disable-gpu-compositing');
@@ -1573,18 +1575,82 @@ let sendToPage = () => {};
 let latestReleaseInfo = null;
 
 async function runUpdateCheck(silent = false) {
+  const t0 = Date.now();
+  let out = null;
   try {
     const res = await checkUpdate({ currentVersion: APP_VERSION });
+    out = res;
     if (res && res.ok && res.hasUpdate) {
       latestReleaseInfo = res;
       if (tray && !tray.isDestroyed()) tray.setContextMenu(buildTrayMenu());
       if (win && !win.isDestroyed()) win.webContents.send('app:update-available', res);
       sendToPage(`typeof onNewVersionAvailable==='function' && onNewVersionAvailable(${JSON.stringify(res)})`);
     }
-    return res;
   } catch (e) {
-    return { ok: false, error: (e && e.message) || String(e), currentVersion: APP_VERSION };
+    out = { ok: false, error: (e && e.message) || String(e), currentVersion: APP_VERSION };
   }
+  // 一行落日志：验证「更新检查还活着」不需要连网重跑，也能从采到的日志里看出它到底什么时候跑、花了多久
+  console.log('UPDATE_CHECK ' + JSON.stringify({ silent: !!silent, atMs: Date.now() - moduleT0, ms: Date.now() - t0,
+    ok: !!(out && out.ok), hasUpdate: !!(out && out.hasUpdate), latest: (out && out.latestVersion) || '',
+    error: (out && out.ok) ? '' : ((out && out.error) || '') }));
+  return out;
+}
+
+/* ---------- 启动后的空闲窗口 ----------
+   启动头几秒是主进程最忙的时候（建窗、首段视频解码、命中网格首轮扫描、信息中枢各源首次拉取）。
+   原来两个后台任务固定压在 4 秒和 5 秒上，实测都会卡一下主线程：
+     · prewarmNode（原 4000ms）：execFile 起 `node -v`，同步段 22～37ms（并发负载高时更久）
+     · 更新检查（原 5000ms）：fetch/JSON 解析回来的续体 10～17ms
+   两者都不是启动必需的：更新检查可以完全晚一点做，聊天运行时的探测在首次聊天时还有同步兜底
+   （resolveNode）。所以统一挪到「窗口已显示 + 页面首帧就绪」之后再等 15 秒跑，
+   让用户能感觉到的启动阶段（前几秒）不再有这两下停顿。
+   功能不变：托盘菜单 / 设置面板的「检查更新」仍走 IPC update:check 手动触发。 */
+const STARTUP_IDLE_DELAY_MS = 15000;    // 首帧之后再等这么久；≥15s 是为了避开启动忙时
+const STARTUP_IDLE_PAGE_WAIT_MS = 8000; // 页面迟迟没就绪时的兜底上限，到点也照排
+let startupIdleTimer = null;
+let startupIdleDone = false;
+
+/** 页面是否已经初始化完并真的在出帧（__petInitOK 由页面脚本在启动流程末尾置位） */
+function pageFirstPaintReady() {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  return win.webContents
+    .executeJavaScript('!!(window.__petInitOK) && document.visibilityState !== "hidden"')
+    .catch(() => false);
+}
+
+function runStartupIdleTasks() {
+  startupIdleTimer = null;
+  if (startupIdleDone) return;
+  startupIdleDone = true;
+  const t0 = Date.now();
+  console.log('STARTUP_IDLE_RUN ' + JSON.stringify({ atMs: t0 - moduleT0 }));
+  prewarmNode();                                  // 只填缓存，不改变行为
+  runUpdateCheck(true).catch(() => {});
+}
+
+function scheduleStartupIdleTasks() {
+  const t0 = Date.now();
+  const poll = () => {
+    startupIdleTimer = null;
+    if (startupIdleDone) return;
+    if (!win || win.isDestroyed()) return;        // 窗口没了就不再排（下次启动再说）
+    pageFirstPaintReady().then((ready) => {
+      if (startupIdleDone) return;
+      if (ready || Date.now() - t0 >= STARTUP_IDLE_PAGE_WAIT_MS) {
+        console.log('STARTUP_IDLE_ARMED ' + JSON.stringify({ ready: !!ready, waitedMs: Date.now() - t0,
+          delayMs: STARTUP_IDLE_DELAY_MS }));
+        startupIdleTimer = setTimeout(runStartupIdleTasks, STARTUP_IDLE_DELAY_MS);
+      } else {
+        startupIdleTimer = setTimeout(poll, 250);
+      }
+    });
+  };
+  poll();
+}
+
+function cancelStartupIdleTasks() {
+  if (startupIdleTimer) { clearTimeout(startupIdleTimer); startupIdleTimer = null; }
+  startupIdleDone = true;                          // 退出中：不再补跑
 }
 
 /** 把兼容等级清零（下次启动生效）。用在托盘菜单那一条上。 */
@@ -2448,9 +2514,9 @@ if (!app.requestSingleInstanceLock()) {
     watchSkin();                                   // 皮肤包变更 → 自动重载页面
     bootGuard.phase('ready');
     buildTray();
-    // 启动 5 秒后在后台静默检查一次 GitHub 新版本
-    setTimeout(() => { runUpdateCheck(true).catch(() => {}); }, 5000);
-    { const t = setTimeout(prewarmNode, 4000); if (t.unref) t.unref(); }   // 后台预热聊天运行时探测，避免首次聊天同步卡主进程
+    // 启动阶段最忙的几秒里不跑后台任务：等窗口显示 + 首帧就绪后再等 15 秒跑一次更新检查
+    // （顺带预热聊天运行时探测）。详见 scheduleStartupIdleTasks() 的注释与实测数据。
+    scheduleStartupIdleTasks();
     if (AUTOSTART) {                                   // --autostart=on|off：命令行设置（托盘里也有开关）
       const want = ['on', '1', 'true', 'yes'].includes(AUTOSTART.toLowerCase());
       const applied = setAutoLaunch(want);
@@ -3180,7 +3246,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('window-all-closed', () => { if (quitting || process.platform !== 'darwin') app.quit(); });
   app.on('before-quit', () => { quitting = true; try { sysinfo.dispose(); } catch (e) {} try { mediaShow.stopAll(); } catch (e) {} try { island.stop(); } catch (e) {} try { if (infoHub) infoHub.stop(); } catch (e) {} if (harness) { try { harness.shutdown(); } catch (e) {} harness = null; } });
-  app.on('will-quit', () => { cancelWindowDisplaySync(); try { globalShortcut.unregisterAll(); } catch (e) {} });
+  app.on('will-quit', () => { cancelWindowDisplaySync(); cancelStartupIdleTasks(); try { globalShortcut.unregisterAll(); } catch (e) {} });
 }
 
 /* 供 tests 直接 require（electron 用桩替换、requestSingleInstanceLock 返回 false）：
