@@ -156,3 +156,59 @@ test('checkUpdate：没有 SHA256SUMS.txt 时 expectedSha256 为空、hasSumsAss
   assert.equal(r.hasSumsAsset, false);
   assert.equal(r.assetCount, 1);
 });
+
+/* 国内直连 github.com 的下载域会被重置（实测 ECONNRESET），拉 SHA256SUMS.txt 失败。
+   那种情况下 expectedSha256 原来会留空，evaluateAutoUpdate 就判「清单里没有这个升级包」
+   → canAutoUpdate=false，一键升级在能连 GitHub API 的机器上反而整条废掉。
+   GitHub API 的 assets[] 自带 digest(sha256:...)，用它兜底。 */
+test('checkUpdate：拉不到 SHA256SUMS.txt 时用 API 的 asset.digest 兜底', async () => {
+  const sha = 'f'.repeat(64);
+  const fetch = async (url) => {
+    if (String(url).endsWith('SHA256SUMS.txt')) throw new Error('read ECONNRESET');
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        tag_name: 'v0.8.2', name: 'v0.8.2', body: '', published_at: '2026-11-28T00:00:00Z',
+        html_url: 'https://github.com/timevisitor/catwhale-pet/releases/tag/v0.8.2',
+        assets: [
+          { name: 'catwhale-pet-v0.8.2-win-x64.zip', size: 238420239,
+            browser_download_url: 'https://github.com/timevisitor/catwhale-pet/releases/download/v0.8.2/catwhale-pet-v0.8.2-win-x64.zip',
+            digest: 'sha256:' + sha },
+          { name: 'SHA256SUMS.txt', size: 98,
+            browser_download_url: 'https://github.com/timevisitor/catwhale-pet/releases/download/v0.8.2/SHA256SUMS.txt',
+            digest: 'sha256:' + 'a'.repeat(64) },
+        ],
+      }),
+    };
+  };
+  const r = await checkUpdate({ currentVersion: '0.8.1', fetcher: fetch, directFetcher: fetch });
+  assert.equal(r.ok, true);
+  assert.equal(r.hasUpdate, true);
+  assert.equal(r.expectedSha256, sha);
+  assert.equal(r.shaSource, 'api-digest');
+  const v = evaluateAutoUpdate({ assetCount: r.assetCount, sumsAsset: r.hasSumsAsset, expectedSha256: r.expectedSha256 });
+  assert.equal(v.canAutoUpdate, true, v.reason);
+});
+
+test('checkUpdate：digest 与 SHA256SUMS.txt 都在时以 API digest 为准（同一份响应，更可信）', async () => {
+  const dig = 'b'.repeat(64), sum = 'c'.repeat(64);
+  const fetch = async (url) => {
+    if (String(url).endsWith('SHA256SUMS.txt')) {
+      return { ok: true, status: 200, text: async () => `${sum}  catwhale-pet-v0.7.2-win-x64.zip\n` };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        tag_name: 'v0.7.2', name: 'v0.7.2', body: '', published_at: '2026-11-27T00:00:00Z',
+        html_url: 'https://github.com/timevisitor/catwhale-pet/releases/tag/v0.7.2',
+        assets: [
+          { name: 'catwhale-pet-v0.7.2-win-x64.zip', size: 12345, browser_download_url: 'https://example.invalid/OWN', digest: 'sha256:' + dig },
+          { name: 'SHA256SUMS.txt', size: 98, browser_download_url: 'https://example.invalid/SHA256SUMS.txt' },
+        ],
+      }),
+    };
+  };
+  const r = await checkUpdate({ currentVersion: '0.7.1', fetcher: fetch, directFetcher: fetch });
+  assert.equal(r.expectedSha256, dig);
+  assert.equal(r.shaSource, 'api-digest');
+});

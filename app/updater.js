@@ -279,15 +279,28 @@ async function checkUpdate(opts = {}) {
     const sumsAsset = findSumsAsset(assets);
     const sumsUrl = sumsAsset ? sumsAsset.browser_download_url : '';
 
-    // ---- 期望 sha256（同 release 的 SHA256SUMS.txt）----
+    // ---- 期望 sha256 ----
+    // 先看 GitHub API 响应里自带的 asset.digest（"sha256:..."）。它是同一份响应的字段，
+    // 不额外发请求，而且**不依赖 github.com 的下载域** —— 那台机器实测直连 downloads 会被
+    // 重置（read ECONNRESET），拉不到 SHA256SUMS.txt 时原来的实现会把 expectedSha256 留空，
+    // evaluateAutoUpdate 于是判「清单里没有这个升级包」→ canAutoUpdate=false，
+    // 明明能连 API 却升不了。digest 由 GitHub 计算，作为校验值至少不比自传的清单弱。
     let expectedSha256 = '';
-    if (asset && sumsAsset) {
+    let shaSource = '';
+    const apiDigest = asset && typeof asset.digest === 'string' ? asset.digest.trim() : '';
+    if (/^sha256:[0-9a-fA-F]{64}$/.test(apiDigest)) {
+      expectedSha256 = apiDigest.slice(7).toLowerCase();
+      shaSource = 'api-digest';
+    }
+    // 兜底：老 release / 没有 digest 的情形，仍然去拉同 release 的 SHA256SUMS.txt
+    if (!expectedSha256 && asset && sumsAsset) {
       try {
         const sgot = await fetchWithRateLimitFallback(sumsUrl, { fetchFn, directFn, timeoutMs });
         const sr = sgot.res;
         if (sr && sr.ok) {
           const sums = parseSums(await sr.text());
           expectedSha256 = sums[asset.name] || '';
+          if (expectedSha256) shaSource = 'sums-asset';
         }
       } catch (e) { expectedSha256 = ''; }
     }
@@ -310,6 +323,7 @@ async function checkUpdate(opts = {}) {
       assetSize,
       sumsUrl,
       expectedSha256,
+      shaSource,
       // 兼容旧字段（旧 UI / 托盘菜单在用）
       downloadUrl: assetUrl || releaseUrl,
       // 给 update-engine 用的中间事实（也给日志/测试看）
