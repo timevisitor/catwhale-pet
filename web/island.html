@@ -840,6 +840,12 @@
       var d = Math.max(Math.abs(e.clientX - dragState.cx), Math.abs(e.clientY - dragState.cy),
         Math.abs(num(e.screenX) - dragState.sx), Math.abs(num(e.screenY) - dragState.sy));
       if (d < 4) return;                      // 4px 以内仍算点击
+      /* 竖直方向留给手势（球态上拖 = 暂时隐藏）。不这么分的话，两条路径会同时
+         移动同一个岛：主进程在改窗口位置、页面在改内容偏移，合起来看着像抽搐。 */
+      if (Math.abs(e.clientY - dragState.cy) > Math.abs(e.clientX - dragState.cx)) {
+        dragState = null;                     // 这次拖动交给人手手势，别再接管
+        return;
+      }
       dragState.active = true;
       window.__islandDrag.start = { d: d, sx: dragState.sx, sy: dragState.sy };
       try { HOST.islandDragStart(dragState.sx, dragState.sy); } catch (err) {}
@@ -981,6 +987,15 @@
     var inside = insideShape(x, y);
     recordDbg(x, y, inside, pushHit(inside));
   }
+
+  /* 形状变了以后主动复算一次；没有 lastXY 时不能凭空猜，但 rect 仍要刷新，
+     好让外部能看出「形状已经不是原来那个了」 */
+  function rehit() {
+    if (!lastXY) { recordDbg(0, 0, hitNow === true, false); return; }
+    if (holdHit > 0) { recordDbg(lastXY.x, lastXY.y, true, pushHit(true)); return; }
+    var inside = insideShape(lastXY.x, lastXY.y);
+    recordDbg(lastXY.x, lastXY.y, inside, pushHit(inside));
+  }
   window.__islandRehit = rehit;
 
   /* 形变落定后再复算：320ms 形变 + 余量。加定时器而不是只听 transitionend，
@@ -1093,6 +1108,10 @@
   function onGestureEnd(res) {
     if (!res) return;
     if (res.type === 'tap') { tapCount++; return; }
+    /* 球态的横向手势不作数：那一段拖动是「移动岛」，切换卡只在展开态有意义
+       （球态根本没有卡面可换）。 */
+    if (!isl.classList.contains('open')
+        && (res.type === 'swipe-left' || res.type === 'swipe-right')) return;
     if (res.type === 'swipe-left' || res.type === 'swipe-right') {
       if (actCount > 1) {
         /* 左拖 = 下一张，右拖 = 上一张（与「把卡片往左推走」的直觉一致） */
@@ -1118,9 +1137,9 @@
     recordDbg(x, y, true, pushHit(true));
     /* 起点必须在按下这一刻给判定器：晚一点就只能拿「第一次 move」当原点，SLOP 会算错 */
     dragMoved = false;
-    /* 球态的手势判定不启动：那一段拖动归「移动岛」，两边同时吃会把位移算成两遍。
-       球态的单击不受影响 —— click 走 singleClick，本来就不经过判定器。 */
-    if (GD && isl.classList.contains('open')) {
+    /* 两种状态都喂判定器：球态只用它的竖直语义（上拖隐藏），横向那一段归「移动岛」，
+       在 pointermove / onGestureEnd 里按 axis 让开。 */
+    if (GD) {
       GD.down({ x: x, y: y, t: evtTime(e) });
       gestureOn = true;
     }
@@ -1156,6 +1175,8 @@
     var r = GD.move({ x: e.clientX, y: e.clientY, t: evtTime(e) });
     lastGesture = r;
     if (r.state === 'pending') return;      /* 不到 SLOP 一律不动，避免点击时岛乱抖 */
+    /* 球态的横向拖动归「移动岛」（主进程在改窗口位置），这边再 setDrag 就成了双份位移 */
+    if (!isl.classList.contains('open') && r.axis === 'h') return;
     dragMoved = true;
     var v = dragVector(r);
     setDrag(v.x, v.y);

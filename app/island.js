@@ -890,6 +890,9 @@ function createIsland(deps) {
         lastMsg = null; msgAt = 0; lastMsgKey = '';
         agentSnap = null; agentAt = 0; infoOpen = false;
         acts = []; selActId = null;
+        /* 清空后立刻把「空载荷」推下去：页面上的 activityCount 是上一次推送的缓存，
+           不推的话自检脚本读页面会觉得队列里还有一张卡（主进程其实已空）。 */
+        pushPayload(buildPayload({ advance: false }));
       }
       hiddenUntil = 0;
       show();

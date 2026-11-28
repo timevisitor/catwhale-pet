@@ -379,7 +379,15 @@ async function cdpTarget() {
 
   /* ---------- ⑥ 稳定性：拖拽不会让弹簧目标跑掉 ---------- */
   {
-    const s = await state();
+    /* 等到真的落定再判：载荷随时可能改目标（外部活动进出、队列淘汰），
+       固定 sleep 会把「正常收敛中」误判成「目标跑偏」。 */
+    let s = await state();
+    for (let i = 0; i < 20; i++) {
+      const mm = s && s.motion;
+      if (mm && mm.w && mm.w.settled && mm.h.settled && mm.p.settled && mm.x.settled) break;
+      await sleep(150);
+      s = await state();
+    }
     const m = s.motion || {};
     ok('⑥ 全部弹簧已落定（settled=true，静止时不再排帧）',
       !!m.w && m.w.settled === true && m.h.settled === true && m.p.settled === true && m.x.settled === true,
