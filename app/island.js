@@ -31,6 +31,16 @@ const SILENT_RESET_MS = 4000;
 const TOL_MOVE = 1;
 const TOL_COARSE = 6;
 const ANCHOR_EPS = 0.03;         // 角色矩形内归一化：小于这个量级视为呼吸/摆尾，不动
+const ACT_KINDS = ['msg', 'music', 'video', 'info', 'agent'];
+const ACT_MAX = 4;               // 队列上限：窗口只有 640 宽，超过 4 张卡横拖就成了找东西
+
+/* 活动队列：横拖切换必须先有「可切换的对象」，否则手势是空转。
+   队列里只存身份（id/kind/ts），内容仍然由 buildPayload 现算 —— 这样队列不会变成
+   第二份数据源，也就没有「队列里的数据和画面对不上」这一类 bug。 */
+let acts = [];
+let selActId = null;
+let freshActs = 0;               // 本 tick 新入列的活动数（判断「是不是真的有新事件」）
+let lastSeenMsgTs = 0;           // 上一次已入列的消息时间戳
 
 const DEFAULTS = { enabled: true, msg: true, music: true, video: true, holdMs: 8000 };
 
@@ -328,14 +338,16 @@ function createIsland(deps) {
   /* 进度：SMTC 的 pos 可能很久才变一次（Edge 甚至一直不动），
      用「最后真实 pos + 流逝时间」算，pos 一变就重新锚定。视频侧已不显示进度条，
      这里只为音乐态的 ≈ 时间。 */
-  function progress(key, rawPos, dur, playing) {
+  function progress(key, rawPos, dur, playing, advance) {
     if (rawPos === null || !isFinite(rawPos)) return { pos: null, estimated: false };
     const now = Date.now();
     if (progKey !== key) {
       progKey = key; progPos = rawPos; progAt = now; progLast = rawPos; progStillMs = 0;
     } else if (Math.abs(rawPos - progLast) > 0.3) {
       progPos = rawPos; progAt = now; progLast = rawPos; progStillMs = 0;
-    } else {
+    } else if (advance !== false) {
+      /* advance=false 是「同一 tick 内的重发」（手势切换后立刻推一次载荷）：
+         不能把 TICK_MS 再计一遍，否则拖几次之后歌词/估时就会跑到前面去。 */
       progStillMs += TICK_MS;
     }
     let v = progPos + (playing ? (now - progAt) / 1000 : 0);
@@ -428,17 +440,20 @@ function createIsland(deps) {
   }
 
   /* ---------------- 载荷 ---------------- */
-  function buildPayload() {
+  /* opts.advance === false：同一个 tick 内的「重发」（手势切换后要立刻推一次，不能等 500ms）。
+     这时不能推进电平/歌词/进度这些逐 tick 累加量，否则一次拖拽会把时间轴多推半秒。 */
+  function buildPayload(opts) {
+    const advance = !(opts && opts.advance === false);
     const m = readMedia();
     const key = m.title ? (m.title + '|' + m.artist) : '';
     if (key) {
       if (key !== trackKey) { trackKey = key; elapsedMs = 0; }
-      else if (silentMs < SILENT_RESET_MS) elapsedMs += TICK_MS;
+      else if (advance && silentMs < SILENT_RESET_MS) elapsedMs += TICK_MS;
       ensureLyric(key, m.title, m.artist);
     }
-    pushLevel(m.playing, m.peak);
+    if (advance) pushLevel(m.playing, m.peak);
     const lyr = key ? lyricAt(key, elapsedMs) : { cur: '', next: '' };
-    const pr = key ? progress(key, m.pos, m.dur, m.playing) : { pos: null, estimated: false };
+    const pr = key ? progress(key, m.pos, m.dur, m.playing, advance) : { pos: null, estimated: false };
     const hold = Math.max(1500, cfg.holdMs || 8000);
     const msgFresh = !!cfg.msg && !!lastMsg && (Date.now() - msgAt) < hold;
     const musicOn = !!cfg.music && m.kind === 'music' && !!m.title;
@@ -452,10 +467,71 @@ function createIsland(deps) {
           : musicOn ? 'music'
             : (infoOpen ? 'info' : 'idle');
     if (pinned && next === 'idle') next = mode || 'idle';
+
+    /* ---- 活动队列（横拖切换的对象） ----
+       入列：这一 tick 里「有内容」的 kind。同一 kind 同一 id 只刷新时间戳，不重复入列；
+       超过 holdMs 没被刷新的条目淘汰 —— 「来过又走了」的活动不会永远占着队列。
+       只存 id/kind/ts，内容仍由本函数现算，所以队列永远不会和画面对不上。 */
+    const now = Date.now();
+    const live = {
+      msg: msgFresh, music: musicOn, video: videoOn,
+      agent: agentOn, info: !!infoOpen,
+    };
+    const ids = {
+      /* 消息按「会话」去重（app|标题），不按通知 id：同一个群连发三条不该在队列里
+         堆三张内容一模一样的卡。新消息仍然算一次「新事件」（msgPing），所以抢占和
+         「隐藏后被新消息叫回来」都不受影响。 */
+      msg: lastMsg ? (lastMsg.app + '|' + lastMsg.title) : '',
+      music: trackKey,
+      video: m.kind === 'video' ? m.title : '',
+      agent: av ? (av.agent + '|' + av.label) : '',
+      info: 'summary',
+    };
+    let freshKind = '';
+    freshActs = 0;
+    const msgTs = lastMsg ? (Number(lastMsg.ts) || 0) : 0;
+    const msgPing = !!lastMsg && msgTs > lastSeenMsgTs;
+    if (msgPing) lastSeenMsgTs = msgTs;
+    for (const k of ACT_KINDS) {
+      if (!live[k]) continue;
+      const full = k + ':' + ids[k];
+      const hit = acts.find((a) => a.id === full);
+      const ping = (k === 'msg' && msgPing);
+      if (hit) {
+        hit.ts = now;
+        if (!ping) continue;
+        /* 同一会话的新消息：格子不新增，但语义上仍是新事件 */
+        freshActs++;
+        if (!freshKind || k === next) freshKind = k;
+        continue;
+      }
+      acts.push({ id: full, kind: k, ts: now });
+      freshActs++;
+      /* 新活动优先抢占（原单槽抢占语义：来消息就把歌词顶掉）；同一 tick 有多条新活动时，
+         优先选本来优先级最高的那条。 */
+      if (!freshKind || k === next) freshKind = k;
+    }
+    acts = acts.filter((a) => now - a.ts <= hold);
+    while (acts.length > ACT_MAX) acts.shift();
+
+    if (freshKind) {
+      const f = acts.find((a) => a.kind === freshKind);
+      if (f) selActId = f.id;
+    }
+    let selIdx = acts.findIndex((a) => a.id === selActId);
+    /* 选中的那张已经没有内容了（比如歌停了但还没到淘汰时间）→ 退回优先级选出的那张，
+       否则会出现「横拖到一张空卡」这种无从解释的状态。 */
+    if (selIdx < 0 || !live[acts[selIdx].kind]) selIdx = acts.findIndex((a) => a.kind === next);
+    const selKind = selIdx >= 0 ? acts[selIdx].kind : '';
+    selActId = selIdx >= 0 ? acts[selIdx].id : null;
+    if (selKind) next = selKind;
     mode = next;
     return {
       mode: next,
       pinned,
+      activityCount: acts.length,
+      activityIndex: selIdx,
+      activityKind: selKind,
       music: {
         title: m.title, artist: m.artist, app: m.proc,
         appName: friendlyApp(m.proc), levels: levels.slice(),
@@ -682,6 +758,10 @@ function createIsland(deps) {
      它由渲染进程的锚点事件驱动（queueAnchor → place(TOL_MOVE)）。
      这里只在两种「几何真的变了」的场合补一次落位：第一次显示、球↔胶囊高度变了。
      这样即使内容停更，胶囊也不会掉帧式地每 500ms 被拽一下。 */
+  function pushPayload(p) {
+    if (win && !win.isDestroyed()) win.webContents.send('island:data', p);
+  }
+
   function tick() {
     if (Date.now() < frozenUntil) return;
     try {
@@ -691,8 +771,13 @@ function createIsland(deps) {
       const modeBefore = mode;
       const payload = buildPayload();
       const hidden = Date.now() < hiddenUntil;
-      if (!hidden || payload.mode !== 'idle') {
-        if (hidden && payload.mode !== 'idle') hiddenUntil = 0;
+      /* 隐藏期间（dismiss / 上拖）只有**真正的新活动**能把它叫回来。
+         原来写的是「只要 mode 不是 idle 就重新显示」，于是同一张还新鲜的卡会在下一个
+         500ms tick 把隐藏顶回来 —— 双击 dismiss 一直有这毛病，上拖隐藏则等于没做。
+         这里看的是本 tick 新增了几个活动，不是 mode，语义才和「隐藏」一致。 */
+      const revived = hidden && payload.mode !== 'idle' && freshActs > 0;
+      if (!hidden || revived) {
+        if (revived) hiddenUntil = 0;
         const w = ensure();
         if (!w) return;
         if (!w.isVisible()) {
@@ -734,9 +819,41 @@ function createIsland(deps) {
   }
 
   /* ---------------- IPC ---------------- */
+  /* 手势切换的实现：dir=1 下一张 / dir=-1 上一张，首尾相接（拖到头再拖绕回去）。 */
+  function actStep(_e, dir) {
+    const d = Number(typeof dir === 'number' ? dir : (dir && (dir.dir !== undefined ? dir.dir : dir.cmd))) || 0;
+    const n = acts.length;
+    if (n <= 1) {
+      return { ok: true, swapped: false, activityCount: n, activityIndex: n ? 0 : -1, activityKind: (acts[0] || {}).kind || '' };
+    }
+    let i = acts.findIndex((a) => a.id === selActId);
+    if (i < 0) i = 0;
+    i = ((i + (d >= 0 ? 1 : -1)) % n + n) % n;
+    selActId = acts[i].id;
+    /* 立刻推一次：不等 500ms 的 tick，否则松手到画面切换之间有半秒空档 */
+    const payload = buildPayload({ advance: false });
+    if (win && !win.isDestroyed() && !win.isVisible()) { hiddenUntil = 0; show(); }
+    pushPayload(payload);
+    return {
+      ok: true, swapped: true,
+      activityCount: payload.activityCount,
+      activityIndex: payload.activityIndex,
+      activityKind: payload.activityKind,
+      mode: payload.mode,
+    };
+  }
+
   const handlers = {
     'island:get': () => ({
-      ok: true, cfg: Object.assign({}, cfg), data: { mode, pinned },
+      ok: true, cfg: Object.assign({}, cfg),
+      data: {
+        mode, pinned,
+        activityCount: acts.length,
+        activityIndex: acts.findIndex((a) => a.id === selActId),
+        activityKind: (acts.find((a) => a.id === selActId) || {}).kind || '',
+        hidden: Date.now() < hiddenUntil,
+        activities: acts.map((a) => ({ id: a.id, kind: a.kind, age: Date.now() - a.ts })),
+      },
     }),
     'island:set': (_e, patch) => noteCfg(patch),
     'island:cmd': (_e, cmd) => {
@@ -752,7 +869,7 @@ function createIsland(deps) {
     },
     'island:demo': (_e, what) => {
       const modeArg = String(what || 'msg');
-      if (modeArg === 'msg') {
+      if (modeArg === 'msg' || modeArg === 'activities') {
         lastMsg = {
           app: '微信', title: '张三',
           text: '这是灵动岛的预览消息：明天下午三点评审会改到四点。',
@@ -760,10 +877,30 @@ function createIsland(deps) {
         };
         msgAt = Date.now();
       }
+      /* 手势自检要一个「至少两张卡」的队列：消息 + Agent。不依赖测试机上是否真在放歌。 */
+      if (modeArg === 'activities') {
+        noteAgent({
+          sessions: [
+            { agent: 'claude-code', state: 'working', title: '手势自检 · 活动队列', updatedAt: Date.now() },
+          ],
+        });
+      }
+      /* 清空一切「有内容」的来源，把手势验证拉回 idle（队列空 = 手势必须 inert） */
+      if (modeArg === 'clear') {
+        lastMsg = null; msgAt = 0; lastMsgKey = '';
+        agentSnap = null; agentAt = 0; infoOpen = false;
+        acts = []; selActId = null;
+      }
       hiddenUntil = 0;
       show();
-      return { ok: true };
+      return { ok: true, mode: modeArg };
     },
+    /* 横拖切换：把选中项在队列里前后挪一格，并立刻推一次载荷。
+       频道名按任务书是 island:activity-step；下划线写法也登记一份 —— preload 会把
+       'island_activity_step' 转成 'island:activity_step'，少登一个就是
+       "No handler registered"，表现为「拖了没反应」（这一版真踩过）。 */
+    'island:activity-step': actStep,
+    'island:activity_step': actStep,
     'island:reset': () => { place(true); return { ok: true }; },
     'island:hit': (_e, inside) => {
       lastHit = !!inside;

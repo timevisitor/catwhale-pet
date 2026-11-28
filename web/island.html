@@ -13,17 +13,19 @@
   #stage{position:fixed;left:0;top:0;width:100%;height:100%;overflow:hidden}
 
   /* ================= 形变主体 ================= */
+  /* 尺寸/圆角/缩放由 island-motion.js 每帧写 CSS 变量驱动。
+     这里**不能**留 width/height/border-radius 的 transition：CSS 在中途改目标值时会
+     重新起算缓动（速度瞬间归零），那正是快速切换时「顿一下」的来源。 */
   #isl{position:absolute;left:var(--content-x,50%);top:8px;
-    width:56px;height:56px;border-radius:28px;
-    transform:translateX(-50%) scale(var(--sc,1));
+    width:var(--isl-w,56px);height:var(--isl-h,56px);border-radius:var(--isl-r,28px);
+    /* 拖拽位移是**临时 offset**，由独立的 drag 弹簧写进 --drag-x/--drag-y：
+       绝不能写进 springW/H/P/X 的目标 —— 那是形变目标，写进去松手后岛会停在新位置。 */
+    transform:translate(var(--drag-x,0px),var(--drag-y,0px)) translateX(-50%) scale(calc(var(--sc,1) * var(--isl-scale,1)));
     overflow:hidden;cursor:pointer;will-change:width,height;
     /* 底色常驻在主体上：形变过程中不会出现「半透明灰板」的过渡帧 */
     background:rgba(10,13,18,.82);
     box-shadow:0 6px 22px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.06);
-    transition:width .32s cubic-bezier(.22,1.2,.36,1),
-               height .32s cubic-bezier(.22,1.2,.36,1),
-               border-radius .32s cubic-bezier(.22,1.2,.36,1),
-               box-shadow .32s ease,transform .18s ease}
+    transition:box-shadow .32s ease}
   #isl.idle:hover{--sc:1.06}
   /* 气泡尖角：朝下指向桌宠，像对话泡泡 */
   #isl::after{content:'';position:absolute;left:var(--tail-x,50%);bottom:-5px;width:12px;height:12px;
@@ -35,18 +37,16 @@
   #isl.has-badge:not(.open)::before{content:'';position:absolute;right:6px;top:6px;width:10px;height:10px;
     border-radius:50%;background:#E4573D;box-shadow:0 0 0 2px rgba(10,13,18,.9);z-index:3}
 
-  #isl.open{width:var(--w,600px);height:104px;border-radius:26px;
-    /* 每种状态需求不同：消息要宽、Agent 状态和情报卡窄一些，别让小人戴大帽子 */
-    /* 只在胶囊态做玻璃模糊：球态是实心球，不需要也不会产生方形模糊边缘 */
+  #isl.open{
+    /* 尺寸不再由 .open 决定（交给弹簧）；这里只管玻璃模糊和阴影。
+       模糊强度故意不做逐帧插值 —— backdrop-filter 每改一次都要重算整块合成，掉帧明显。 */
     -webkit-backdrop-filter:blur(18px) saturate(1.2);
     backdrop-filter:blur(18px) saturate(1.2);
     box-shadow:0 18px 40px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.08)}
 
-  /* 胶囊的 1px 描边 + 顶部高光（淡入） */
-  .skin{position:absolute;inset:0;border-radius:inherit;opacity:0;pointer-events:none;
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
-    transition:opacity .18s ease}
-  #isl.open .skin{opacity:1}
+  /* 胶囊的 1px 描边 + 顶部高光（不透明度由弹簧的 fade 通道驱动） */
+  .skin{position:absolute;inset:0;border-radius:inherit;opacity:var(--fade,0);pointer-events:none;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
   .skin::before{content:'';position:absolute;left:16px;right:16px;top:0;height:1px;
     background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.26) 20%,
       rgba(255,255,255,.16) 62%,rgba(255,255,255,0));
@@ -54,16 +54,17 @@
   #isl.pinned .skin::before{background:linear-gradient(90deg,rgba(231,184,75,0),
       rgba(231,184,75,.55) 50%,rgba(231,184,75,0))}
 
-  /* 小球 */
+  /* 小球：不透明度由 JS 的 ball 通道驱动（展开度早期就淡出，否则球会跟着
+     变宽的容器往右跑；主体底色常驻，所以淡出期间不会露出透明洞） */
   .ballcore{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
     border-radius:50%;display:flex;align-items:center;justify-content:center;
     background:radial-gradient(circle at 40% 30%,rgba(32,39,50,.90) 0%,
       rgba(18,22,28,.92) 42%,rgba(8,10,14,.96) 100%);
     box-shadow:inset 0 0 0 1px rgba(255,255,255,.10),inset 0 1px 0 rgba(255,255,255,.16);
-    animation:breathe 2.4s ease-in-out infinite;
-    transition:opacity .18s ease}
+    opacity:var(--ball-op,1);
+    animation:breathe 2.4s ease-in-out infinite}
   /* 胶囊态球整体透明：看不见的东西别让它还在后台逐帧动画 */
-  #isl.open .ballcore{opacity:0;animation:none;transition:opacity .14s ease}
+  #isl.open .ballcore{animation:none}
   #isl.open .bars i{animation-play-state:paused}
   @keyframes breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(1.13)}}
 
@@ -81,10 +82,13 @@
   @keyframes bar{0%,100%{transform:scaleY(.364);opacity:.68}50%{transform:scaleY(1);opacity:1}}
 
   /* ================= 内容层 ================= */
-  .content{position:absolute;inset:0;opacity:0;visibility:hidden;
-    transition:opacity .18s ease,visibility 0s linear .18s}
-  #isl.open .content{opacity:1;visibility:visible;
-    transition:opacity .18s ease .10s,visibility 0s}
+  /* 内容不透明度由 content 通道驱动（比 fade 晚，容器先长好、字后浮现）；
+     纵向位移由 offset 通道驱动（-18px → 0，内容从上方滑入）。 */
+  /* --drag-fade 只在拖动中生效（默认 1）：横向拖得越远卡面越淡，
+     给「松手才会真的换内容」一个预告，而不是拖的时候就换。 */
+  .content{position:absolute;inset:0;opacity:calc(var(--content-op,0) * var(--drag-fade,1));
+    transform:translateY(var(--isl-offset,0px));pointer-events:none}
+  #isl.open .content{pointer-events:auto}
 
   .panel{position:absolute;inset:0;display:flex;align-items:center;gap:16px;
     padding:0 18px;opacity:0;pointer-events:none;transition:opacity .18s ease}
@@ -249,6 +253,8 @@
   </div>
 </div>
 
+<script src="island-motion.js"></script>
+<script src="island-gesture.js"></script>
 <script>
 (function () {
   'use strict';
@@ -319,6 +325,154 @@
     if (d.toDateString() === y.toDateString()) return '昨天';
     return (d.getMonth() + 1) + '月' + d.getDate() + '日';
   }
+
+  /* ---------------- 形变引擎（弹簧驱动，替代 CSS transition） ----------------
+   *
+   * 为什么换：原来 width/height/border-radius 是三条独立 transition，各走各的曲线；
+   * 更致命的是 CSS 在中途改目标值时会「重新起算」缓动，速度瞬间归零 —— 快速切换时
+   * 能明显看到顿一下。而且同一个 open 状态下换 mode（600→420）宽度是直接跳变的。
+   *
+   * 现在三个弹簧实例分工（Spatial 管几何、Effects 由展开度推导）：
+   *   springW / springH —— 尺寸，目标随 mode 变化，换 mode 也能平滑过渡
+   *   springP          —— 展开度 0↔1，fade / content / scale / offset 全部由它推导
+   * 每帧由 rAF 推进并写 CSS 变量；**只在未落定时排下一帧**，静止时零开销。
+   * 数学与物理正确性由 tools/motion-verify-independent.js 用 RK4 独立复算过。 */
+  var MOTION = (window.IslandMotion && typeof window.IslandMotion.create === 'function')
+    ? window.IslandMotion : null;
+
+  var REDUCED = false;
+  try {
+    REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (e) {}
+
+  var BALL_W = 56, CAP_H = 104, WIN_W = 640;
+  var springW = null, springH = null, springP = null, springX = null;
+  var springDX = null, springDY = null;
+  var DRAG_MAX = 60;              // 横拖 ±60 / 上拖 -60（任务书口径），超出走越界阻尼
+  var RUBBER = 0.35;              // 越界阻尼系数（DotIsle A8）
+  var rafId = 0;
+  var lastTailX = WIN_W / 2;      // 最近一次主进程给的「尖角应指向的位置」
+
+  function mkSpring(init, response) {
+    var s = MOTION.create({ response: response || 0.34, damping: 1, settleEps: 0.002, reduced: REDUCED });
+    s.reset(init);
+    return s;
+  }
+  /* 拖拽位移单独两条弹簧（比形变快一点，跟手才不像「拉着橡皮」）：
+     它们只服务 --drag-x/--drag-y，松手后自己回 0，和四个形变弹簧互不影响。 */
+  if (MOTION) {
+    springW = mkSpring(BALL_W);
+    springH = mkSpring(BALL_W);
+    springP = mkSpring(0);
+    springX = mkSpring(WIN_W / 2);
+    springDX = mkSpring(0, 0.26);
+    springDY = mkSpring(0, 0.26);
+  }
+
+  function smoothstepJs(x, a, b) {
+    var t = (x - a) / (b - a);
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    return t * t * (3 - 2 * t);
+  }
+  function fallbackChannels(p) {
+    return { fade: p > 0 ? 1 : 0, content: p > 0 ? 1 : 0, scale: 1, blur: 0, offset: 0 };
+  }
+
+  function applyFrame(w, h, p, ch, cx, dx, dy) {
+    var st = isl.style;
+    /* 圆角：56→28px、104→26px 线性插值。h 本来就在弹簧上，不必再单开一条通道。 */
+    var r = 28 - 2 * Math.max(0, Math.min(1, (h - BALL_W) / (CAP_H - BALL_W)));
+    st.setProperty('--isl-w', (Math.round(w * 100) / 100) + 'px');
+    st.setProperty('--isl-h', (Math.round(h * 100) / 100) + 'px');
+    st.setProperty('--isl-r', (Math.round(r * 100) / 100) + 'px');
+    st.setProperty('--content-x', (Math.round(cx * 100) / 100) + 'px');
+    /* scale 恒为 1，不用 ch.scale：
+       DotIsle 的 scale 0.96→1 是给「卡片从无到有」用的，那里卡片隐藏时不可见；
+       我们的球态是**可见实体**，0.96 会让球一直小 4%（实测 rect 56→53.75），
+       而且命中尺寸和设计尺寸对不上。 */
+    st.setProperty('--isl-scale', '1');
+    st.setProperty('--fade', ch.fade.toFixed(4));
+    st.setProperty('--content-op', ch.content.toFixed(4));
+    st.setProperty('--isl-offset', ch.offset.toFixed(2) + 'px');
+    /* 球在展开度很早就淡出：容器一变形它就往右跑，晚一点淡就被看见 */
+    st.setProperty('--ball-op', (1 - smoothstepJs(p, 0.02, 0.20)).toFixed(4));
+    /* 拖拽反馈：位移是临时 offset（不碰弹簧目标），卡面按偏移量轻微淡出 */
+    var ox = (typeof dx === 'number' && isFinite(dx)) ? dx : 0;
+    var oy = (typeof dy === 'number' && isFinite(dy)) ? dy : 0;
+    st.setProperty('--drag-x', (Math.round(ox * 100) / 100) + 'px');
+    st.setProperty('--drag-y', (Math.round(oy * 100) / 100) + 'px');
+    var dAbs = Math.max(Math.abs(ox), Math.abs(oy));
+    st.setProperty('--drag-fade', (1 - 0.5 * Math.min(1, dAbs / DRAG_MAX)).toFixed(3));
+  }
+
+  /* rAF 里的轻量命中同步：只判断并上报变化，不写 __hitDbg（避免每帧造一个对象） */
+  function hitTick() {
+    if (holdHit > 0 || !lastXY) return;
+    pushHit(insideShape(lastXY.x, lastXY.y));
+  }
+
+  function motionLoop(now) {
+    rafId = 0;
+    if (!springW) return;
+    var rw = springW.frame(now);
+    var rh = springH.frame(now);
+    var rp = springP.frame(now);
+    var rx = springX.frame(now);
+    var rdx = springDX ? springDX.frame(now) : { value: 0, settled: true };
+    var rdy = springDY ? springDY.frame(now) : { value: 0, settled: true };
+    applyFrame(rw.value, rh.value, rp.value, rp.channels, rx.value, rdx.value, rdy.value);
+    hitTick();                                  /* 形状每帧都在变，命中必须同步 */
+    /* drag 弹簧也算进「还在动」：松手回位没走完就停帧，偏移会冻在半路 */
+    if (!(rw.settled && rh.settled && rp.settled && rx.settled && rdx.settled && rdy.settled)) {
+      rafId = requestAnimationFrame(motionLoop);
+    } else {
+      rehit();                                  /* 落定后按最后光标位置再校正一次 */
+    }
+  }
+  function kickMotion() {
+    if (springW && !rafId) rafId = requestAnimationFrame(motionLoop);
+  }
+
+  /* mode → 目标宽度：直接读 CSS 里的 --w，避免在 JS 里再维护一份尺寸表 */
+  function modeWidth(mode) {
+    if (!mode || mode === 'idle') return BALL_W;
+    var v = NaN;
+    try { v = parseFloat(getComputedStyle(isl).getPropertyValue('--w')); } catch (e) {}
+    return (isFinite(v) && v >= BALL_W) ? v : 600;
+  }
+
+  /* 形状决定内容中心能落在哪：球只要不越出窗口，胶囊几乎填满窗口、必须居中在窄范围内。
+     一律按**目标宽度**夹紧，于是球→胶囊时中心也是跟宽度一起走弹簧，不会瞬移。 */
+  function clampCx(open, tailX) {
+    var cw = open ? Math.min(modeWidth(isl.getAttribute('data-mode')), WIN_W - 8) : BALL_W;
+    var lo = cw / 2 + 4, hi = WIN_W - cw / 2 - 4;
+    var x = (typeof tailX === 'number' && isFinite(tailX)) ? tailX : WIN_W / 2;
+    return Math.max(lo, Math.min(hi, x));
+  }
+
+  function setTarget(w, h, open, cx) {
+    var p = open ? 1 : 0;
+    if (springW) {
+      /* 带上 now：让弹簧从「改目标这一刻」起算，而不是从上一次 frame 起算。
+         少了这个，rAF 停过一段（窗口隐藏/系统降频/静置）再切 mode 会瞬移到位。 */
+      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      springW.to(w, { now: now });
+      springH.to(h, { now: now });
+      springP.to(p, { now: now });
+      if (springX) springX.to(cx, { now: now });
+      kickMotion();
+      return;
+    }
+    /* 引擎没加载：退化到瞬变。宁可没动画，也不能不变形。 */
+    applyFrame(w, h, p, MOTION ? MOTION.channelsFromP(p) : fallbackChannels(p), cx);
+  }
+  window.__islandMotion = function () {
+    return {
+      ready: !!springW, reduced: REDUCED,
+      w: springW && springW.peek(), h: springH && springH.peek(),
+      p: springP && springP.peek(), x: springX && springX.peek()
+    };
+  };
 
   /* ---------------- 波形 canvas ---------------- */
   var wave = (function () {
@@ -550,16 +704,6 @@
 
   function render(d) {
     d = (d && typeof d === 'object') ? d : {};
-    /* 尖角 / 主体位置由主进程给：角色贴近屏幕边时窗口会被夹回屏幕内，
-       这时要把「内容」整体挪到角色那一侧，尖角才指着角色而不是空气。 */
-    if (typeof d.tailX === 'number' && isFinite(d.tailX)) {
-      var TW = 640;                                  // 窗口宽（与主进程常量一致）
-      var cw = (isl.classList.contains('open') || str(d.mode, 'idle') !== 'idle')
-        ? Math.min(600, TW - 8) : 56;                // 胶囊 600 / 球 56
-      var cx = Math.max(cw / 2 + 4, Math.min(TW - cw / 2 - 4, d.tailX));
-      isl.style.setProperty('--content-x', Math.round(cx) + 'px');
-      isl.style.setProperty('--tail-x', Math.round(d.tailX) + 'px');
-    }
 
     var mode = str(d.mode, 'idle').toLowerCase();
     if (MODES.indexOf(mode) < 0) mode = 'idle';
@@ -567,10 +711,30 @@
     var open = mode !== 'idle';
     if (open) lastOpen = mode;
 
+    /* 活动队列读数来自主进程：手势是否 inert 取决于它，页面不许自己猜。
+       老宿主没有这个字段（undefined）时按「只有一张卡」处理 —— 宁可不切换，
+       也不要在没有可切换对象时演一段假切换。 */
+    var ac = num(d.activityCount);
+    actCount = (ac === null) ? 1 : ac;
+    var ai = num(d.activityIndex);
+    actIndex = (ai === null) ? -1 : ai;
+    actKind = str(d.activityKind, '');
+
     isl.classList.toggle('open', open);
     isl.classList.toggle('idle', !open);
     isl.classList.toggle('pinned', !!d.pinned);
-    isl.setAttribute('data-mode', mode);
+    isl.setAttribute('data-mode', mode);   /* 必须在读 --w 之前：宽度表挂在 data-mode 上 */
+
+    /* 尖角指向角色：主进程每 tick 给 tailX。记下来 —— 形状变化时要用它重算中心。 */
+    if (typeof d.tailX === 'number' && isFinite(d.tailX)) {
+      lastTailX = d.tailX;
+      isl.style.setProperty('--tail-x', Math.round(d.tailX) + 'px');
+    }
+
+    /* 尺寸和目标中心一起交给弹簧。中心按**目标宽度**夹紧，所以展开后绝不会把
+       右侧内容推出 640 窗口（之前只在收到 tailX 时才重算，球态算出 426 再展开成
+       600 宽就直接越界 86px，网易云标签被推出视口 —— 真机测出来的）。 */
+    setTarget(open ? modeWidth(mode) : BALL_W, open ? CAP_H : BALL_W, open, clampCx(open, lastTailX));
 
     for (var i = 1; i < MODES.length; i++) {
       var p = $('p-' + MODES[i]);
@@ -587,6 +751,8 @@
     }
     /* 球上的小红点：有未读/待办时提示「点我」 */
     if (isl) isl.classList.toggle('has-badge', Number(d.badge) > 0);
+    /* 形状已经变了，等形变落定后主动复算一次命中 */
+    scheduleRehit();
   }
   window.applyIsland = render;
 
@@ -633,7 +799,10 @@
 
   isl.addEventListener('click', function () {
     window.__islandClickCount = (window.__islandClickCount || 0) + 1;
-    if (suppressClick) return;               // 这次 click 是拖动的尾巴，不是单击
+    /* 拖动/切换之后浏览器会补一个 click，那不是用户要的点击 —— 压掉这一次。
+       不压的话「拖完松手顺手把卡片展开」这种误操作会天天发生。 */
+    if (suppressClick) return;
+    clickCount++;
     if (clickTimer) return;
     clickTimer = setTimeout(function () { clickTimer = null; singleClick(); }, 230);
   });
@@ -654,6 +823,10 @@
   function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : 0; }
   isl.addEventListener('mousedown', function (e) {
     if (e.button !== 0) return;
+    /* 拖动手势按状态分流：球态拖动 = 移动岛的位置（0.8.x 的行为）；展开态拖动 =
+       手势（横拖切卡 / 上拖隐藏）。两套都挂在这一根指针上，必须互斥，否则
+       在胶囊上横扫会把整个岛拖走，用户永远切不了卡。 */
+    if (isl.classList.contains('open')) return;
     if (!HOST || typeof HOST.islandDragStart !== 'function') return;   // 自测页 / Tauri 端无此桥
     dragState = { sx: num(e.screenX), sy: num(e.screenY), cx: e.clientX, cy: e.clientY, active: false };
     window.__islandDownCount = (window.__islandDownCount || 0) + 1;
@@ -754,24 +927,276 @@
 
   /* 命中上报：Electron 侧窗口默认穿透（forward:true），页面负责告诉主进程
      「光标现在压没压在这个形状上」，主进程据此 setIgnoreMouseEvents。
-     Tauri 侧是自己轮询光标，不走这里。 */
+     Tauri 侧是自己轮询光标，不走这里。
+
+     三个必须处理的情况（都是 forward:true 带来的结构性问题）：
+       ① 拖拽：窗口虽不穿透，但鼠标拖出 640×150 的窗口边界后事件就断了，
+          必须 pointerdown 时 setPointerCapture 把指针锁在元素上；
+       ② 形状自己变了（展开/收起/换 mode）而光标没动 —— 没有 mousemove 就不会
+          复算命中，状态停在旧形状上，表现为「透明但吃点击」，挡住下面的东西；
+       ③ 拖拽期间 mouseleave 会误报穿透，要用 holdHit 抑制。 */
   function reportHit(inside) {
     if (HOST && typeof HOST.islandHit === 'function') {
       try { HOST.islandHit(!!inside); } catch (e) {}
     }
   }
+
+  var HIT_PAD = { l: 4, r: 4, t: 4, b: 6 };
   var hitNow = null;
+  var lastXY = null;        // 最后一次已知光标位置（页面坐标）
+  var holdHit = 0;          // >0：命中锁定（拖拽中），不随 mousemove 放开
+  var dragging = false;
+
+  function shapeRect() { return isl.getBoundingClientRect(); }
+  function insideShape(x, y) {
+    var r = shapeRect();
+    return x >= r.left - HIT_PAD.l && x <= r.right + HIT_PAD.r
+        && y >= r.top - HIT_PAD.t && y <= r.bottom + HIT_PAD.b;
+  }
+  function pushHit(inside) {
+    if (inside === hitNow) return false;
+    hitNow = inside;
+    reportHit(inside);
+    return true;
+  }
+
+  /* 调试快照统一从这里写：任何改变命中状态的路径都要留下 rect，
+     否则工具只能看到「最后一次 mousemove」的旧值，验证会误判。 */
+  function recordDbg(x, y, inside, sent) {
+    var r = shapeRect();
+    window.__hitDbg = {
+      x: x, y: y, rect: [r.left, r.top, r.width, r.height],
+      inside: inside, sent: !!sent, hold: holdHit
+    };
+    return window.__hitDbg;
+  }
+
   function hitAt(x, y) {
     if (dragState) return;                  // 拖动中不改穿透（否则会半路断事件）
-    var r = isl.getBoundingClientRect();
-    var inside = x >= r.left - 4 && x <= r.right + 4 && y >= r.top - 4 && y <= r.bottom + 6;
-    window.__hitDbg = { x: x, y: y, rect: [r.left, r.top, r.width, r.height], inside: inside, sent: false };
-    if (inside !== hitNow) { hitNow = inside; window.__hitDbg.sent = true; reportHit(inside); }
+    lastXY = { x: x, y: y };
+    if (holdHit > 0) {
+      recordDbg(x, y, true, pushHit(true));
+      return;
+    }
+    var inside = insideShape(x, y);
+    recordDbg(x, y, inside, pushHit(inside));
   }
+  window.__islandRehit = rehit;
+
+  /* 形变落定后再复算：320ms 形变 + 余量。加定时器而不是只听 transitionend，
+     因为形变被打断时 transitionend 根本不触发，会永久停在旧命中上。 */
+  var shapeTimer = 0;
+  function scheduleRehit() {
+    if (shapeTimer) { clearTimeout(shapeTimer); shapeTimer = 0; }
+    shapeTimer = setTimeout(function () { shapeTimer = 0; rehit(); }, 380);
+  }
+
   document.addEventListener('mousemove', function (e) { hitAt(e.clientX, e.clientY); }, { passive: true });
-  document.addEventListener('mouseleave', function () { if (hitNow !== false) { hitNow = false; reportHit(false); } });
+  document.addEventListener('mouseleave', function () { if (holdHit === 0) pushHit(false); });
   isl.addEventListener('mouseenter', function (e) { hitAt(e.clientX, e.clientY); });
-  isl.addEventListener('mouseleave', function () { if (hitNow !== false) { hitNow = false; reportHit(false); } });
+  isl.addEventListener('mouseleave', function () {
+    if (holdHit === 0) pushHit(false);
+  });
+
+  /* ================= 手势：横拖切换 / 上拖隐藏 =================
+   *
+   * 为什么要先有活动队列才能做横拖：单槽抢占下「当前卡」只有一张，拖了也没得换，
+   * 手势就只是装饰。切换走 island:activity-step，主进程立刻回推载荷，不用等 500ms tick。
+   *
+   * 三条硬约束（都是这一版踩过的）：
+   *   ① 位移只写 --drag-x/--drag-y，**绝不**写进 springW/H/P/X 的目标 —— 那是形变目标，
+   *      写进去松手后岛就停在新位置了（那是「移动窗口」，不是本手势）；
+   *   ② 拖动全程 holdHit > 0（阶段一已实现），否则拖出 640×150 就丢指针；
+   *   ③ 队列里不到两张卡时手势必须 inert：不切换、不演假动画、不吞单击。
+   */
+  var GT = window.IslandGesture || null;
+  var GD = (GT && typeof GT.create === 'function') ? GT.create() : null;
+  var gestureOn = false;       // 本次按下是否已经交给判定器
+  var dragMoved = false;       // 本次按下是否已经成「拖动」（抬手不许再触发单击）
+  var suppressClick = false;   // 压制 pointerup 之后浏览器合成的那一次 click
+  var suppressTimer = 0;
+  var lastGesture = null;
+  var actCount = 1, actIndex = -1, actKind = '';   // 队列读数（来自载荷）
+  var clickCount = 0, tapCount = 0;                // 自检计数：证明 tap 真的走通了单击
+  var stepCount = 0;                               // 自检计数：页面发起过几次活动切换请求（inert 的真判据）
+
+  /* 事件时间戳与 performance.now() 同一时间轴（Chromium 同源），合成事件没有就给 now */
+  function evtTime(e) {
+    var t = e && e.timeStamp;
+    if (typeof t === 'number' && isFinite(t) && t > 0) return t;
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  }
+
+  /* 越界阻尼：超过 DRAG_MAX 的部分按 rubberBand 压制 —— 拖再远也不会把岛拖出窗口，
+     但手指还在动的时候它不会突然停死（硬钳读作卡死）。 */
+  function damp(v) {
+    var a = Math.abs(v);
+    if (a <= DRAG_MAX) return v;
+    /* rubberBand 挂在模块上（纯函数），不在实例上 —— 写成 GD.rubberBand 会在
+       拖过 60px 的那一刻抛 TypeError，表现为「拖到一半岛不动了」（真踩过）。 */
+    var extra = (GT && typeof GT.rubberBand === 'function')
+      ? GT.rubberBand(a - DRAG_MAX, DRAG_MAX, RUBBER)
+      : (a - DRAG_MAX) * RUBBER;
+    return (v < 0 ? -1 : 1) * (DRAG_MAX + extra);
+  }
+
+  /* 只跟随锁定轴上的分量：横拖时手抖出来的纵向位移不该让岛上下飘 */
+  function dragVector(res) {
+    if (!res) return { x: 0, y: 0 };
+    if (res.axis === 'h') return { x: damp(res.dx), y: 0 };
+    /* 向下拖没有对应手势：不跟，免得用户以为能「往下扔掉」 */
+    if (res.axis === 'v') return { x: 0, y: damp(Math.min(0, res.dy)) };
+    return { x: 0, y: 0 };
+  }
+
+  function setDrag(x, y) {
+    if (!springDX) return;
+    var now = performance.now();
+    springDX.to(x, { snap: true, now: now });
+    springDY.to(y, { snap: true, now: now });
+    kickMotion();
+  }
+  /* instant=true：直接就位。用于「手势 inert」—— 回弹动画会被读成「差一点就切过去了」 */
+  function releaseDrag(instant) {
+    if (!springDX) return;
+    var now = performance.now();
+    if (instant) {
+      springDX.to(0, { snap: true, now: now });
+      springDY.to(0, { snap: true, now: now });
+    } else {
+      springDX.to(0, { now: now });
+      springDY.to(0, { now: now });
+    }
+    kickMotion();
+  }
+
+  /* preload 只把 payload.cmd/.patch/.mode 取出来当第一个实参，所以这里必须用 {cmd: dir}；
+     直接传 {dir} 会被吞成 undefined（踩过）。 */
+  function stepActivity(dir) {
+    if (!invoke) return false;
+    stepCount++;          /* 自检计数：证明「页面确实发起了切换请求」，与 activityIndex 的数值无关 */
+    try {
+      var p = invoke('island:activity-step', { cmd: dir });
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function armSuppress() {
+    suppressClick = true;
+    if (suppressTimer) clearTimeout(suppressTimer);
+    /* 只压制紧随本次 span 的那一次 click；拖到窗口外时浏览器根本不发 click，
+       400ms 后自动解除，避免把下一次真实点击吞掉。 */
+    suppressTimer = setTimeout(function () { suppressClick = false; suppressTimer = 0; }, 400);
+  }
+
+  function onGestureEnd(res) {
+    if (!res) return;
+    if (res.type === 'tap') { tapCount++; return; }
+    if (res.type === 'swipe-left' || res.type === 'swipe-right') {
+      if (actCount > 1) {
+        /* 左拖 = 下一张，右拖 = 上一张（与「把卡片往左推走」的直觉一致） */
+        stepActivity(res.type === 'swipe-left' ? 1 : -1);
+      }
+      return;
+    }
+    if (res.type === 'up-hide') {
+      /* 复用既有 dismiss 通道（60s 隐藏），与双击是同一条恢复路径 */
+      cmd('dismiss');
+    }
+  }
+
+  /* 拖拽锁定：pointer capture 保证拖出窗口也不丢事件 */
+  function beginHold(e) {
+    if (dragging) return;
+    dragging = true;
+    holdHit++;
+    try { isl.setPointerCapture(e.pointerId); } catch (err) {}
+    var x = isFinite(e.clientX) ? e.clientX : (lastXY ? lastXY.x : 0);
+    var y = isFinite(e.clientY) ? e.clientY : (lastXY ? lastXY.y : 0);
+    if (isFinite(e.clientX) && isFinite(e.clientY)) lastXY = { x: e.clientX, y: e.clientY };
+    recordDbg(x, y, true, pushHit(true));
+    /* 起点必须在按下这一刻给判定器：晚一点就只能拿「第一次 move」当原点，SLOP 会算错 */
+    dragMoved = false;
+    /* 球态的手势判定不启动：那一段拖动归「移动岛」，两边同时吃会把位移算成两遍。
+       球态的单击不受影响 —— click 走 singleClick，本来就不经过判定器。 */
+    if (GD && isl.classList.contains('open')) {
+      GD.down({ x: x, y: y, t: evtTime(e) });
+      gestureOn = true;
+    }
+  }
+  function endHold(e) {
+    if (!dragging) return;
+    dragging = false;
+    try { isl.releasePointerCapture(e && e.pointerId); } catch (err) {}
+    holdHit = Math.max(0, holdHit - 1);
+    /* 用释放点精确复算，而不是沿用拖拽期间的 true */
+    var x = e && isFinite(e.clientX) ? e.clientX : (lastXY ? lastXY.x : null);
+    var y = e && isFinite(e.clientY) ? e.clientY : (lastXY ? lastXY.y : null);
+    var res = null;
+    var inert = false;
+    if (GD && gestureOn) {
+      res = GD.up({ x: x === null ? 0 : x, y: y === null ? 0 : y, t: evtTime(e) });
+      gestureOn = false;
+      lastGesture = res;
+      /* inert 要在 onGestureEnd 之前算：切换后载荷回来 actCount 才会变 */
+      inert = (res.type === 'swipe-left' || res.type === 'swipe-right') && actCount <= 1;
+      onGestureEnd(res);
+      if (res.type !== 'tap') dragMoved = true;
+    }
+    if (dragMoved) armSuppress();
+    releaseDrag(inert);
+    if (x !== null && y !== null) hitAt(x, y); else rehit();
+  }
+  isl.addEventListener('pointerdown', function (e) { if (e.button === 0) beginHold(e); });
+  /* 只监听 window：capture 之后事件目标是 #isl，会冒泡上来；拖出窗口时 capture 仍然投递到这里。
+     挂两处会让同一个事件被喂两次，速度窗口里全是 dt=0 的重复样本。 */
+  window.addEventListener('pointermove', function (e) {
+    if (!dragging || !gestureOn || !GD) return;
+    var r = GD.move({ x: e.clientX, y: e.clientY, t: evtTime(e) });
+    lastGesture = r;
+    if (r.state === 'pending') return;      /* 不到 SLOP 一律不动，避免点击时岛乱抖 */
+    dragMoved = true;
+    var v = dragVector(r);
+    setDrag(v.x, v.y);
+  }, { passive: true });
+  window.addEventListener('pointerup', endHold);
+  window.addEventListener('pointercancel', endHold);
+  window.addEventListener('blur', function () {
+    /* 焦点丢了就当拖拽结束：别把 holdHit 冻在 1（窗口会永远吃点击）、
+       也别把拖拽 offset 冻在半路（岛会永久偏在一边）。 */
+    if (dragging) { dragging = false; holdHit = Math.max(0, holdHit - 1); }
+    if (GD) GD.reset();
+    gestureOn = false;
+    dragMoved = false;
+    releaseDrag(true);
+    rehit();
+  });
+
+  /* 手势/队列的调试快照。验收脚本靠它取数（和 __hitDbg 一样，只读不改状态）：
+     rect 与 motion 是任务书要求的「每次构造 getBoundingClientRect / __islandMotion 采样」。 */
+  window.__islandState = function () {
+    var st = isl.style;
+    function px(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
+    var r = isl.getBoundingClientRect();
+    var fade = parseFloat(st.getPropertyValue('--drag-fade'));
+    return {
+      ready: !!window.__islandReady,
+      mode: isl.getAttribute('data-mode'),
+      activityCount: actCount, activityIndex: actIndex, activityKind: actKind,
+      dragging: dragging, holdHit: holdHit,
+      gesture: GD ? GD.peek() : null,
+      lastGesture: lastGesture,
+      dragX: px(st.getPropertyValue('--drag-x')),
+      dragY: px(st.getPropertyValue('--drag-y')),
+      dragFade: isFinite(fade) ? fade : 1,
+      rect: [+r.left.toFixed(2), +r.top.toFixed(2), +r.width.toFixed(2), +r.height.toFixed(2)],
+      motion: window.__islandMotion ? window.__islandMotion() : null,
+      clicks: clickCount, taps: tapCount,
+      steps: stepCount,
+      transform: getComputedStyle(isl).transform
+    };
+  };
 
   /* ---------------- 启动 / 自测 ---------------- */
   var qs = new URLSearchParams(location.search);

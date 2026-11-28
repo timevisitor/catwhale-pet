@@ -48,7 +48,11 @@ def copy_app_tree(app_dir, APP):
                 "infohub/music.js", "infohub/activate.ps1", "media-probe/media_control.ps1",
                 "infohub/sources/winnotify.js", "infohub/sources/winnotify_probe.ps1",
                 "renderer/hud.css", "renderer/hud.js",
-                "renderer/hub.html", "renderer/hub.js"]
+                "renderer/hub.html", "renderer/hub.js",
+                # 灵动岛：宿主 + preload + 页面 + 弹簧引擎 + 手势判定（缺任一 → 头顶气泡
+                # 要么不出现，要么退回静态/手势静默失效，都不报错）
+                "island.js", "island-preload.js", "renderer/island.html", "renderer/island-motion.js",
+                "renderer/island-gesture.js"]
     missing = [f for f in required if not os.path.exists(os.path.join(app_dir, f))]
     if missing:
         sys.exit("打包失败：应用缺少必需文件 " + ", ".join(missing))
